@@ -1,0 +1,68 @@
+=== Overview ===
+
+init-frame is a replacement for init which couples a tiny bare-bones C program that
+implementa basic init functionality with a controller script which provides custom
+behavior.  The idea is that if the controller script dies or is killed, process 1 will
+remain running and performing its fundamental duties until the controller script can
+be re-spawned to resume normal operation.
+
+--- Design principles ---
+
+  * init-frame only makes one dynamic allocation at startup, and calls 'mlockall' to
+    keep itself from swapping out.
+
+  * init-frame holds a pool of file descriptors which can be passed to new child
+    processes.  This way a pipe between a daemon and logger can be preserved if
+    one of the two dies.
+
+  * init-frame starts a special daemon called a "controller" which is in charge of
+    monitoring the events of init-frame and instructing init-frame what to do in
+	response to the events.
+	
+  * init-frame only restarts a daemon if configured to do so.  Other daemons must be
+    restarted by the controller.  The restart process is kept as simple as possible,
+    by exec'ing the same arguments as last time after a fixed delay.
+    (one environment variable is provided to indicate that it is a restart)
+
+  * init-frame maintains a state of all monitored jobs, file descriptors, and signals.
+    It dumps this state to the controller upon controller start, and sends the
+    controller updates on any state change.
+
+  * init-frame checks only one configfile on startup, which can be specified as an
+    argument.  This configfile is simply a series of controller commands. (which
+    should also configure the controller to execute)  The controller is responsible
+    for interfacing to the rest of userland.  (unix sockets, runscript directories, etc)
+
+--- Example Use Case ---
+
+The kernel launches init-frame, and the default config file tells init-frame to allocate
+space for 50 services, run service /sbin/dropbear with auto restart, run /bin/agetty with
+auto restart, and run /sbin/init-control.sh as the controller.  It starts those services,
+and runs init-control with a pipe back to itself.
+init-control.sh then sets up networking, and starts a few more services to watch things.
+When init-control.sh sees a SIGINT message from init-frame, it tells init-frame to stop
+respawning the jobs, and then kills them, and performs other last steps before rebooting.
+
+--- Example Use Case 2 ---
+
+The kernel launches the script /sbin/init which execs into init-frame passing it a custom
+config file of /etc/fubar/init.conf, which tells init-frame to just run a controller of
+/etc/fubar/init-control.pl   The perl script reads several config files and directives to
+determine that init-frame needs to allocate space for 150 jobs, which init-frame then
+allocates, and locks.  The perl script sets up some loggers, telling init-frame to allocate
+pipes for their STDIN, and then creates services that use those pipes as STDOUT/STDERR.
+The perl script sets up the /run directory and then creates unix sockets with various
+ownership and permissions, then initializes other things and tells init-frame to start the
+services.  It then monitors its sockets and messages from init-frame, responding to
+start/stop/restart requests and service deaths and init's signals and its own signals.
+
+In the middle of heavy system load, the Linux kernel decides to kill init-control.pl
+init-frame sees this and starts a new one, passing it the current state on STDIN.  The
+init-control script sees that it has been restarted, and takes steps to verify the most
+critical daemons first, send out an alert to a monitoring system, and then attempt to
+verify the rest of the services the system is supposed to support.  During this event,
+any newly started daemons will be cleanly re-attached to their loggers, and init-control.pl
+will know exactly which daemons need restarted because init-frame kept track of the PIDs.
+
+=== 
+
