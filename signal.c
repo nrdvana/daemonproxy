@@ -13,7 +13,7 @@ int sig_wake_rd= -1;
 int sig_wake_wr= -1;
 
 // We watch SIGCHLD, SIGINT, SIGHUP, SIGTERM, SIGUSR1, SIGUSR2
-int got_sigint= 0, got_sighup= 0, got_sigterm= 0, got_sigusr1= 0, got_sigusr2= 0;
+volatile int got_sigint= 0, got_sighup= 0, got_sigterm= 0, got_sigusr1= 0, got_sigusr2= 0;
 
 void sig_handler(int sig) {
 	switch (sig) {
