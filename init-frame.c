@@ -15,8 +15,7 @@
 
 typedef struct service_s {
 	int state;
-	char buffer[CONFIG_SERVICE_DATA_BUF_SIZE];
-	int meta_count, arg_count, env_count;
+	int meta_count, arg_count, env_count, fd_count;
 	RBTreeNode name_index_node;
 	RBTreeNode pid_index_node;
 	struct service_s **active_prev_ptr, *active_next;
@@ -25,13 +24,15 @@ typedef struct service_s {
 	int wait_status;
 	int64_t start_time;
 	int64_t reap_time;
+	char buffer[];
 } service_t;
 
 // Describes a named file handle
-typedef struct fd_def_s {
-	char name[CONFIG_FD_NAME_BUF_SIZE];
+typedef struct fd_s {
 	RBTreeNode name_index_node;
 	int fd;
+	bool has_path;
+	char buffer[];
 } fd_t;
 
 // Describes the parameters and state machine for interacting with the
@@ -162,6 +163,7 @@ int main(int argc, char** argv) {
 	int wstat;
 	pid_t pid;
 	service_t *svc, *next;
+	struct timeval tv;
 	memset(&wake, 0, sizeof(wake));
 
 	// Set up signal handlers and signal mask and signal self-pipe
@@ -178,9 +180,9 @@ int main(int argc, char** argv) {
 	
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
+	wake.now= gettime_us();
 	while (!main_state.terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
-		wake.now= gettime_us();
 		wake.next= wake.now + 60*1000000; // wake at least every 60 seconds
 		FD_ZERO(&wake.fd_read);
 		FD_ZERO(&wake.fd_write);
@@ -221,12 +223,20 @@ int main(int argc, char** argv) {
 
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)
-		if (select(max_fd, &read_set, &write_set, &err_set, NULL) < 0) {
-			// shouldn't ever fail, but if not EINTR, at least log it and prevent
-			// looping too fast
-			if (errno != EINTR) {
-				perror("select");
-				sleep(1);
+		// If we don't need to wait, don't.  (we don't care about select() return code)
+		wake.now= gettime_us();
+		if (wake.next - wake.now > 0) {
+			tv.tv_sec= (wake.next - wake.now) / 1000000;
+			tv.tv_usec= (wake.next - wake.now) % 1000000;
+			if (select(max_fd, &read_set, &write_set, &err_set, &tv) < 0) {
+				// shouldn't ever fail, but if not EINTR, at least log it and prevent
+				// looping too fast
+				if (errno != EINTR) {
+					perror("select");
+					tv.tv_usec= 500000;
+					tv.tv_sec= 0;
+					select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
+				}
 			}
 		}
 	}
@@ -377,10 +387,10 @@ void svc_report_meta(service_t *svc) {
 void svc_report_state(service_t *svc, wake_t *wake) {
 	switch (svc->state) {
 	case SVC_STATE_START:
-		ctl_queue_message("service	%s	state starting	0.000", svc->buffer);
+		ctl_queue_message("service.state	%s	starting	0.000", svc->buffer);
 		break;
 	case SVC_STATE_START_PENDING:
-		ctl_queue_message("service	%s	state starting	%.3f",
+		ctl_queue_message("service.state	%s	state starting	%.3f",
 			svc->buffer,
 			(svc->start_time - wake->now) / 1000000.0);
 		break;
