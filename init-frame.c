@@ -95,7 +95,7 @@ bool terminate= false;
 struct wake_s {
 	fd_set fd_read, fd_write, fd_err;
 	int max_fd;
-	int64_t now_us, next_us;
+	int64_t now, next;
 } wake_t;
 
 int64_t gettime_us();
@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
 			perror("sigprocmask(reset)");
 
 		// Wait until an event or the next time a state machine needs to run
-		// (state machines edit wake.next_us)
+		// (state machines edit wake.next)
 		if (select(max_fd, &read_set, &write_set, &err_set, NULL) < 0) {
 			// shouldn't ever fail, but if not EINTR, at least log it and prevent
 			// looping too fast
@@ -310,10 +310,10 @@ void svc_run(service_t *svc, wake_t *wake) {
 	switch (svc->state) {
 	case SVC_STATE_START_PENDING: svc_state_start_pending:
 		// if not wake time yet,
-		if (svc->start_time - wake->now_us > 0) {
+		if (svc->start_time - wake->now > 0) {
 			// set main-loop wake time if we're next
-			if (svc->start_time - wake->next_us < 0)
-				wake->next_us= svc->start_time;
+			if (svc->start_time - wake->next < 0)
+				wake->next= svc->start_time;
 			// ensure listed as active
 			svc_set_active(svc, true);
 			break;
@@ -325,13 +325,13 @@ void svc_run(service_t *svc, wake_t *wake) {
 		pid= fork();
 		if (pid > 0) {
 			svc->pid= pid;
-			svc->start_time= wake->now_us;
+			svc->start_time= wake->now;
 		} else if (pid == 0) {
 			svc_do_exec(svc);
 			// never returns
 		} else {
 			// else fork failed, and we need to wait 3 sec and try again
-			svc->start_time= wake->now_us + FORK_RETRY_DELAY;
+			svc->start_time= wake->now + FORK_RETRY_DELAY;
 			svc->state= SVC_STATE_START_FAIL;
 			svc_report_state(svc);
 			goto svc_state_start_pending;
@@ -343,7 +343,7 @@ void svc_run(service_t *svc, wake_t *wake) {
 		// waitpid in main loop will re-activate us and set state to REAPED
 		break;
 	case SVC_STATE_REAPED:
-		svc->reap_time= wake->now_us;
+		svc->reap_time= wake->now;
 		svc_report_state(svc);
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
@@ -382,12 +382,12 @@ void svc_report_state(service_t *svc, wake_t *wake) {
 	case SVC_STATE_START_PENDING:
 		ctl_queue_message("service	%s	state starting	%.3f",
 			svc->buffer,
-			(svc->start_time - wake->now_us) / 1000000.0);
+			(svc->start_time - wake->now) / 1000000.0);
 		break;
 	case SVC_STATE_UP:
 		ctl_queue_message("service	%s	state up	%.3f	pid	%d",
 			svc->buffer,
-			(wake->now_us - svc->start_time) / 1000000.0,
+			(wake->now - svc->start_time) / 1000000.0,
 			(int) svc->pid);
 		break;
 	case SVC_STATE_REAPED:
@@ -397,14 +397,14 @@ void svc_report_state(service_t *svc, wake_t *wake) {
 		else if (WIFEXITED(svc->wait_status))
 			ctl_queue_message("service	%s	state down	%.3f	exit	%d	uptime %.3f	pid	%d",
 				svc->buffer,
-				(wake->now_us - svc->reap_time) / 1000000.0,
+				(wake->now - svc->reap_time) / 1000000.0,
 				WEXITSTATUS(svc->wait_status),
 				(svc->reap_time - svc->start_time) / 1000000.0,
 				(int) svc->pid);
 		else
 			ctl_queue_message("service	%s	state down	%.3f	signal	%s	uptime %.3f	pid	%d",
 				svc->buffer,
-				(wake->now_us - svc->reap_time) / 1000000.0,
+				(wake->now - svc->reap_time) / 1000000.0,
 				sig_name(WTERMSIG(svc->wait_status)),
 				(svc->reap_time - svc->start_time) / 1000000.0,
 				(int) svc->pid);
