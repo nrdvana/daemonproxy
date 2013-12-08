@@ -1,4 +1,4 @@
-=== Overview ===
+### Overview ###
 
 init-frame is a replacement for init which couples a tiny bare-bones C program that
 implementa basic init functionality with a controller script which provides custom
@@ -6,7 +6,7 @@ behavior.  The idea is that if the controller script dies or is killed, process 
 remain running and performing its fundamental duties until the controller script can
 be re-spawned to resume normal operation.
 
---- Design principles ---
+=== Design principles ===
 
   * init-frame only makes one dynamic allocation at startup, and calls 'mlockall' to
     keep itself from swapping out.
@@ -33,7 +33,7 @@ be re-spawned to resume normal operation.
     should also configure the controller to execute)  The controller is responsible
     for interfacing to the rest of userland.  (unix sockets, runscript directories, etc)
 
---- Example Use Case ---
+=== Example Use Case ===
 
 The kernel launches init-frame, and the default config file tells init-frame to allocate
 space for 50 services, run service /sbin/dropbear with auto restart, run /bin/agetty with
@@ -43,7 +43,7 @@ init-control.sh then sets up networking, and starts a few more services to watch
 When init-control.sh sees a SIGINT message from init-frame, it tells init-frame to stop
 respawning the jobs, and then kills them, and performs other last steps before rebooting.
 
---- Example Use Case 2 ---
+=== Example Use Case 2 ===
 
 The kernel launches the script /sbin/init which execs into init-frame passing it a custom
 config file of /etc/fubar/init.conf, which tells init-frame to just run a controller of
@@ -64,5 +64,189 @@ verify the rest of the services the system is supposed to support.  During this 
 any newly started daemons will be cleanly re-attached to their loggers, and init-control.pl
 will know exactly which daemons need restarted because init-frame kept track of the PIDs.
 
-=== 
+### Protocol ###
+
+All messages are "tab separated values", sometimes making use of name=value pairs.
+There is no escape sequence for a tab character.  You shouldn't need tabs in any of
+the data anyway, except possibly exec() arguments.  In that case you should use a
+script and exec the script, or eval it with a shell that does support escapes.
+
+=== Reset ===
+
+When the controller is first started, the first event delivered to it is "reset".
+Immediately following reset is a series of events that represent the complete state
+dump of init-frame.
+
+=== Service State ===
+
+The controller can specify metadata, argument list, environment, and file descriptors
+for each service.  The service comes into existence the first time it is referenced.
+
+-- Set Metadata --
+
+  service.meta SERVICE_NAME META1 META2 META3 ... META_N
+  
+No meta tags are required for a service, and are mainly used for the controller to
+keep track of extra information about a service.  There is one exception: if the meta
+tag "auto-restart" appears in the list, init-frame will automatically restart the
+service if it terminates.
+
+The total name + metadata + arguments + environment for a service cannot exceed a
+compile-time constant, currently defaulting to 256 bytes.  This might eventually
+be configurable.
+
+Example:
+
+  service.meta sshd respawn
+
+Success:
+
+  service.meta sshd respawn
+
+Failure:
+
+  error service.meta sshd ERROR_MESSAGE
+
+-- Set Arguments --
+
+  service.args SERVICE_NAME EXEC_PATH ARGV0 ARGV1 ... ARGV_N
+
+These are identical to the arguments to exec(), with the first being the actual binary
+to execute, and the rest being the values passed to the program as its argv[].
+
+Example:
+
+  service.args sshd /sbin/sshd sshd -D -e
+
+Success:
+
+  service.args sshd /sbin/sshd sshd -D -e
+
+Failure:
+
+  error service.args sshd ERROR_MESSAGE
+
+-- Set Environment --
+
+  service.env SERVICE_NAME [ ( ENV1=VAL1 | ENV1- ) ... ]
+
+These are a list of environment overrides for the service.  If a variable name is not
+followed by an equal sign and instead ends with a minus character, the variable is removed
+from the environment.
+
+Changes to a service's environment will not take place until the service is (re)started.
+
+Example:
+
+  service.env sshd LD_LIBRARY_PATH=/opt/tsocks/lib INIT_PREV_PID-
+
+-- Set file descriptors --
+
+  service.fd SERVICE_NAME [ FD_NUMBER=FD_NAME ... ]
+
+FD_NUMBER is an integer in decimal form, saying which FD number in the service
+is being set.  FD_NAME is the symbolic name of a file descriptor in init-frame's
+set of open file descriptors.  FD_NAME must have been initialized before it can be
+assigned to a service.
+
+This command overwrites any previous FD setting.  If the command fails, the original
+setting is preserved.  All processes default to receiving the same FD 0 1 and 2 of
+init-frame itself, which by default goes to the Linux console.
+
+Changes to a service's file descriptors will not take place until the service is (re)started.
+
+Example:
+
+  service.fd sshd 0=null 1=sshd.log.w 2=sshd.log.w
+
+Success:
+
+  service.fd sshd 0=null 1=sshd.log.w 2=sshd.log.w
+
+Failure:
+
+  error service.fd sshd ERROR_MESSAGE
+
+-- Execute --
+
+  service.exec
+
+This runs the named service with its currently configured environment, file descriptors,
+and arguments.
+
+Example:
+
+  service.exec sshd
+
+Success:
+
+  service.state sshd up
+
+Failure:
+
+  error service.exec sshd ERROR_MESSAGE
+
+=== Named File Descriptors ===
+
+init-frame maintains a set of open file descriptors which can be assigned to services.
+These are primarily intended to hold pipes from service to logger such that if either
+the logger or service are killed, the pipe will still be open, and allows seamless
+reconnection of either end to the restarted service or logger.
+However, these named descriptors can be used for many other purposes.  They can even
+be used to make sure you have access to device nodes like /dev/null even if the /dev
+directory were accidentally deleted from the filesystem.
+
+-- Open Pipe --
+
+  fd.pipe BASE_NAME
+
+Creates two new file descriptors named $BASE_NAME.r and $BASE_NAME.w which are the read
+and write ends of a pipe, respectively.  If either name already exists, it will be closed
+first.
+
+Example:
+
+  pipe sshd.log
+
+Success:
+
+  pipe sshd.log
+
+Failure:
+
+  error pipe sshd.log ERROR_MESSAGE
+
+-- Open File --
+
+  file NAME FLAGS PATH
+
+Creates (or overwrites) a new file handle to PATH.  This is pretty much the typical "open"
+call.  FLAGS are a comma-separated list of strings which are similar to the flags
+in the system's open() call.
+
+FLAGS may be:
+
+  * read     - request read access
+  * write    - request write access
+  * append   - request O_APPEND
+  * create   - request O_CREAT with a mode of 600
+  * mkdir    - also create missing directories (with mode of 600)
+  * nonblock - request O_NONBLOCK
+  * sync     - request O_SYNC
+  * trunc    - request O_TRUNC
+
+If opening the file fails, the FD name will not exist, and services that refer to it will
+not be able to start.
+
+Example:
+
+  file null write,read /dev/null
+
+Success:
+
+  file null read,write /dev/null
+
+Failure:
+
+  error file null ERROR_MESSAGE
 
