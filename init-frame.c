@@ -6,10 +6,12 @@
 // file descriptor specification, and a state
 // machine for watching the PID.
 
-#define SVC_STATE_UNDEF      0
-#define SVC_STATE_CONFIGURED 1
-#define SVC_STATE_STARTED    2
-#define SVC_STATE_REAPED     4
+#define SVC_STATE_UNDEF         0
+#define SVC_STATE_DOWN          1
+#define SVC_STATE_START_PENDING 2
+#define SVC_STATE_START         3
+#define SVC_STATE_UP            4
+#define SVC_STATE_REAPED        5
 
 typedef struct service_s {
 	int state;
@@ -19,8 +21,7 @@ typedef struct service_s {
 	RBTreeNode pid_index_node;
 	struct service_s **active_prev_ptr, *active_next;
 	pid_t pid;
-	bool auto_restart: 1,
-		reaped: 1;
+	bool auto_restart: 1;
 	int wait_status;
 	int64_t start_time;
 	int64_t reap_time;
@@ -171,6 +172,10 @@ int main(int argc, char** argv) {
 	if (!parse_opts(argv))
 		return 2;
 	
+	// Lock all memory into ram. init should never be "swapped out".
+	if (mlockall(MCL_CURRENT | MCL_FUTURE))
+		perror("mlockall");
+	
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
 	while (!main_state.terminate) {
@@ -196,16 +201,15 @@ int main(int argc, char** argv) {
 		sig_send_notifications();
 		
 		// reap all zombies, possibly waking services
-		while ((pid= waitpid(-1, &wstat, WNOHANG)) > 0) {
+		while ((pid= waitpid(-1, &wstat, WNOHANG)) > 0)
 			if ((svc= svc_by_pid(pid)))
 				svc_handle_reaped(svc, wstat);
-			}
-		}
 		
 		// run controller state machine
 		ctl_run(&controller, &wake);
 		
-		// run state machine of each service that is active.  This can remove itself fro mthe list!
+		// run state machine of each service that is active.
+		// services can remove themselves form the list, so need to track 'next'.
 		for (cur= next= svc_active_list; next; cur= next) {
 			next= cur->active_next;
 			svc_run(cur);
@@ -239,54 +243,8 @@ int64_t gettime_us() {
 	return ((int64_t) t.tv_sec) * 1000000 + t.tv_nsec / 1000;
 }
 
-void svc_handle_reaped(srvice_t *svc, int wstat) {
-	svc->reaped= true;
-	svc->wait_status= wstat;
-	svc_set_active(svc, true);
-}
-
-void svc_set_active(service_t *svc, bool activate) {
-	if (activate && !svc->active_prev_ptr) {
-		// Insert node at head of doubly-linked list
-		svc->active_prev_ptr= &svc_active_list;
-		svc->active_next= svc_active_list;
-		if (svc_active_list)
-			svc_active_list->active_prev_ptr= &svc->active_next;
-		svc_active_list= svc;
-	}
-	else if (!activate && svc->active_prev_ptr) {
-		// remove node from doubly linked list
-		if (svc->active_next)
-			svc->active_next->active_prev_ptr= svc->active_prev_ptr;
-		svc->active_prev_ptr= svc->active_next;
-	}
-}
-
-void svc_run(service_t *svc, wake_t *wake) {
-	switch (svc->state) {
-	}
-}
-
-void ctl_run(controller_t *ctl, wake_t *wake) {
-	switch (ctl->state) {
-	}
-	
-	// If incoming fd, wake on data available
-	// (this could also be the config file, initially)
-	if (ctl->recv_fd != -1) {
-		FD_SET(ctl->recv_fd, &wake->fd_read);
-		FD_SET(ctl->recv_fd, &wake->fd_err);
-		if (ctl->recv_fd > wake->max_fd)
-			wake->max_fd= ctl->revc_fd;
-	}
-	// if anything was left un-written, wake on writable pipe
-	if (ctl->send_fd != -1 && ctl->out_buf_len > 0) {
-		FD_SET(ctl->send_fd, &wake->fd_write);
-		FD_SET(ctl->send_fd, &wake->fd_err);
-		if (ctl->send_fd > wake->max_fd)
-			wake->max_fd= ctl->send_fd;
-	}
-}
+//---------------------------
+// Service methods
 
 bool svc_by_name_inorder(const service_t *a, const service_t *b) {
 	return strcmp(a->buffer, b->buffer) <= 0;
@@ -322,6 +280,167 @@ inline service_t *svc_by_pid(pid_t pid) {
 	return NULL;
 }
 
+void svc_handle_reaped(srvice_t *svc, int wstat) {
+	svc->reaped= true;
+	svc->wait_status= wstat;
+	svc_set_active(svc, true);
+}
+
+void svc_set_active(service_t *svc, bool activate) {
+	if (activate && !svc->active_prev_ptr) {
+		// Insert node at head of doubly-linked list
+		svc->active_prev_ptr= &svc_active_list;
+		svc->active_next= svc_active_list;
+		if (svc_active_list)
+			svc_active_list->active_prev_ptr= &svc->active_next;
+		svc_active_list= svc;
+	}
+	else if (!activate && svc->active_prev_ptr) {
+		// remove node from doubly linked list
+		if (svc->active_next)
+			svc->active_next->active_prev_ptr= svc->active_prev_ptr;
+		svc->active_prev_ptr= svc->active_next;
+	}
+}
+
+void svc_run(service_t *svc, wake_t *wake) {
+	pid_t pid;
+	int exit;
+	int sig;
+	switch (svc->state) {
+	case SVC_STATE_START_PENDING: svc_state_start_pending:
+		// if not wake time yet,
+		if (svc->start_time - wake->now_us > 0) {
+			// set main-loop wake time if we're next
+			if (svc->start_time - wake->next_us < 0)
+				wake->next_us= svc->start_time;
+			// ensure listed as active
+			svc_set_active(svc, true);
+			break;
+		}
+		// else we've reached the time to retry
+		svc->state= SVC_STATE_START;
+		svc_report_state(svc);
+	case SVC_STATE_START: svc_state_start:
+		pid= fork();
+		if (pid > 0) {
+			svc->pid= pid;
+			svc->start_time= wake->now_us;
+		} else if (pid == 0) {
+			svc_do_exec(svc);
+			// never returns
+		} else {
+			// else fork failed, and we need to wait 3 sec and try again
+			svc->start_time= wake->now_us + FORK_RETRY_DELAY;
+			svc->state= SVC_STATE_START_FAIL;
+			svc_report_state(svc);
+			goto svc_state_start_pending;
+		}
+		svc->state= SVC_STATE_UP;
+		svc_report_state(svc);
+	case SVC_STATE_UP:
+		svc_set_active(svc, false);
+		// waitpid in main loop will re-activate us and set state to REAPED
+		break;
+	case SVC_STATE_REAPED:
+		svc->reap_time= wake->now_us;
+		svc_report_state(svc);
+		if (svc->auto_restart) {
+			// if restarting too fast, delay til future
+			if (svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY) {
+				svc->start_time= svc->reap_time + SERVICE_RESTART_DELAY;
+				svc->state= SVC_STATE_START_PENDING;
+				svc_report_state(svc);
+				goto svc_state_start_pending;
+			} else {
+				svc->state= SVC_STATE_START;
+				svc_report_state(svc);
+				goto svc_state_start;
+			}
+		}
+		svc->state= SVC_STATE_DOWN;
+	case SVC_STATE_DOWN:
+		svc_set_active(svc, false);
+		break;
+	// We can only arrive here as a result of a bug.  Catch it with asserts.
+	case SVC_STATE_UNDEF:
+		assert(svc->state != SVC_STATE_UNDEF);
+	default:
+		assert(0)
+	}
+}
+
+void svc_report_meta(service_t *svc) {
+	
+}
+
+void svc_report_state(service_t *svc, wake_t *wake) {
+	switch (svc->state) {
+	case SVC_STATE_START:
+		ctl_queue_message("service	%s	state starting	0.000", svc->buffer);
+		break;
+	case SVC_STATE_START_PENDING:
+		ctl_queue_message("service	%s	state starting	%.3f",
+			svc->buffer,
+			(svc->start_time - wake->now_us) / 1000000.0);
+		break;
+	case SVC_STATE_UP:
+		ctl_queue_message("service	%s	state up	%.3f	pid	%d",
+			svc->buffer,
+			(wake->now_us - svc->start_time) / 1000000.0,
+			(int) svc->pid);
+		break;
+	case SVC_STATE_REAPED:
+	case SVC_STATE_DOWN:
+		if (svc->pid == 0)
+			ctl_queue_message("service	%s	state down", svc->buffer);
+		else if (WIFEXITED(svc->wait_status))
+			ctl_queue_message("service	%s	state down	%.3f	exit	%d	uptime %.3f	pid	%d",
+				svc->buffer,
+				(wake->now_us - svc->reap_time) / 1000000.0,
+				WEXITSTATUS(svc->wait_status),
+				(svc->reap_time - svc->start_time) / 1000000.0,
+				(int) svc->pid);
+		else
+			ctl_queue_message("service	%s	state down	%.3f	signal	%s	uptime %.3f	pid	%d",
+				svc->buffer,
+				(wake->now_us - svc->reap_time) / 1000000.0,
+				sig_name(WTERMSIG(svc->wait_status)),
+				(svc->reap_time - svc->start_time) / 1000000.0,
+				(int) svc->pid);
+		break;
+	default:
+		ctl_queue_message("service	%s	INVALID!", svc->buffer);
+	}
+}
+
+//---------------------------
+// Controller methods
+
+void ctl_run(controller_t *ctl, wake_t *wake) {
+	switch (ctl->state) {
+	}
+	
+	// If incoming fd, wake on data available
+	// (this could also be the config file, initially)
+	if (ctl->recv_fd != -1) {
+		FD_SET(ctl->recv_fd, &wake->fd_read);
+		FD_SET(ctl->recv_fd, &wake->fd_err);
+		if (ctl->recv_fd > wake->max_fd)
+			wake->max_fd= ctl->revc_fd;
+	}
+	// if anything was left un-written, wake on writable pipe
+	if (ctl->send_fd != -1 && ctl->out_buf_len > 0) {
+		FD_SET(ctl->send_fd, &wake->fd_write);
+		FD_SET(ctl->send_fd, &wake->fd_err);
+		if (ctl->send_fd > wake->max_fd)
+			wake->max_fd= ctl->send_fd;
+	}
+}
+
+//---------------------------
+// FD Methods
+
 bool fd_by_name_inorder(const fd_t *a, const fd_t *b) {
 	return strcmp(a->name, b->name) <= 0;
 }
@@ -337,7 +456,7 @@ int fd_by_name(const char *name) {
 	return -1;
 }
 
-//-----------------------------
+//---------------------------
 // Note on signal handling:
 //
 // I'm aware that there are more elegant robust ways to write signal handling,
