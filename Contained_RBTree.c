@@ -20,7 +20,7 @@ Credits:
   I also got the sentinel node idea from this book.
 
 */
-
+#include "config.h"
 #include "Contained_RBTree.h"
 
 //namespace ContainedClass {
