@@ -27,6 +27,7 @@ RBTreeNode fd_by_name_index;
 fd_t *fd_free_list;
 
 void add_fd_by_name(fd_t *fd);
+void create_missing_dirs(char *path);
 
 void fd_build_pool(void *buffer, int fd_count, int size_each) {
 	int i;
@@ -42,7 +43,7 @@ void fd_build_pool(void *buffer, int fd_count, int size_each) {
 }
 
 // Open a pipe from one named FD to another
-// returns a ref to the read-end, which has a pointer to the write-end.
+// returns a ref to the read end, which holds a ref to the write end.
 fd_t * fd_pipe(const char *name1, const char *name2) {
 	int pair[2], n;
 	fd_t *fd1, *fd2, *next;
@@ -59,7 +60,7 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 		next= next->next_free;
 		memcpy(fd1->buffer, name1, n+1);
 	}
-	// Check that we have name1, or available fd_t object and name fits in it.
+	// Check that we have name2, or another available fd_t object and name fits in it.
 	if (!fd2) {
 		n= strlen(name2);
 		if (!next || n >= next->size - sizeof(fd_t))
@@ -98,10 +99,14 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 }
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_open(const char *name, const char *path, const char *opts) {
-	int flags, fd, n, n2;
-	char *s;
-	fd_t *fd_obj= fd_by_name(name);
+fd_t * fd_open(const char *name, char *path, char *opts) {
+	int flags, fd, n, buf_free;
+	char *s, *buf_pos, *buf_end, *start, *end;
+	fd_t *fd_obj;
+	bool f_read, f_write, f_mkdir;
+	
+	fd_obj= fd_by_name(name);
+	// if doesn't exist, ensure we have a free slot, and name fits
 	if (!fd_obj) {
 		if (!fd_free_list)
 			return NULL;
@@ -112,9 +117,39 @@ fd_t * fd_open(const char *name, const char *path, const char *opts) {
 	}
 	
 	// Now, try to perform the open
-	flags= parse_open_flags(opts);
-	if (flags & O_MKDIR_P)
+	#define STRMATCH(name) (strncmp(start, name, end-start) == 0)
+	flags= O_NOCTTY;
+	f_mkdir= f_read= f_write= false;
+	for (start= end= opts; *end; start= end+1) {
+		end= strchrnul(start, ',');
+		switch (*start) {
+		case 'a':
+			if (STRMATCH("append")) flags |= O_APPEND;
+			break;
+		case 'c':
+			if (STRMATCH("create")) flags |= O_CREAT;
+			break;
+		case 'm':
+			if (STRMATCH("mkdir")) f_mkdir= true;
+			break;
+		case 'r':
+			if (STRMATCH("read")) f_read= true;
+			break;
+		case 't':
+			if (STRMATCH("trunc")) flags |= O_TRUNC;
+			break;
+		case 'w':
+			if (STRMATCH("write")) f_write= true;
+			break;
+		case 'n':
+			if (STRMATCH("nonblock")) flags |= O_NONBLOCK;
+			break;
+		}
+	}
+	flags |= f_write && f_read? O_RDWR : f_write? O_WRONLY : O_RDONLY;
+	if (f_mkdir)
 		create_missing_dirs(path);
+
 	fd= open(path, flags, 600);
 	if (fd < 0)
 		return NULL;
@@ -132,22 +167,30 @@ fd_t * fd_open(const char *name, const char *path, const char *opts) {
 	fd_obj->type= FD_TYPE_FILE;
 	
 	// copy as much of path into the buffer as we can.
-	n= strlen(name);
-	fd_obj->path= fd_obj->buffer + n + 1;
-	n2= strlen(path);
-	if (n+1+n2+1 > fd_obj->size - sizeof(fd_t)) {
-		// truncate with '...'
-		n2= fd_obj->size - sizeof(fd_t) - n - 1 - 3 - 1;
-		if (n2 < 0)
-			fd_obj->path= NULL;
-		else {
-			memcpy(fd_obj->path, path, n2);
-			memcpy(fd_obj->path+n2, "...", 4);
-		}
+	fd_obj->path= fd_obj->buffer + strlen(name) + 1;
+	buf_free= fd_obj->size - (fd_obj->path - (char*) fd_obj);
+	n= strlen(path);
+	if (n < buf_free)
+		memcpy(fd_obj->path, path, n+1);
+	// else truncate with "..."
+	else if (3 < buf_free) {
+		n= buf_free - 4;
+		memcpy(fd_obj->path, path, n);
+		memcpy(fd_obj->path + n, "...", 4);
 	}
-	else
-		memcpy(fd_obj->path, path, n2+1);
+	// unless we don't even have 4 chars to spare, in which case we make it an empty string
+	else fd_obj->path--;
+	
 	return fd_obj;
+}
+
+void create_missing_dirs(char *path) {
+	char *end;
+	for (end= strchr(path, '/'); end; end= strchr(end+1, '/')) {
+		*end= '\0';
+		mkdir(path, 0700); // would probably take longer to stat than to just let mkdir fail
+		*end= '/';
+	}
 }
 
 // Close a named handle

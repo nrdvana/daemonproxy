@@ -74,19 +74,25 @@ void svc_delete(service_t *svc);
 
 struct fd_s;
 typedef struct fd_s fd_t;
+extern fd_t *fd_pool;
 
 // Open a pipe from one named FD to another
 // returns a ref to the write-end, which has a pointer to the read-end.
 fd_t * fd_pipe(const char *name1, const char *name2);
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_open(const char *name, const char *path, const char *opts);
+fd_t * fd_open(const char *name, char *path, char *opts);
 
 // Close a named handle
 bool fd_close(const char *name);
 
+// Initialize the fd pool from a static chunk of memory
+void fd_build_pool(void *buffer, int fd_count, int size_each);
+
 fd_t * fd_by_name(const char *name);
 fd_t * fd_by_fd(int fd);
+
+void fd_delete(fd_t *fd);
 
 //----------------------------------------------------------------------------
 // signal.c interface
