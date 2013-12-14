@@ -23,7 +23,7 @@ typedef struct controller_s controller_t;
 
 // Queue a message to the controller, possibly overflowing the output buffer
 // and requiring a state reset event.
-void ctl_queue_message(char *msg);
+void ctl_queue_message(char *msg, ...);
 
 // Handle state transitions based on communication filehandles to the controller
 void ctl_run(controller_t *ctl);
