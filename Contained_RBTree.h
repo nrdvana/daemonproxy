@@ -1,13 +1,12 @@
 /******************************************************************************\
 *   Contained_RBTree.h              by: TheSilverDirk / Michael Conrad
-*   Created: 06/23/2000             Last Modified: 04/29/2005
-*
+*   2000-06-23: Created
 *   2005-04-29: Hacked-up sufficiently to be compilable under C.
+*   2013-12-30: Made C API more sensible and intuitive
 *
 *   This is a red/black binary search tree implementation using the
-*   "contained class" system.  The "inorder" and "compare" function pointers
-*   allow you to do custom sorting.  These pointers MUST point to valid
-*   functions before you use the tree.
+*   "contained class" system, where data structure nodes are contained
+*   within the objects that they index.
 \******************************************************************************/
 
 #ifndef CONTAINED_RBTREE_H
