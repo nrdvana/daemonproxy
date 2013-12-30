@@ -14,7 +14,8 @@
 
 #define SERVICE_DATA_BUF_SIZE           256
 #define SERVICE_RESTART_DELAY (2 * 1000000)
-#define FD_NAME_BUF_SIZE                 32
+#define FD_NAME_BUF_SIZE                 64
+#define NAME_MAX                         63
 #define FORK_RETRY_DELAY      (3 * 1000000)
 #define CONTROLLER_IN_BUF_SIZE         1024
 #define CONTROLLER_OUT_BUF_SIZE        1024
