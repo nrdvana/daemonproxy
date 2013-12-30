@@ -32,38 +32,54 @@ typedef struct RBTreeNode_s {
 	void*       Object;
 } RBTreeNode;
 
+typedef int  RBTreeCompareFn( void *Data, RBTreeNode *Node );
+
+typedef struct RBTreeSearch_s {
+	RBTreeNode *Nearest;
+	int Relation;
+} RBTreeSearch;
+
+typedef struct RBTree_s {
+	RBTreeNode RootSentinel; // the left child of the sentinel is the root node
+	RBTreeCompareFn *Compare;
+} RBTree;
+
 /******************************************************************************\
 *   Base RBTree functions - all functions required to manipulate a R/B tree.
 *
 *   These functions are all ordinary functions in order to be compatible with
 *     other languages, such as C
 \******************************************************************************/
-typedef bool RBTree_inorder_func( const void* Obj_A, const void* Obj_B );
-typedef int  RBTree_compare_func( const void* SearchKey, const void* Object );
 
 void RBTreeNode_Init( RBTreeNode* Node );
 bool RBTreeNode_IsSentinel( RBTreeNode *Node );
-void RBTree_InitRootSentinel( RBTreeNode *RootSentinel );
-void RBTree_Clear( RBTreeNode *RootSentinel );
-RBTreeNode* RBTree_GetPrev( RBTreeNode* Node );
-RBTreeNode* RBTree_GetNext( RBTreeNode* Node );
-RBTreeNode* RBTree_GetRightmost( RBTreeNode* Node );
-RBTreeNode* RBTree_GetLeftmost( RBTreeNode* Node );
-//inline const RBTreeNode* RBTree_GetLeftmost ( const RBTreeNode* Node ) { return RBTree_GetLeftmost (const_cast<RBTreeNode*>(Node)); }
-//inline const RBTreeNode* RBTree_GetRightmost( const RBTreeNode* Node ) { return RBTree_GetRightmost(const_cast<RBTreeNode*>(Node)); }
-//inline const RBTreeNode* RBTree_GetPrev     ( const RBTreeNode* Node ) { return RBTree_GetPrev     (const_cast<RBTreeNode*>(Node)); }
-//inline const RBTreeNode* RBTree_GetNext     ( const RBTreeNode* Node ) { return RBTree_GetNext     (const_cast<RBTreeNode*>(Node)); }
-void RBTree_LeftSide_LeftRotate( RBTreeNode* Node );
-void RBTree_LeftSide_RightRotate( RBTreeNode* Node );
-void RBTree_RightSide_RightRotate( RBTreeNode* Node );
-void RBTree_RightSide_LeftRotate( RBTreeNode* Node );
-bool RBTree_Add( RBTreeNode *RootSentinel, RBTreeNode* NewNode, RBTree_inorder_func* inorder );
-RBTreeNode* RBTree_Find( const RBTreeNode *RootSentinel, const void* SearchKey, RBTree_compare_func* compare );
-void RBTree_Balance( RBTreeNode* Node );
-bool RBTree_Prune( RBTreeNode* Node );
-void RBTree_PruneLeaf( RBTreeNode* Node );
+RBTreeNode* RBTreeNode_GetPrev( RBTreeNode* Node );
+RBTreeNode* RBTreeNode_GetNext( RBTreeNode* Node );
+RBTreeNode* RBTreeNode_GetRightmost( RBTreeNode* Node );
+RBTreeNode* RBTreeNode_GetLeftmost( RBTreeNode* Node );
+void RBTreeNode_LeftSide_LeftRotate( RBTreeNode* Node );
+void RBTreeNode_LeftSide_RightRotate( RBTreeNode* Node );
+void RBTreeNode_RightSide_RightRotate( RBTreeNode* Node );
+void RBTreeNode_RightSide_LeftRotate( RBTreeNode* Node );
+void RBTreeNode_Balance( RBTreeNode* Node );
+bool RBTreeNode_Prune( RBTreeNode* Node );
+void RBTreeNode_PruneLeaf( RBTreeNode* Node );
+
+void RBTree_Init( RBTree *Tree, RBTreeCompareFn *Compare );
+void RBTree_Clear( RBTree *Tree );
+bool RBTree_Add( RBTree *Tree, RBTreeNode* NewNode, const void* CompareData );
+RBTreeSearch RBTree_Find( const RBTree *Tree, const void* CompareData );
 
 extern RBTreeNode Sentinel;
+
+static inline RBTreeNode * RBTree_GetFirst( const RBTree *Tree ) {
+	return Tree->RootSentinel.Left == &Sentinel? NULL
+		: RBTreeNode_GetLeftmost(Tree->RootSentinel.Left);
+}
+static inline RBTreeNode * RBTree_GetLast( const RBTree *Tree ) {
+	return Tree->RootSentinel.Left == &Sentinel? NULL
+		: RBTreeNode_GetRightmost(Tree->RootSentinel.Left);
+}
 
 /******************************************************************************\
 *   Contained RBTree Class                                                     *
@@ -117,12 +133,6 @@ public:
 	static void Remove( Node* Node ) { if (!RBTree_Prune(Node)) throw ECannotRemoveNode(); }
 };
 */
-
-typedef struct RBTree {
-	RBTreeNode RootSentinel; // the left child of the sentinel is the root node
-	RBTree_inorder_func *inorder;
-	RBTree_compare_func *compare;
-} RBTree;
 
 /******************************************************************************\
 *   Type-Safe Contained Red/Black Tree Class                                   *
