@@ -135,8 +135,7 @@ bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
 	if (ctl->out_buf_len)
 		return false; // require empty output buffer
 	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
-		ctl_notify_fd_state(fd);
-		
+		if (!fd_notify_state(fd)) {
 			// if state dump couldn't complete (output buffer full)
 			//  save our position to resume later
 			strlcpy(ctl->statedump_current, fd_name(fd), sizeof(ctl->statedump_current));
@@ -159,32 +158,28 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 		while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
 			strlcpy(ctl->statedump_current, svc_name(svc), sizeof(ctl->statedump_current));
 	case 1:
-			if (ctl->out_buf_len) {
+			if (!svc_notify_status(svc)) {
 				ctl->statedump_part= 1;
 				return false;
 			}
-			svc_notify_status(svc);
 	case 2:
-			if (ctl->out_buf_len) {
+			svc_get_meta(svc, &n, &strings);
+			if (!ctl_notify_svc_meta(svc_name(svc), n, strings)) {
 				ctl->statedump_part= 2;
 				return false;
 			}
-			svc_get_meta(svc, &n, &strings);
-			ctl_notify_svc_meta(svc_name(svc), n, strings);
 	case 3:
-			if (ctl->out_buf_len) {
+			svc_get_args(svc, &n, &strings);
+			if (!ctl_notify_svc_args(svc_name(svc), n, strings)) {
 				ctl->statedump_part= 3;
 				return false;
 			}
-			svc_get_args(svc, &n, &strings);
-			ctl_notify_svc_args(svc_name(svc), n, strings);
 	case 4:
-			if (ctl->out_buf_len) {
+			svc_get_fds(svc, &n, &strings);
+			if (!ctl_notify_svc_args(svc_name(svc), n, strings)) {
 				ctl->statedump_part= 4;
 				return false;
 			}
-			svc_get_fds(svc, &n, &strings);
-			ctl_notify_svc_args(svc_name(svc), n, strings);
 		}
 	}
 	ctl->state_fn= ctl_state_script_run;
