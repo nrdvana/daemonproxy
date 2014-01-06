@@ -114,3 +114,25 @@ bool sig_dispatch() {
 		queue_n= 0;
 	}
 }
+
+#define CASE_SIG(sig) case sig: return #sig;
+const char* sig_name(int sig_num) {
+	switch (sig_num) {
+	CASE_SIG(SIGHUP)
+	CASE_SIG(SIGINT)
+	CASE_SIG(SIGQUIT)
+	CASE_SIG(SIGILL)
+	CASE_SIG(SIGTRAP)
+	CASE_SIG(SIGABRT)
+	CASE_SIG(SIGBUS)
+	CASE_SIG(SIGFPE)
+	CASE_SIG(SIGKILL)
+	CASE_SIG(SIGUSR1)
+	CASE_SIG(SIGUSR2)
+	CASE_SIG(SIGSEGV)
+	CASE_SIG(SIGPIPE)
+	CASE_SIG(SIGALRM)
+	CASE_SIG(SIGTERM)
+	default: return "unknown";
+	}
+}
