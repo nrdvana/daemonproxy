@@ -13,7 +13,7 @@ typedef struct wake_s {
 	int64_t next; // time when we next need to process something
 } wake_t;
 
-extern int main_terminate;
+extern bool main_terminate;
 
 //----------------------------------------------------------------------------
 // controller.c interface
@@ -33,12 +33,13 @@ void ctl_pipe_reset();
 // If no controller is running, a sighup message will cause the config file to be re-loaded.
 bool ctl_write(const char *msg, ... );
 bool ctl_notify_signal(int sig_num);
-bool ctl_notify_svc_start(const char *name);
+bool ctl_notify_svc_start(const char *name, double waittime);
 bool ctl_notify_svc_up(const char *name, double uptime, pid_t pid);
 bool ctl_notify_svc_down(const char *name, double downtime, double uptime, int wstat, pid_t pid);
 bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series);
 bool ctl_notify_svc_args(const char *name, int arg_count, const char *arg_series);
 bool ctl_notify_svc_fds(const char *name, int fd_count, const char *fd_series);
+bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pipe_read, const char *pipe_write);
 #define ctl_notify_error(msg, ...) (ctl_write("error" msg "\n", ##__VA_ARGS__))
 
 // Handle state transitions based on communication with the controller
@@ -49,11 +50,14 @@ void ctl_run(wake_t *wake);
 
 struct service_s;
 typedef struct service_s service_t;
+extern const int min_service_obj_size;
 
 // Initialize the service pool
 void svc_init(int service_count, int size_each);
 
 const char * svc_get_name(service_t *svc);
+
+bool svc_notify_state(service_t *svc, wake_t *wake);
 
 // Set metadata for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
@@ -96,10 +100,15 @@ void svc_delete(service_t *svc);
 
 struct fd_s;
 typedef struct fd_s fd_t;
-extern fd_t *fd_pool;
+extern const int min_fd_obj_size;
 
 // Initialize the fd pool from a static chunk of memory
 void fd_init(int fd_count, int size_each);
+
+const char* fd_get_name(fd_t *);
+const char* fd_get_file_path(fd_t *);
+const char* fd_get_pipe_read_end(fd_t *fd);
+const char* fd_get_pipe_write_end(fd_t *fd);
 
 // Open a pipe from one named FD to another
 // returns a ref to the write-end, which has a pointer to the read-end.

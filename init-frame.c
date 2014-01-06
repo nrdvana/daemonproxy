@@ -1,4 +1,5 @@
 #include "config.h"
+#include "init-frame.h"
 
 bool main_terminate= false;
 
@@ -10,15 +11,21 @@ int main(int argc, char** argv) {
 	int wstat;
 	pid_t pid;
 	struct timeval tv;
+	service_t *svc;
 	memset(&wake, 0, sizeof(wake));
 
-	// Set up signal handlers and signal mask and signal self-pipe
-	sig_setup();
-	
-	// parse arguments, updating the controller object, and possibly
-	// allocating the FD and Service arrays.
+	// parse arguments, overriding default values
 	if (!parse_opts(argv))
 		return 2;
+	
+	// Set up signal handlers and signal mask and signal self-pipe
+	sig_init();
+	// Initialize file descriptor object pool and indexes
+	fd_init(FD_POOL_SIZE, FD_OBJ_SIZE);
+	// Initialize service object pool and indexes
+	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
+	// Initialize controller state machine and pipes
+	ctl_init(CONFIG_FILE_DEFAULT_PATH, true);
 	
 	// Lock all memory into ram. init should never be "swapped out".
 	if (mlockall(MCL_CURRENT | MCL_FUTURE))
@@ -27,7 +34,7 @@ int main(int argc, char** argv) {
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
 	wake.now= gettime_us();
-	while (!main_state.terminate) {
+	while (!main_terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
 		wake.next= wake.now + 60*1000000; // wake at least every 60 seconds
 		FD_ZERO(&wake.fd_read);
@@ -49,7 +56,7 @@ int main(int argc, char** argv) {
 				svc_handle_reaped(svc, wstat);
 		
 		// run controller state machine
-		ctl_run(&controller, &wake);
+		ctl_run(&wake);
 		
 		// run state machine of each service that is active.
 		svc_run_active(&wake);
@@ -65,7 +72,7 @@ int main(int argc, char** argv) {
 		if (wake.next - wake.now > 0) {
 			tv.tv_sec= (wake.next - wake.now) / 1000000;
 			tv.tv_usec= (wake.next - wake.now) % 1000000;
-			if (select(max_fd, &read_set, &write_set, &err_set, &tv) < 0) {
+			if (select(wake.max_fd, &wake.fd_read, &wake.fd_write, &wake.fd_err, &tv) < 0) {
 				// shouldn't ever fail, but if not EINTR, at least log it and prevent
 				// looping too fast
 				if (errno != EINTR) {

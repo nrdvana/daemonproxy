@@ -22,6 +22,10 @@ struct fd_s {
 	char buffer[];
 };
 
+// Define a sensible minimum for service size.
+// Want at least struct size, plus room for name of fd and short filesystem path
+const int min_fd_obj_size= sizeof(fd_t) + NAME_MAX * 2;
+
 fd_t *fd_pool= NULL;
 RBTree fd_by_name_index;
 fd_t *fd_free_list;
@@ -46,6 +50,22 @@ void fd_init(int fd_count, int size_each) {
 	}
 	fd_pool[fd_count-1].next_free= NULL;
 	RBTree_Init( &fd_by_name_index, fd_by_name_compare );
+}
+
+const char* fd_get_name(fd_t *fd) {
+	return fd->buffer;
+}
+
+const char* fd_get_file_path(fd_t *fd) {
+	return fd->type == FD_TYPE_FILE? fd->path : NULL;
+}
+
+const char* fd_get_pipe_read_end(fd_t *fd) {
+	return fd->type == FD_TYPE_PIPE_W? fd->pipe_peer->buffer : NULL;
+}
+
+const char* fd_get_pipe_write_end(fd_t *fd) {
+	return fd->type == FD_TYPE_PIPE_R? fd->pipe_peer->buffer : NULL;
 }
 
 // Open a pipe from one named FD to another
@@ -209,7 +229,7 @@ void fd_delete(fd_t *fd) {
 	// close descriptor.
 	close(fd->fd);
 	// Remove name from index
-	RBTree_Prune( &fd->name_index_node );
+	RBTreeNode_Prune( &fd->name_index_node );
 	// Clear the type
 	fd->type= FD_TYPE_UNDEF;
 	// and add it to the free-list.
@@ -228,4 +248,20 @@ void add_fd_by_name(fd_t *fd) {
 	RBTreeNode_Init( &fd->name_index_node );
 	fd->name_index_node.Object= fd;
 	RBTree_Add( &fd_by_name_index, &fd->name_index_node, fd->buffer );
+}
+
+fd_t * fd_iter_next(fd_t *current, const char *from_name) {
+	RBTreeNode *node;
+	if (current) {
+		node= RBTreeNode_GetNext(&current->name_index_node);
+	} else {
+		RBTreeSearch s= RBTree_Find( &fd_by_name_index, from_name );
+		if (s.Nearest == NULL)
+			node= NULL;
+		else if (s.Relation > 0)
+			node= s.Nearest;
+		else
+			node= RBTreeNode_GetNext(s.Nearest);
+		return node? (fd_t *) node->Object : NULL;
+	}
 }

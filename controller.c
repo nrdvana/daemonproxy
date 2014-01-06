@@ -140,10 +140,12 @@ bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
 	if (ctl->out_buf_pos)
 		return false; // require empty output buffer
 	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
-		if (!fd_notify_state(fd)) {
+		if (!ctl_notify_fd_state(fd_get_name(fd), fd_get_file_path(fd),
+				fd_get_pipe_read_end(fd), fd_get_pipe_write_end(fd)))
+		{
 			// if state dump couldn't complete (output buffer full)
 			//  save our position to resume later
-			strlcpy(ctl->statedump_current, fd_name(fd), sizeof(ctl->statedump_current));
+			strlcpy(ctl->statedump_current, fd_get_name(fd), sizeof(ctl->statedump_current));
 			return false;
 		}
 	}
@@ -163,7 +165,7 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 		while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
 			strlcpy(ctl->statedump_current, svc_get_name(svc), sizeof(ctl->statedump_current));
 	case 1:
-			if (!svc_notify_status(svc)) {
+			if (!svc_notify_state(svc, wake)) {
 				ctl->statedump_part= 1;
 				return false;
 			}
@@ -401,16 +403,37 @@ static bool ctl_flush_outbuf() {
 }
 
 bool ctl_notify_signal(int sig_num) {
-	return ctl_write("signal %d %s", sig_num, sig_name(sig_num));
+	return ctl_write("signal %d %s\n", sig_num, sig_name(sig_num));
 }
 
-bool ctl_notify_svc_start(const char *name) {
+bool ctl_notify_svc_start(const char *name, double waittime) {
+	return ctl_write("service.state	%s	starting	%.3f\n", name, waittime);
 }
 
 bool ctl_notify_svc_up(const char *name, double uptime, pid_t pid) {
+	return ctl_write("service.state	%s	up	%.3f	pid	%d\n", name, uptime, (int) pid);
 }
 
 bool ctl_notify_svc_down(const char *name, double downtime, double uptime, int wstat, pid_t pid) {
+	if (pid == 0)
+		return ctl_write("service.state	%s	down	%.3f	idle\n", name);
+	else if (WIFEXITED(wstat))
+		return ctl_write("service.state	%s	down	%.3f	exit	%d	uptime %.3f	pid	%d\n",
+			name, downtime, WEXITSTATUS(wstat), uptime, (int) pid);
+	else
+		return ctl_write("service.state	%s	down	%.3f	signal	%d=%s	uptime %.3f	pid	%d\n",
+			name, downtime, WTERMSIG(wstat), sig_name(WTERMSIG(wstat)), uptime, (int) pid);
+}
+
+bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pipe_read, const char *pipe_write) {
+	if (file_path)
+		return ctl_write("fd.state	%s	file	%s\n", name, file_path);
+	else if (pipe_read)
+		return ctl_write("fd.state	%s	pipe<	%s\n", name, pipe_read);
+	else if (pipe_write)
+		return ctl_write("fd.state	%s	pipe>	%s\n", name, pipe_write);
+	else
+		return ctl_write("fd.state	%s	unknown\n", name);
 }
 
 bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series) {

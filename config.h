@@ -13,10 +13,14 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <time.h>
+#include <assert.h>
 
-#define SERVICE_DATA_BUF_SIZE       256
+#define SERVICE_POOL_SIZE           256
+#define SERVICE_OBJ_SIZE            512
 #define SERVICE_RESTART_DELAY        (2 * 1000000)
-#define FD_NAME_BUF_SIZE             64
+#define FD_POOL_SIZE                256
+#define FD_OBJ_SIZE                  96
 #define NAME_MAX                     63
 #define FORK_RETRY_DELAY             (3 * 1000000)
 #define CONTROLLER_WRITE_TIMEOUT    (30 * 1000000)

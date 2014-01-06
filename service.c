@@ -16,7 +16,7 @@
 
 typedef struct service_s {
 	int size, state;
-	int meta_count, arg_count, env_count, fd_count;
+	int meta_count, arg_count, fd_count;
 	RBTreeNode name_index_node;
 	RBTreeNode pid_index_node;
 	struct service_s **active_prev_ptr;
@@ -31,6 +31,10 @@ typedef struct service_s {
 	int64_t reap_time;
 	char buffer[];
 } service_t;
+
+// Define a sensible minimum for service size.
+// Want at least struct size, plus room for name, small argv list, and short names of file descriptors
+const int min_service_obj_size= sizeof(service_t) + NAME_MAX + 128;
 
 service_t *svc_pool= NULL;
 RBTree svc_by_name_index;
@@ -49,10 +53,12 @@ int  svc_by_pid_compare(void *key, RBTreeNode *node) {
 	return a < b? -1 : a > b? 1 : 0;
 }
 
-void svc_build_pool(void *buffer, int service_count, int size_each) {
+void svc_init(int service_count, int size_each) {
 	int i;
-	svc_pool= (service_t*) buffer;
-	memset(buffer, 0, service_count * size_each);
+	svc_pool= malloc(service_count * size_each);
+	if (!svc_pool)
+		abort();
+	memset(svc_pool, 0, service_count * size_each);
 	svc_free_list= svc_pool;
 	for (i=0; i < service_count; i++) {
 		svc_pool[i].size= size_each;
@@ -91,7 +97,16 @@ void svc_handle_reaped(service_t *svc, int wstat) {
 	svc_set_active(svc, true);
 }
 
-void svc_report_state(service_t *svc, wake_t *wake);
+void svc_do_exec(service_t *svc);
+
+void svc_run_active(wake_t *wake) {
+	service_t *svc= svc_active_list;
+	while (svc) {
+		service_t *next= svc->active_next;
+		svc_run(svc, wake);
+		svc= next;
+	}
+}
 
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
@@ -110,7 +125,7 @@ void svc_run(service_t *svc, wake_t *wake) {
 		}
 		// else we've reached the time to retry
 		svc->state= SVC_STATE_START;
-		svc_report_state(svc, wake);
+		svc_notify_state(svc, wake);
 	case SVC_STATE_START: svc_state_start:
 		pid= fork();
 		if (pid > 0) {
@@ -123,28 +138,28 @@ void svc_run(service_t *svc, wake_t *wake) {
 			// else fork failed, and we need to wait 3 sec and try again
 			svc->start_time= wake->now + FORK_RETRY_DELAY;
 			svc->state= SVC_STATE_START_PENDING;
-			svc_report_state(svc, wake);
+			svc_notify_state(svc, wake);
 			goto svc_state_start_pending;
 		}
 		svc->state= SVC_STATE_UP;
-		svc_report_state(svc, wake);
+		svc_notify_state(svc, wake);
 	case SVC_STATE_UP:
 		svc_set_active(svc, false);
 		// waitpid in main loop will re-activate us and set state to REAPED
 		break;
 	case SVC_STATE_REAPED:
 		svc->reap_time= wake->now;
-		svc_report_state(svc, wake);
+		svc_notify_state(svc, wake);
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
 			if (svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY) {
 				svc->start_time= svc->reap_time + SERVICE_RESTART_DELAY;
 				svc->state= SVC_STATE_START_PENDING;
-				svc_report_state(svc, wake);
+				svc_notify_state(svc, wake);
 				goto svc_state_start_pending;
 			} else {
 				svc->state= SVC_STATE_START;
-				svc_report_state(svc, wake);
+				svc_notify_state(svc, wake);
 				goto svc_state_start;
 			}
 		}
@@ -160,47 +175,30 @@ void svc_run(service_t *svc, wake_t *wake) {
 	}
 }
 
+void svc_do_exec(service_t *svc) {
+	
+}
+
 void svc_report_meta(service_t *svc) {
 	
 }
 
-void svc_report_state(service_t *svc, wake_t *wake) {
+bool svc_notify_state(service_t *svc, wake_t *wake) {
 	switch (svc->state) {
 	case SVC_STATE_START:
-		ctl_queue_message("service.state	%s	starting	0.000", svc->buffer);
-		break;
+		return ctl_notify_svc_start(svc->buffer, 0.0);
 	case SVC_STATE_START_PENDING:
-		ctl_queue_message("service.state	%s	starting	%.3f",
-			svc->buffer,
-			(wake->now- svc->start_time) / 1000000.0);
-		break;
+		return ctl_notify_svc_start(svc->buffer, (wake->now - svc->start_time) * .000001);
 	case SVC_STATE_UP:
-		ctl_queue_message("service.state	%s	up	%.3f	pid	%d",
-			svc->buffer,
-			(wake->now - svc->start_time) / 1000000.0,
-			(int) svc->pid);
-		break;
+		return ctl_notify_svc_up(svc->buffer, (wake->now - svc->start_time) * .000001, svc->pid);
 	case SVC_STATE_REAPED:
 	case SVC_STATE_DOWN:
-		if (svc->pid == 0)
-			ctl_queue_message("service.state	%s	down", svc->buffer);
-		else if (WIFEXITED(svc->wait_status))
-			ctl_queue_message("service.state	%s	down	%.3f	exit	%d	uptime %.3f	pid	%d",
-				svc->buffer,
-				(wake->now - svc->reap_time) / 1000000.0,
-				WEXITSTATUS(svc->wait_status),
-				(svc->reap_time - svc->start_time) / 1000000.0,
-				(int) svc->pid);
-		else
-			ctl_queue_message("service.state	%s	down	%.3f	signal	%d=%s	uptime %.3f	pid	%d",
-				svc->buffer,
-				(wake->now - svc->reap_time) / 1000000.0,
-				WTERMSIG(svc->wait_status), sig_name(WTERMSIG(svc->wait_status)),
-				(svc->reap_time - svc->start_time) / 1000000.0,
-				(int) svc->pid);
-		break;
+		return ctl_notify_svc_down(svc->buffer,
+			(wake->now - svc->reap_time) * .000001,
+			(svc->reap_time - svc->start_time) * .000001,
+			svc->wait_status, svc->pid);
 	default:
-		ctl_queue_message("service.state	%s	INVALID!", svc->buffer);
+		return ctl_notify_error("service.state	%s	INVALID!", svc->buffer);
 	}
 }
 
@@ -224,7 +222,7 @@ service_t *svc_by_name(const char *name, bool create) {
 		svc->state= SVC_STATE_DOWN;
 		svc->meta_count= 0;
 		svc->arg_count= 0;
-		svc->env_count= 0;
+		//svc->env_count= 0;
 		svc->fd_count= 0;
 		svc->active_prev_ptr= NULL;
 		svc->active_next= NULL;
@@ -241,7 +239,7 @@ service_t *svc_by_name(const char *name, bool create) {
 
 void svc_change_pid(service_t *svc, pid_t pid) {
 	if (svc->pid)
-		RBTree_Prune( &svc->pid_index_node );
+		RBTreeNode_Prune( &svc->pid_index_node );
 	svc->pid= pid;
 	if (svc->pid) {
 		RBTreeNode_Init( &svc->pid_index_node );
@@ -280,9 +278,9 @@ void svc_delete(service_t *svc) {
 	svc_set_active(svc, false);
 	if (svc->pid > 0) {
 		kill(svc->pid, SIGTERM);
-		RBTree_Prune( &svc->pid_index_node );
+		RBTreeNode_Prune( &svc->pid_index_node );
 	}
-	RBTree_Prune( &svc->name_index_node );
+	RBTreeNode_Prune( &svc->name_index_node );
 	svc->next_free= svc_free_list;
 	svc_free_list= svc;
 }
