@@ -23,23 +23,29 @@ struct fd_s {
 };
 
 fd_t *fd_pool= NULL;
-RBTreeNode fd_by_name_index;
+RBTree fd_by_name_index;
 fd_t *fd_free_list;
 
 void add_fd_by_name(fd_t *fd);
 void create_missing_dirs(char *path);
 
-void fd_build_pool(void *buffer, int fd_count, int size_each) {
+int fd_by_name_compare(void *data, RBTreeNode *node) {
+	return strcmp((const char*) data, ((fd_t *) node->Object)->buffer);
+}
+
+void fd_init(int fd_count, int size_each) {
 	int i;
-	fd_pool= (fd_t*) buffer;
-	memset(buffer, 0, fd_count*size_each);
+	fd_pool= (fd_t*) malloc(fd_count * size_each);
+	if (!fd_pool)
+		abort();
+	memset(fd_pool, 0, fd_count*size_each);
 	fd_free_list= fd_pool;
 	for (i=0; i < fd_count; i++) {
 		fd_pool[i].size= size_each;
 		fd_pool[i].next_free= fd_pool+i+1;
 	}
 	fd_pool[fd_count-1].next_free= NULL;
-	RBTree_InitRootSentinel( &fd_by_name_index );
+	RBTree_Init( &fd_by_name_index, fd_by_name_compare );
 }
 
 // Open a pipe from one named FD to another
@@ -211,26 +217,15 @@ void fd_delete(fd_t *fd) {
 	fd_free_list= fd;
 }
 
-bool fd_by_name_inorder(const fd_t *a, const fd_t *b) {
-	return strcmp(a->buffer, b->buffer) <= 0;
-}
-
-int fd_by_name_key_compare(const char *str, const fd_t *b) {
-	return strcmp(str, b->buffer);
-}
-
 fd_t * fd_by_name(const char *name) {
-	RBTreeNode *node;
-	if (fd_pool
-		&& (node= RBTree_Find( &fd_by_name_index, name,
-			(RBTree_compare_func*) fd_by_name_key_compare )))
-		return (fd_t*) node->Object;
+	RBTreeSearch s= RBTree_Find( &fd_by_name_index, name );
+	if (s.Relation == 0)
+		return (fd_t*) s.Nearest->Object;
 	return NULL;
 }
 
 void add_fd_by_name(fd_t *fd) {
 	RBTreeNode_Init( &fd->name_index_node );
 	fd->name_index_node.Object= fd;
-	RBTree_Add( &fd_by_name_index, &fd->name_index_node,
-		(RBTree_inorder_func*) fd_by_name_inorder);
+	RBTree_Add( &fd_by_name_index, &fd->name_index_node, fd->buffer );
 }
