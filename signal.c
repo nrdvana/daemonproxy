@@ -12,21 +12,36 @@
 int sig_wake_rd= -1;
 int sig_wake_wr= -1;
 
-// We watch SIGCHLD, SIGINT, SIGHUP, SIGTERM, SIGUSR1, SIGUSR2
-volatile int got_sigint= 0, got_sighup= 0, got_sigterm= 0, got_sigusr1= 0, got_sigusr2= 0;
+// Handle non-posix signal numbers.  Posix signals always fit in a byte.  But just in case
+// some other system uses unusual numbers, we re-map the 5 that are actually specified
+// to work for this program.
+#define ENCODE_SIGNAL(sig) \
+	((unsigned)(sig) < 128? sig \
+	: (sig) == SIGINT?  128 \
+	: (sig) == SIGTERM? 129 \
+	: (sig) == SIGHUP?  130 \
+	: (sig) == SIGUSR1? 131 \
+	: (sig) == SIGUSR2? 132 \
+	: 0)
+#define DECODE_SIGNAL(sig) \
+	((unsigned)(sig) < 128? sig \
+	: (sig) == 128? SIGINT \
+	: (sig) == 129? SIGTERM \
+	: (sig) == 130? SIGHUP \
+	: (sig) == 131? SIGUSR1 \
+	: (sig) == 132? SIGUSR2 \
+	: 0)
 
 void sig_handler(int sig) {
-	switch (sig) {
-	case SIGINT: got_sigint= 1; break;
-	case SIGHUP: got_sighup= 1; break;
-	case SIGTERM: got_sigterm= 1; break;
-	case SIGUSR1: got_sigusr1= 1; break;
-	case SIGUSR2: got_sigusr2= 1; break;
-	}
-	write(sig_wake_wr, "", 1);
+	char c= (char) ENCODE_SIGNAL(sig);
+	if (c) // don't enqueue 0s
+		write(sig_wake_wr, &c, 1);
+	// If it fails, nothing we can do anyway, so ignore it.
 }
 
-void sig_setup() {
+bool sig_dispatch();
+
+void sig_init() {
 	int pipe_fd[2];
 	struct sigaction act, act_chld, act_ign;
 	
@@ -60,25 +75,42 @@ void sig_setup() {
 }
 
 void sig_run(wake_t *wake) {
-	char buf[32];
-	
-	// drain the signal pipe (pipe is nonblocking)
-	while (read(sig_wake_rd, buf, sizeof(buf)) > 0);
-	
-	// report caught signals
-	if (got_sigint) ctl_queue_message("signal INT");
-	if (got_sighup) ctl_queue_message("signal HUP");
-	if (got_sigterm) ctl_queue_message("signal TERM");
-	if (got_sigusr1) ctl_queue_message("signal USR1");
-	if (got_sigusr2) ctl_queue_message("signal USR2");
-	
-	// reset flags
-	got_sigint= got_sighup= got_sigterm= got_sigusr1= got_sigusr2= 0;
-
-	// Always watch signal-pipe
-	FD_SET(sig_wake_rd, &wake->fd_read);
-	FD_SET(sig_wake_rd, &wake->fd_err);
-	if (sig_wake_rd > wake->max_fd)
-		wake->max_fd= sig_wake_rd;
+	// If we delivered all of the notifications, wake on the signal pipe
+	if (sig_dispatch()) {
+		FD_SET(sig_wake_rd, &wake->fd_read);
+		FD_SET(sig_wake_rd, &wake->fd_err);
+		if (sig_wake_rd > wake->max_fd)
+			wake->max_fd= sig_wake_rd;
+	}
+	// else we're waiting on the controller write pipe.
 }
 
+bool sig_dispatch() {
+	static char queue[32];
+	static int queue_n= 0;
+	int i, n;
+	
+	while (1) {
+		// drain the signal pipe as much as possible (pipe is nonblocking)
+		if (queue_n < sizeof(queue)) {
+			n= read(sig_wake_rd, queue + queue_n, sizeof(queue) - queue_n);
+			if (n > 0)
+				queue_n += n;
+			else if (!queue_n)
+				return true;
+		}
+		// deliver as many notifications as posible
+		for (i= 0; i < queue_n; i++) {
+			if (!ctl_notify_signal(DECODE_SIGNAL(queue[i] & 0xFF))) {
+				// controller output is blocked, so shift remaining queue to start of buffer
+				// and resume here next time
+				if (i > 0) {
+					memmove(queue, queue + i, queue_n - i);
+					queue_n -= i;
+					return false;
+				}
+			}
+		}
+		queue_n= 0;
+	}
+}
