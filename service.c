@@ -33,12 +33,21 @@ typedef struct service_s {
 } service_t;
 
 service_t *svc_pool= NULL;
-RBTreeNode svc_by_name_index;
-RBTreeNode svc_by_pid_index;
+RBTree svc_by_name_index;
+RBTree svc_by_pid_index;
 service_t *svc_active_list= NULL; // linked list of active services
 service_t *svc_free_list= NULL; // linked list re-using next_active and prev_active
 
 void svc_change_pid(service_t *svc, pid_t pid);
+
+int  svc_by_name_key_compare(void *key, RBTreeNode *node) {
+	return strcmp((char*) key, ((service_t*) node->Object)->buffer);
+}
+int  svc_by_pid_key_compare(void *key, RBTreeNode *node) {
+	pid_t a= * (pid_t*) key;
+	pid_t b= ((service_t*) node->Object)->pid;
+	return a < b? -1 : a > b? 1 : 0;
+}
 
 void svc_build_pool(void *buffer, int service_count, int size_each) {
 	int i;
@@ -50,8 +59,12 @@ void svc_build_pool(void *buffer, int service_count, int size_each) {
 		svc_pool[i].next_free= svc_pool+i+1;
 	}
 	svc_pool[service_count-1].next_free= NULL;
-	RBTree_InitRootSentinel( &svc_by_name_index );
-	RBTree_InitRootSentinel( &svc_by_pid_index );
+	RBTree_Init( &svc_by_name_index,  );
+	RBTree_Init( &svc_by_pid_index );
+}
+
+const char * svc_get_name(service_t *svc) {
+	return svc->buffer;
 }
 
 void svc_set_active(service_t *svc, bool activate) {
@@ -213,20 +226,6 @@ void svc_report_state(service_t *svc, wake_t *wake) {
 	}
 }
 
-bool svc_by_name_inorder(const service_t *a, const service_t *b) {
-	return strcmp(a->buffer, b->buffer) <= 0;
-}
-int  svc_by_name_key_compare(const char *key, const service_t *svc) {
-	return strcmp(key, svc->buffer);
-}
-
-bool svc_by_pid_inorder(const service_t *a, const service_t *b) {
-	return a->pid <= b->pid;
-}
-int  svc_by_pid_key_compare(pid_t *key, const service_t *svc) {
-	return *key < svc->pid? -1 : *key > svc->pid? 1 : 0;
-}
-
 service_t *svc_by_name(const char *name, bool create) {
 	RBTreeNode* node;
 	service_t *svc;
@@ -281,6 +280,21 @@ service_t *svc_by_pid(pid_t pid) {
 	if ((node= RBTree_Find( &svc_by_pid_index, &pid, (RBTree_compare_func*) svc_by_pid_key_compare)))
 		return (service_t*) node->Object;
 	return NULL;
+}
+
+service_t * svc_iter_next(service_t *svc, const char *from_name) {
+	RBTreeNode *node;
+	if (svc) {
+		node= RBTreeNode_GetNext(&svc->name_index_node);
+	} else {
+		RBTreeSearch s= RBTree_Find( &svc_by_name_index, from_name );
+		if (s.Nearest == NULL)
+			return NULL;
+		else if (s.Relation > 0)
+			return s.Relation;
+		else
+			return RBTreeNode_GetNext(s.Nearest);
+	}
 }
 
 void svc_delete(service_t *svc) {
