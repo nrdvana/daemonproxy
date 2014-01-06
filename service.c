@@ -40,10 +40,10 @@ service_t *svc_free_list= NULL; // linked list re-using next_active and prev_act
 
 void svc_change_pid(service_t *svc, pid_t pid);
 
-int  svc_by_name_key_compare(void *key, RBTreeNode *node) {
+int  svc_by_name_compare(void *key, RBTreeNode *node) {
 	return strcmp((char*) key, ((service_t*) node->Object)->buffer);
 }
-int  svc_by_pid_key_compare(void *key, RBTreeNode *node) {
+int  svc_by_pid_compare(void *key, RBTreeNode *node) {
 	pid_t a= * (pid_t*) key;
 	pid_t b= ((service_t*) node->Object)->pid;
 	return a < b? -1 : a > b? 1 : 0;
@@ -59,8 +59,8 @@ void svc_build_pool(void *buffer, int service_count, int size_each) {
 		svc_pool[i].next_free= svc_pool+i+1;
 	}
 	svc_pool[service_count-1].next_free= NULL;
-	RBTree_Init( &svc_by_name_index,  );
-	RBTree_Init( &svc_by_pid_index );
+	RBTree_Init( &svc_by_name_index, svc_by_name_compare );
+	RBTree_Init( &svc_by_pid_index,  svc_by_pid_compare );
 }
 
 const char * svc_get_name(service_t *svc) {
@@ -211,8 +211,9 @@ service_t *svc_by_name(const char *name, bool create) {
 	// services can be lazy-initialized
 	if (!svc_pool) return NULL;
 	
-	if ((node= RBTree_Find( &svc_by_name_index, name, (RBTree_compare_func*) svc_by_name_key_compare)))
-		return (service_t*) node->Object;
+	RBTreeSearch s= RBTree_Find( &svc_by_name_index, name );
+	if (s.Relation == 0)
+		return (service_t*) s.Nearest->Object;
 	// if create requested, create a new service by this name
 	// (if name is valid)
 	n= strlen(name);
@@ -233,8 +234,7 @@ service_t *svc_by_name(const char *name, bool create) {
 		svc->reap_time= 0;
 		RBTreeNode_Init( &svc->name_index_node );
 		svc->name_index_node.Object= svc;
-		RBTree_Add( &svc_by_name_index, &svc->name_index_node,
-			(RBTree_inorder_func*) svc_by_name_inorder);
+		RBTree_Add( &svc_by_name_index, &svc->name_index_node, svc->buffer);
 	}
 	return NULL;
 }
@@ -246,8 +246,7 @@ void svc_change_pid(service_t *svc, pid_t pid) {
 	if (svc->pid) {
 		RBTreeNode_Init( &svc->pid_index_node );
 		svc->pid_index_node.Object= svc;
-		RBTree_Add( &svc_by_pid_index, &svc->pid_index_node,
-			(RBTree_inorder_func*) svc_by_pid_inorder);
+		RBTree_Add( &svc_by_pid_index, &svc->pid_index_node, &svc->pid);
 	}
 }
 
@@ -255,8 +254,9 @@ service_t *svc_by_pid(pid_t pid) {
 	RBTreeNode* node;
 	// services can be lazy-initialized
 	if (!svc_pool) return NULL;
-	if ((node= RBTree_Find( &svc_by_pid_index, &pid, (RBTree_compare_func*) svc_by_pid_key_compare)))
-		return (service_t*) node->Object;
+	RBTreeSearch s= RBTree_Find( &svc_by_pid_index, &pid );
+	if (s.Relation == 0)
+		return (service_t*) s.Nearest->Object;
 	return NULL;
 }
 
@@ -267,11 +267,12 @@ service_t * svc_iter_next(service_t *svc, const char *from_name) {
 	} else {
 		RBTreeSearch s= RBTree_Find( &svc_by_name_index, from_name );
 		if (s.Nearest == NULL)
-			return NULL;
+			node= NULL;
 		else if (s.Relation > 0)
-			return s.Relation;
+			node= s.Nearest;
 		else
-			return RBTreeNode_GetNext(s.Nearest);
+			node= RBTreeNode_GetNext(s.Nearest);
+		return node? (service_t *) node->Object : NULL;
 	}
 }
 
