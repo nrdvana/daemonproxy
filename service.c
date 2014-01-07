@@ -125,7 +125,7 @@ void svc_run(service_t *svc, wake_t *wake) {
 		}
 		// else we've reached the time to retry
 		svc->state= SVC_STATE_START;
-		svc_notify_state(svc, wake);
+		svc_notify_state(svc);
 	case SVC_STATE_START: svc_state_start:
 		pid= fork();
 		if (pid > 0) {
@@ -138,28 +138,34 @@ void svc_run(service_t *svc, wake_t *wake) {
 			// else fork failed, and we need to wait 3 sec and try again
 			svc->start_time= wake->now + FORK_RETRY_DELAY;
 			svc->state= SVC_STATE_START_PENDING;
-			svc_notify_state(svc, wake);
+			svc_notify_state(svc);
 			goto svc_state_start_pending;
 		}
 		svc->state= SVC_STATE_UP;
-		svc_notify_state(svc, wake);
+		if (!svc_notify_state(svc))
+			ctl_notify_overflow();
 	case SVC_STATE_UP:
 		svc_set_active(svc, false);
 		// waitpid in main loop will re-activate us and set state to REAPED
 		break;
 	case SVC_STATE_REAPED:
 		svc->reap_time= wake->now;
-		svc_notify_state(svc, wake);
+		if (!svc_notify_state(svc))
+			ctl_notify_overflow();
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
 			if (svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY) {
 				svc->start_time= svc->reap_time + SERVICE_RESTART_DELAY;
 				svc->state= SVC_STATE_START_PENDING;
-				svc_notify_state(svc, wake);
+				svc->pid= 0;
+				svc->reap_time= 0;
+				if (!svc_notify_state(svc))
+					ctl_notify_overflow();
 				goto svc_state_start_pending;
 			} else {
 				svc->state= SVC_STATE_START;
-				svc_notify_state(svc, wake);
+				svc->pid= 0;
+				svc->reap_time= 0;
 				goto svc_state_start;
 			}
 		}
@@ -183,23 +189,8 @@ void svc_report_meta(service_t *svc) {
 	
 }
 
-bool svc_notify_state(service_t *svc, wake_t *wake) {
-	switch (svc->state) {
-	case SVC_STATE_START:
-		return ctl_notify_svc_start(svc->buffer, 0.0);
-	case SVC_STATE_START_PENDING:
-		return ctl_notify_svc_start(svc->buffer, (wake->now - svc->start_time) * .000001);
-	case SVC_STATE_UP:
-		return ctl_notify_svc_up(svc->buffer, (wake->now - svc->start_time) * .000001, svc->pid);
-	case SVC_STATE_REAPED:
-	case SVC_STATE_DOWN:
-		return ctl_notify_svc_down(svc->buffer,
-			(wake->now - svc->reap_time) * .000001,
-			(svc->reap_time - svc->start_time) * .000001,
-			svc->wait_status, svc->pid);
-	default:
-		return ctl_notify_error("service.state	%s	INVALID!", svc->buffer);
-	}
+bool svc_notify_state(service_t *svc) {
+	return ctl_notify_svc_state(svc->buffer, svc->start_time, svc->reap_time, svc->pid, svc->wait_status);
 }
 
 service_t *svc_by_name(const char *name, bool create) {

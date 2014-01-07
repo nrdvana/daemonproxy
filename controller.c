@@ -140,12 +140,10 @@ bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
 	if (ctl->out_buf_pos)
 		return false; // require empty output buffer
 	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
-		if (!ctl_notify_fd_state(fd_get_name(fd), fd_get_file_path(fd),
-				fd_get_pipe_read_end(fd), fd_get_pipe_write_end(fd)))
-		{
+		if (!fd_notify_state(fd)) {
 			// if state dump couldn't complete (output buffer full)
 			//  save our position to resume later
-			strlcpy(ctl->statedump_current, fd_get_name(fd), sizeof(ctl->statedump_current));
+			strcpy(ctl->statedump_current, fd_get_name(fd)); // length of name has already been checked
 			return false;
 		}
 	}
@@ -163,9 +161,9 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 	switch (ctl->statedump_part) {
 	case 0:
 		while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
-			strlcpy(ctl->statedump_current, svc_get_name(svc), sizeof(ctl->statedump_current));
+			strcpy(ctl->statedump_current, svc_get_name(svc)); // length of name has already been checked
 	case 1:
-			if (!svc_notify_state(svc, wake)) {
+			if (!svc_notify_state(svc)) {
 				ctl->statedump_part= 1;
 				return false;
 			}
@@ -364,7 +362,7 @@ bool ctl_write(const char *fmt, ... ) {
 // Mark the output buffer as missing a critical state event.  When the controller script starts
 // reading the pipe again, we will send it an "overflow" event to tell it that it needs to
 // re-sync its state.
-bool ctl_notify_overflow() {
+void ctl_notify_overflow() {
 	controller.out_buf_overflow= true;
 }
 
@@ -406,41 +404,41 @@ bool ctl_notify_signal(int sig_num) {
 	return ctl_write("signal %d %s\n", sig_num, sig_name(sig_num));
 }
 
-bool ctl_notify_svc_start(const char *name, double waittime) {
-	return ctl_write("service.state	%s	starting	%.3f\n", name, waittime);
-}
-
-bool ctl_notify_svc_up(const char *name, double uptime, pid_t pid) {
-	return ctl_write("service.state	%s	up	%.3f	pid	%d\n", name, uptime, (int) pid);
-}
-
-bool ctl_notify_svc_down(const char *name, double downtime, double uptime, int wstat, pid_t pid) {
-	if (pid == 0)
-		return ctl_write("service.state	%s	down	%.3f	idle\n", name);
+bool ctl_notify_svc_state(const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat) {
+	if (!up_ts)
+		return ctl_write("service.state	%s	down\n", name);
+	else if ((up_ts - wake->now) >= 0)
+		return ctl_write("service.state	%s	starting	%d\n", name, up_ts>>32);
+	else if (!reap_ts)
+		return ctl_write("service.state	%s	up	%d	pid	%d\n", name, up_ts>>32, (int) pid);
 	else if (WIFEXITED(wstat))
-		return ctl_write("service.state	%s	down	%.3f	exit	%d	uptime %.3f	pid	%d\n",
-			name, downtime, WEXITSTATUS(wstat), uptime, (int) pid);
+		return ctl_write("service.state	%s	down	%d	exit	%d	uptime %d	pid	%d\n",
+			name, (int)(reap_ts>>32), WEXITSTATUS(wstat), (int)((reap_ts-up_ts)>>32), (int) pid);
 	else
-		return ctl_write("service.state	%s	down	%.3f	signal	%d=%s	uptime %.3f	pid	%d\n",
-			name, downtime, WTERMSIG(wstat), sig_name(WTERMSIG(wstat)), uptime, (int) pid);
+		return ctl_write("service.state	%s	down	%d	signal	%d=%s	uptime %d	pid	%d\n",
+			name, (int)(reap_ts>>32), WTERMSIG(wstat), sig_name(WTERMSIG(wstat)),
+			(int)((reap_ts-up_ts)>>32), (int) pid);
+}
+
+bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series) {
+	return ctl_write("service.meta	%s\n", name); // TODO
+}
+
+bool ctl_notify_svc_args(const char *name, int arg_count, const char *arg_series) {
+	return ctl_write("service.args	%s\n", name); // TODO
+}
+
+bool ctl_notify_svc_fds(const char *name, int fd_count, const char *fd_series) {
+	return ctl_write("service.fds	%s\n", name); // TODO
 }
 
 bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pipe_read, const char *pipe_write) {
 	if (file_path)
 		return ctl_write("fd.state	%s	file	%s\n", name, file_path);
 	else if (pipe_read)
-		return ctl_write("fd.state	%s	pipe<	%s\n", name, pipe_read);
+		return ctl_write("fd.state	%s	pipe_from	%s\n", name, pipe_read);
 	else if (pipe_write)
-		return ctl_write("fd.state	%s	pipe>	%s\n", name, pipe_write);
+		return ctl_write("fd.state	%s	pipe_to	%s\n", name, pipe_write);
 	else
 		return ctl_write("fd.state	%s	unknown\n", name);
-}
-
-bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series) {
-}
-
-bool ctl_notify_svc_args(const char *name, int arg_count, const char *arg_series) {
-}
-
-bool ctl_notify_svc_fds(const char *name, int fd_count, const char *fd_series) {
 }

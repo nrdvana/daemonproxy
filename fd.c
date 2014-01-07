@@ -61,11 +61,20 @@ const char* fd_get_file_path(fd_t *fd) {
 }
 
 const char* fd_get_pipe_read_end(fd_t *fd) {
-	return fd->type == FD_TYPE_PIPE_W? fd->pipe_peer->buffer : NULL;
+	return fd->type == FD_TYPE_PIPE_W && fd->pipe_peer? fd->pipe_peer->buffer : NULL;
 }
 
 const char* fd_get_pipe_write_end(fd_t *fd) {
-	return fd->type == FD_TYPE_PIPE_R? fd->pipe_peer->buffer : NULL;
+	return fd->type == FD_TYPE_PIPE_R && fd->pipe_peer? fd->pipe_peer->buffer : NULL;
+}
+
+bool fd_notify_state(fd_t *fd) {
+	switch (fd->type) {
+	case FD_TYPE_FILE: return ctl_notify_fd_state(fd->buffer, fd->path, NULL, NULL);
+	case FD_TYPE_PIPE_R: return ctl_notify_fd_state(fd->buffer, NULL, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)");
+	case FD_TYPE_PIPE_W: return ctl_notify_fd_state(fd->buffer, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)", NULL);
+	default: return ctl_notify_error("File descriptor has invalid state");
+	}
 }
 
 // Open a pipe from one named FD to another

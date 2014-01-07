@@ -1,8 +1,8 @@
 #ifndef INIT_FRAME_H
 #define INIT_FRAME_H
 
-// Get CLOCK_MONOTONIC microseconds as int64_t
-int64_t gettime_us();
+// Get CLOCK_MONOTONIC time as 32.32 fixed-point number
+int64_t gettime_mon_frac();
 
 typedef struct wake_s {
 	fd_set fd_read, fd_write, fd_err;
@@ -14,6 +14,7 @@ typedef struct wake_s {
 } wake_t;
 
 extern bool main_terminate;
+extern wake_t *wake;
 
 //----------------------------------------------------------------------------
 // controller.c interface
@@ -27,20 +28,19 @@ typedef struct controller_s controller_t;
 // if controller_script is "-", controller is on stdin/stdout
 void ctl_init(const char* cfg_file, bool use_stdin);
 void ctl_pipe_reset();
+void ctl_notify_overflow();
 
 // Queue a message to the controller, possibly overflowing the output buffer
 // and requiring a state reset event.
 // If no controller is running, a sighup message will cause the config file to be re-loaded.
 bool ctl_write(const char *msg, ... );
 bool ctl_notify_signal(int sig_num);
-bool ctl_notify_svc_start(const char *name, double waittime);
-bool ctl_notify_svc_up(const char *name, double uptime, pid_t pid);
-bool ctl_notify_svc_down(const char *name, double downtime, double uptime, int wstat, pid_t pid);
+bool ctl_notify_svc_state(const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat);
 bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series);
 bool ctl_notify_svc_args(const char *name, int arg_count, const char *arg_series);
 bool ctl_notify_svc_fds(const char *name, int fd_count, const char *fd_series);
 bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pipe_read, const char *pipe_write);
-#define ctl_notify_error(msg, ...) (ctl_write("error" msg "\n", ##__VA_ARGS__))
+#define ctl_notify_error(msg, ...) (ctl_write("error: " msg "\n", ##__VA_ARGS__))
 
 // Handle state transitions based on communication with the controller
 void ctl_run(wake_t *wake);
@@ -57,7 +57,7 @@ void svc_init(int service_count, int size_each);
 
 const char * svc_get_name(service_t *svc);
 
-bool svc_notify_state(service_t *svc, wake_t *wake);
+bool svc_notify_state(service_t *svc);
 
 // Set metadata for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
@@ -120,7 +120,7 @@ fd_t * fd_open(const char *name, char *path, char *opts);
 // Close a named handle
 bool fd_close(const char *name);
 
-void fd_dump_state(fd_t *fd);
+bool fd_notify_state(fd_t *fd);
 
 fd_t * fd_by_name(const char *name);
 fd_t * fd_by_fd(int fd);
