@@ -16,7 +16,7 @@
 
 typedef struct service_s {
 	int size, state;
-	int meta_count, arg_count, fd_count;
+	int name_len, meta_len, argv_len, fds_len;
 	RBTreeNode name_index_node;
 	RBTreeNode pid_index_node;
 	struct service_s **active_prev_ptr;
@@ -43,6 +43,8 @@ service_t *svc_active_list= NULL; // linked list of active services
 service_t *svc_free_list= NULL; // linked list re-using next_active and prev_active
 
 void svc_change_pid(service_t *svc, pid_t pid);
+void svc_do_exec(service_t *svc);
+void svc_set_active(service_t *svc, bool activate);
 
 int  svc_by_name_compare(void *key, RBTreeNode *node) {
 	return strcmp((char*) key, ((service_t*) node->Object)->buffer);
@@ -73,6 +75,94 @@ const char * svc_get_name(service_t *svc) {
 	return svc->buffer;
 }
 
+const char * svc_get_meta(service_t *svc) {
+	return svc->buffer + svc->name_len + 1;
+}
+
+const char * svc_get_argv(service_t *svc) {
+	return svc->buffer + svc->name_len + 1 + svc->meta_len + 1;
+}
+
+const char * svc_get_fds(service_t *svc) {
+	return svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1;
+}
+
+/** Set the string for the service's metadata
+ * This string is concatenated with argv and fds in a single buffer.
+ * This is slightly expensive, but typically happens only once per service.
+ */
+bool svc_set_meta(service_t *svc, const char *tsv_fields) {
+	int new_meta_len= strlen(tsv_fields);
+	if (svc->name_len + 1 + new_meta_len + 1 + svc->argv_len + 1 + svc->fds_len + 1
+		> svc->size - sizeof(service_t)
+	)
+		return false;
+	// memmove the argv and fds strings to the new end of this string
+	if (new_meta_len != svc->meta_len)
+		memmove(svc->buffer + svc->name_len + 1 + new_meta_len + 1,
+			svc->buffer + svc->name_len + 1 + svc->meta_len + 1,
+			svc->argv_len + 1 + svc->fds_len + 1);
+	memcpy(svc->buffer + svc->name_len + 1, tsv_fields, new_meta_len+1);
+	svc->meta_len= new_meta_len;
+	// TODO: parse metadata values for known arguments, like "auto-restart"
+	return true;
+}
+
+/** Set the string for the service's argument list
+ * This string is concatenated with meta and fds in a single buffer.
+ * This is slightly expensive, but typically happens only once per service.
+ */
+bool svc_set_argv(service_t *svc, const char *tsv_fields) {
+	int new_argv_len= strlen(tsv_fields);
+	// Check whether new value will fit in buffer
+	if (svc->name_len + 1 + svc->meta_len + 1 + new_argv_len + 1 + svc->fds_len + 1
+		> svc->size - sizeof(service_t)
+	)
+		return false;
+	// memmove the "fds" string to the new end of this string
+	if (new_argv_len != svc->argv_len)
+		memmove(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + new_argv_len + 1,
+			svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
+			svc->fds_len + 1);
+	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1, tsv_fields, new_argv_len+1);
+	svc->argv_len= new_argv_len;
+	return true;
+}
+
+/** Set the string for the service's file descriptor specification
+ * This string is concatenated with meta and argv in a single buffer.
+ * This is slightly expensive, but typically happens only once per service.
+ */
+bool svc_set_fds(service_t *svc, const char *tsv_fields) {
+	int new_fds_len= strlen(tsv_fields);
+	// Check whether new value will fit in buffer
+	if (svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + new_fds_len + 1
+		> svc->size - sizeof(service_t)
+	)
+		return false;
+	// TODO: parse tsv_fields for correct syntax
+	
+	// It's the last field, so no memmove needed
+	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
+		tsv_fields, new_fds_len+1);
+	svc->fds_len= new_fds_len;
+	return true;
+}
+
+/** Handle the case where a service's pid was reaped with wait().
+ * This wakes up the service state machine, to possibly restart the daemon.
+ */
+void svc_handle_reaped(service_t *svc, int wstat) {
+	svc->wait_status= wstat;
+	if (svc->state == SVC_STATE_UP)
+		svc->state= SVC_STATE_REAPED;
+	svc_set_active(svc, true);
+}
+
+/** Activate or deactivate a service.
+ * This simply inserts or removes the service from a linked list.
+ * Each service in the "active" list get processed each time the main loop wakes up.
+ */
 void svc_set_active(service_t *svc, bool activate) {
 	if (activate && !svc->active_prev_ptr) {
 		// Insert node at head of doubly-linked list
@@ -90,15 +180,9 @@ void svc_set_active(service_t *svc, bool activate) {
 	}
 }
 
-void svc_handle_reaped(service_t *svc, int wstat) {
-	svc->wait_status= wstat;
-	if (svc->state == SVC_STATE_UP)
-		svc->state= SVC_STATE_REAPED;
-	svc_set_active(svc, true);
-}
-
-void svc_do_exec(service_t *svc);
-
+/** Run the state machine for each active service.
+ * Services might set themselves back to inactive during this loop.
+ */
 void svc_run_active(wake_t *wake) {
 	service_t *svc= svc_active_list;
 	while (svc) {
@@ -108,6 +192,8 @@ void svc_run_active(wake_t *wake) {
 	}
 }
 
+/** Run the state machine for one service.
+ */
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
 	int exit;
@@ -181,12 +267,11 @@ void svc_run(service_t *svc, wake_t *wake) {
 	}
 }
 
+/** Perform the exec() to launch the service's daemon (or runscript)
+ * This sets up FDs, and calls exec() with the argv for the service.
+ */
 void svc_do_exec(service_t *svc) {
-	
-}
-
-void svc_report_meta(service_t *svc) {
-	
+	// TODO
 }
 
 bool svc_notify_state(service_t *svc) {
@@ -206,15 +291,19 @@ service_t *svc_by_name(const char *name, bool create) {
 	// if create requested, create a new service by this name
 	// (if name is valid)
 	n= strlen(name);
-	if (create && svc_free_list && n > 0 && n < svc_free_list->size - sizeof(service_t)) {
+	if (create && svc_free_list && n > 0 && n + 4 < svc_free_list->size - sizeof(service_t)) {
 		svc= svc_free_list;
 		svc_free_list= svc->next_free;
-		memcpy(svc->buffer, name, n+1);
 		svc->state= SVC_STATE_DOWN;
-		svc->meta_count= 0;
-		svc->arg_count= 0;
+		svc->name_len= n;
+		memcpy(svc->buffer, name, n+1);
+		svc->meta_len= 0;
+		svc->buffer[n+1]= '\0';
+		svc->argv_len= 0;
+		svc->buffer[n+2]= '\0';
+		svc->fds_len= 0;
+		svc->buffer[n+3]= '\0';
 		//svc->env_count= 0;
-		svc->fd_count= 0;
 		svc->active_prev_ptr= NULL;
 		svc->active_next= NULL;
 		svc->pid= 0;

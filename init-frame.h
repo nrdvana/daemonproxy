@@ -36,9 +36,9 @@ void ctl_notify_overflow();
 bool ctl_write(const char *msg, ... );
 bool ctl_notify_signal(int sig_num);
 bool ctl_notify_svc_state(const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat);
-bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series);
-bool ctl_notify_svc_args(const char *name, int arg_count, const char *arg_series);
-bool ctl_notify_svc_fds(const char *name, int fd_count, const char *fd_series);
+bool ctl_notify_svc_meta(const char *name, const char *tsv_fields);
+bool ctl_notify_svc_argv(const char *name, const char *tsv_fields);
+bool ctl_notify_svc_fds(const char *name, const char *tsv_fields);
 bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pipe_read, const char *pipe_write);
 #define ctl_notify_error(msg, ...) (ctl_write("error: " msg "\n", ##__VA_ARGS__))
 
@@ -61,13 +61,13 @@ bool svc_notify_state(service_t *svc);
 
 // Set metadata for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_meta(const char *name, const char *tsv_fields);
-void svc_get_meta(service_t *svc, int *n_strings, const char **string_series);
+bool svc_set_meta(service_t *svc, const char *tsv_fields);
+const char * svc_get_meta(service_t *svc);
 
 // Set args for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_argv(const char *name, const char *tsv_fields);
-void svc_get_argv(service_t *svc, int *n_strings, const char **string_series);
+bool svc_set_argv(service_t *svc, const char *tsv_fields);
+const char * svc_get_argv(service_t *svc);
 
 // Set env for a service.  Created the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
@@ -75,8 +75,8 @@ void svc_get_argv(service_t *svc, int *n_strings, const char **string_series);
 
 // Set file descriptors for a service.  Create the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_fds(const char *name, const char *tsv_fields);
-void svc_get_fds(service_t *svc, int *n_strings, const char **string_series);
+bool svc_set_fds(service_t *svc, const char *tsv_fields);
+const char * svc_get_fds(service_t *svc);
 
 // update service state machine when requested to start
 void svc_handle_exec(service_t *svc);

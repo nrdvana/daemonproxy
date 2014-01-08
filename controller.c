@@ -168,20 +168,17 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 				return false;
 			}
 	case 2:
-			svc_get_meta(svc, &n, &strings);
-			if (!ctl_notify_svc_meta(svc_get_name(svc), n, strings)) {
+			if (!ctl_notify_svc_meta(svc_get_name(svc), svc_get_meta(svc))) {
 				ctl->statedump_part= 2;
 				return false;
 			}
 	case 3:
-			svc_get_args(svc, &n, &strings);
-			if (!ctl_notify_svc_args(svc_get_name(svc), n, strings)) {
+			if (!ctl_notify_svc_argv(svc_get_name(svc), svc_get_argv(svc))) {
 				ctl->statedump_part= 3;
 				return false;
 			}
 	case 4:
-			svc_get_fds(svc, &n, &strings);
-			if (!ctl_notify_svc_args(svc_get_name(svc), n, strings)) {
+			if (!ctl_notify_svc_fds(svc_get_name(svc), svc_get_fds(svc))) {
 				ctl->statedump_part= 4;
 				return false;
 			}
@@ -420,16 +417,16 @@ bool ctl_notify_svc_state(const char *name, int64_t up_ts, int64_t reap_ts, pid_
 			(int)((reap_ts-up_ts)>>32), (int) pid);
 }
 
-bool ctl_notify_svc_meta(const char *name, int meta_count, const char *meta_series) {
-	return ctl_write("service.meta	%s\n", name); // TODO
+bool ctl_notify_svc_meta(const char *name, const char *tsv_fields) {
+	return ctl_write("service.meta	%s	%s\n", name, tsv_fields);
 }
 
-bool ctl_notify_svc_args(const char *name, int arg_count, const char *arg_series) {
-	return ctl_write("service.args	%s\n", name); // TODO
+bool ctl_notify_svc_argv(const char *name, const char *tsv_fields) {
+	return ctl_write("service.args	%s	%s\n", name, tsv_fields);
 }
 
-bool ctl_notify_svc_fds(const char *name, int fd_count, const char *fd_series) {
-	return ctl_write("service.fds	%s\n", name); // TODO
+bool ctl_notify_svc_fds(const char *name, const char *tsv_fields) {
+	return ctl_write("service.fds	%s	%s\n", name, tsv_fields);
 }
 
 bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pipe_read, const char *pipe_write) {
