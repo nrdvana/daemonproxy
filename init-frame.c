@@ -5,8 +5,8 @@ static log_fn_t log_error_, log_warn_, log_info_, log_debug_, log_trace_;
 log_fn_t *log_error= log_error_,
 	*log_warn=  log_warn_,
 	*log_info=  log_info_,
-	*log_debug= log_debug_,
-	*log_trace= log_trace_;
+	*log_debug= log_null,
+	*log_trace= log_null;
 
 void log_null (const char *msg, ...) {
 	// no-op
