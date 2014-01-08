@@ -1,6 +1,17 @@
 #include "config.h"
 #include "init-frame.h"
 
+static log_fn_t log_error_, log_warn_, log_info_, log_debug_, log_trace_;
+log_fn_t *log_error= log_error_,
+	*log_warn=  log_warn_,
+	*log_info=  log_info_,
+	*log_debug= log_debug_,
+	*log_trace= log_trace_;
+
+void log_null (const char *msg, ...) {
+	// no-op
+}
+
 bool main_terminate= false;
 wake_t wake_instance;
 wake_t *wake= &wake_instance;
@@ -104,4 +115,60 @@ int64_t gettime_mon_frac() {
 
 bool parse_opts(char **argv) {
 	return true;
+}
+
+#include <stdio.h>
+static void log_error_(const char *msg, ...) {
+	char msg2[256];
+	if (snprintf(msg2, sizeof(msg2), "error: %s\n", msg) >= sizeof(msg2))
+		memset(msg2+sizeof(msg2)-4, '.', 3);
+	
+	va_list val;
+	va_start(val, msg);
+	vfprintf(stderr, msg2, val);
+	va_end(val);
+}
+
+static void log_warn_ (const char *msg, ...) {
+	char msg2[256];
+	if (snprintf(msg2, sizeof(msg2), "warning: %s\n", msg) >= sizeof(msg2))
+		memset(msg2+sizeof(msg2)-4, '.', 3);
+	
+	va_list val;
+	va_start(val, msg);
+	vfprintf(stderr, msg2, val);
+	va_end(val);
+}
+
+static void log_info_ (const char *msg, ...) {
+	char msg2[256];
+	if (snprintf(msg2, sizeof(msg2), "info: %s\n", msg) >= sizeof(msg2))
+		memset(msg2+sizeof(msg2)-4, '.', 3);
+	
+	va_list val;
+	va_start(val, msg);
+	vfprintf(stderr, msg2, val);
+	va_end(val);
+}
+
+static void log_debug_(const char *msg, ...) {
+	char msg2[256];
+	if (snprintf(msg2, sizeof(msg2), "debug: %s\n", msg) >= sizeof(msg2))
+		memset(msg2+sizeof(msg2)-4, '.', 3);
+	
+	va_list val;
+	va_start(val, msg);
+	vfprintf(stderr, msg2, val);
+	va_end(val);
+}
+
+static void log_trace_(const char *msg, ...) {
+	char msg2[256];
+	if (snprintf(msg2, sizeof(msg2), "trace: %s\n", msg) >= sizeof(msg2))
+		memset(msg2+sizeof(msg2)-4, '.', 3);
+	
+	va_list val;
+	va_start(val, msg);
+	vfprintf(stderr, msg2, val);
+	va_end(val);
 }

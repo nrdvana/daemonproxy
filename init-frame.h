@@ -13,6 +13,10 @@ typedef struct wake_s {
 	int64_t next; // time when we next need to process something
 } wake_t;
 
+typedef void log_fn_t(const char *msg, ...);
+
+extern log_fn_t *log_error, *log_warn, *log_info, *log_debug, *log_trace, log_null;
+
 extern bool main_terminate;
 extern wake_t *wake;
 
