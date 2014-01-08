@@ -11,6 +11,7 @@
 // Global signal self-pipe
 int sig_wake_rd= -1;
 int sig_wake_wr= -1;
+volatile int signal_error= 0;
 
 // Handle non-posix signal numbers.  Posix signals always fit in a byte.  But just in case
 // some other system uses unusual numbers, we re-map the 5 that are actually specified
@@ -35,8 +36,9 @@ int sig_wake_wr= -1;
 void sig_handler(int sig) {
 	char c= (char) ENCODE_SIGNAL(sig);
 	if (c) // don't enqueue 0s
-		write(sig_wake_wr, &c, 1);
-	// If it fails, nothing we can do anyway, so ignore it.
+		if (write(sig_wake_wr, &c, 1) != 1)
+			// If it fails, flag the error
+			signal_error= errno;
 }
 
 bool sig_dispatch();
@@ -75,6 +77,10 @@ void sig_init() {
 }
 
 void sig_run(wake_t *wake) {
+	if (signal_error) {
+		log_error("signal pipe error: %d", signal_error);
+		signal_error= 0;
+	}
 	// If we delivered all of the notifications, wake on the signal pipe
 	if (sig_dispatch()) {
 		FD_SET(sig_wake_rd, &wake->fd_read);
@@ -94,13 +100,20 @@ bool sig_dispatch() {
 		// drain the signal pipe as much as possible (pipe is nonblocking)
 		if (queue_n < sizeof(queue)) {
 			n= read(sig_wake_rd, queue + queue_n, sizeof(queue) - queue_n);
-			if (n > 0)
+			if (n > 0) {
+				log_trace("%d signals dequeued", n);
 				queue_n += n;
-			else if (!queue_n)
-				return true;
+			}
+			else {
+				log_trace("signal pipe read: %d", errno);
+				if (!queue_n)
+					return true;
+			}
 		}
+		log_debug("%d signals to deliver", n);
 		// deliver as many notifications as posible
 		for (i= 0; i < queue_n; i++) {
+			log_debug("deliver signal %d (%s)", queue[i], sig_name(queue[i]));
 			if (!ctl_notify_signal(DECODE_SIGNAL(queue[i] & 0xFF))) {
 				// controller output is blocked, so shift remaining queue to start of buffer
 				// and resume here next time
