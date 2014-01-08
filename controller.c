@@ -121,6 +121,7 @@ bool ctl_state_cfg_file(controller_t *ctl, wake_t *wake) {
 }
 
 bool ctl_state_script(controller_t *ctl, wake_t *wake) {
+	log_debug("controller state: ctl_state_script");
 	ctl->recv_fd= ctl->script_pipe[0][0];
 	ctl->send_fd= ctl->script_pipe[1][1];
 	ctl->state_fn= ctl_state_script_statedump;
@@ -128,6 +129,7 @@ bool ctl_state_script(controller_t *ctl, wake_t *wake) {
 }
 
 bool ctl_state_script_statedump(controller_t *ctl, wake_t *wake) {
+	log_debug("controller state: ctl_state_script_statedump");
 	ctl->statedump_current[0]= '\0';
 	ctl->statedump_part= 0;
 	// Dump FDs first
@@ -136,9 +138,8 @@ bool ctl_state_script_statedump(controller_t *ctl, wake_t *wake) {
 }
 
 bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
+	log_debug("controller state: ctl_state_script_statedump_fd");
 	fd_t *fd= NULL;
-	if (ctl->out_buf_pos)
-		return false; // require empty output buffer
 	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
 		if (!fd_notify_state(fd)) {
 			// if state dump couldn't complete (output buffer full)
@@ -154,6 +155,7 @@ bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
 }
 
 bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
+	log_debug("controller state: ctl_state_script_statedump_svc");
 	int n;
 	const char *strings;
 	service_t *svc= svc_by_name(ctl->statedump_current, false);
@@ -161,6 +163,7 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 	switch (ctl->statedump_part) {
 	case 0:
 		while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
+			log_debug("service iter = %s", svc_get_name(svc));
 			strcpy(ctl->statedump_current, svc_get_name(svc)); // length of name has already been checked
 	case 1:
 			if (!svc_notify_state(svc)) {
@@ -189,6 +192,7 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 }
 
 bool ctl_state_script_run(controller_t *ctl, wake_t *wake) {
+	log_debug("controller state: ctl_state_script_run");
 	int n;
 	// process commands while available and no output queued
 	while (ctl->out_buf_pos == 0 && ctl_next_command(ctl, &n)) {
@@ -208,6 +212,7 @@ void ctl_run(wake_t *wake) {
 		ctl_flush_outbuf();
 	// Run iterations of state machine while state returns true
 	while (ctl->state_fn && ctl->state_fn(ctl, wake)) {}
+	log_debug("ctl->out_buf_pos %d", ctl->out_buf_pos);
 	// If incoming fd, wake on data available, unless input buffer full
 	// (this could also be the config file, initially)
 	if (ctl->recv_fd != -1 && ctl->in_buf_pos < CONTROLLER_IN_BUF_SIZE) {
@@ -309,6 +314,7 @@ bool ctl_next_command(controller_t *ctl, int *cmd_len_out) {
 }
 
 static void ctl_process_command(controller_t *ctl, const char *str) {
+	log_debug("ctl_process_command(%s)", str);
 	if (strncmp(str, "echo", 4) == 0) {
 		ctl_write("%s\n", str);
 	}
@@ -329,8 +335,10 @@ static void ctl_process_command(controller_t *ctl, const char *str) {
 //  ctl_write_overflow().
 bool ctl_write(const char *fmt, ... ) {
 	// all writes fail on overflow condition until buffer becomes empty
-	if (controller.out_buf_overflow)
+	if (controller.out_buf_overflow) {
+		log_debug("write ignored, overflow");
 		return false;
+	}
 	// try writing message into buffer
 	va_list val;
 	va_start(val, fmt);
@@ -341,6 +349,7 @@ bool ctl_write(const char *fmt, ... ) {
 	va_end(val);
 	// If message doesn't fit, flush buffer, and if that doesn't make it fit, return false.
 	if (n >= CONTROLLER_OUT_BUF_SIZE - controller.out_buf_pos) {
+		log_debug("message len %d > buffer free %d", n, CONTROLLER_OUT_BUF_SIZE - controller.out_buf_pos);
 		// See if we can flush output buffer to free up space
 		ctl_flush_outbuf();
 		if (n >= CONTROLLER_OUT_BUF_SIZE - controller.out_buf_pos)
@@ -353,6 +362,7 @@ bool ctl_write(const char *fmt, ... ) {
 			fmt, val);
 		va_end(val);
 	}
+	controller.out_buf_pos += n;
 	return true;
 }
 
