@@ -1,5 +1,6 @@
 #include "config.h"
 #include "init-frame.h"
+#include <stdio.h>
 
 static log_fn_t log_error_, log_warn_, log_info_, log_debug_, log_trace_;
 log_fn_t *log_error= log_error_,
@@ -13,22 +14,33 @@ void log_null (const char *msg, ...) {
 }
 
 bool main_terminate= false;
-wake_t wake_instance;
-wake_t *wake= &wake_instance;
+const char *main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
+const char *main_scriptfile= CONTROLLER_DEFAULT_PATH;
+wake_t main_wake;
+
+wake_t *wake= &main_wake;
 
 // Parse options and apply to global vars; return false if fails
 bool parse_opts(char **argv);
+bool parse_option(char shortname, char* longname, char ***argv);
 
 int main(int argc, char** argv) {
 	int wstat;
 	pid_t pid;
 	struct timeval tv;
 	service_t *svc;
+	wake_t wake_instance;
+	bool use_stdin;
+	
 	memset(&wake_instance, 0, sizeof(wake_instance));
+	wake= &wake_instance;
 
 	// parse arguments, overriding default values
-	if (!parse_opts(argv))
-		return 2;
+	if (!parse_opts(argv+1)) {
+		if (getpid() != 1)
+			return 2;
+		log_error("Invalid arguments, but continuing anyway");
+	}
 	
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
@@ -37,7 +49,8 @@ int main(int argc, char** argv) {
 	// Initialize service object pool and indexes
 	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
 	// Initialize controller state machine and pipes
-	ctl_init(CONFIG_FILE_DEFAULT_PATH, true);
+	use_stdin= (0 == strcmp(main_scriptfile, "-"));
+	ctl_init(main_cfgfile, use_stdin);
 	
 	// Lock all memory into ram. init should never be "swapped out".
 	if (mlockall(MCL_CURRENT | MCL_FUTURE))
@@ -114,10 +127,96 @@ int64_t gettime_mon_frac() {
 }
 
 bool parse_opts(char **argv) {
+	char *current;
+	bool success= true;
+	
+	while ((current= *argv++)) {
+		if (current[0] == '-' && current[1] == '-') {
+			if (!parse_option(0, current+2, &argv))
+				success= false;
+		}
+		else if (current[0] == '-') {
+			for (++current; *current; current++)
+				if (!parse_option(*current, NULL, &argv))
+					success= false;
+		}
+		else {
+			printf("Unexpected argument \"%s\"\n", current);
+			success= false;
+		}
+	}
+	return success;
+}
+
+bool set_opt_verbose(char**);
+bool set_opt_quiet(char**);
+bool set_opt_configfile(char** argv);
+bool set_opt_scriptfile(char **argv);
+
+const struct option_table_entry_s {
+	char shortname;
+	const char *longname;
+	int argc;
+	bool (*handler)(char **argv);
+} option_table[]= {
+	{ 'v', "verbose",      0, set_opt_verbose },
+	{ 'q', "quiet",        0, set_opt_quiet },
+	{ 'c', "config-file",  1, set_opt_configfile },
+	{ 's', "script",       1, set_opt_scriptfile },
+	{ 0, NULL, 0, NULL }
+};
+
+bool parse_option(char shortname, char* longname, char ***argv) {
+	const struct option_table_entry_s *entry;
+	int i;
+	bool result;
+	
+	for (entry= option_table; entry->handler; entry++) {
+		if ((shortname && (shortname == entry->shortname))
+			|| (longname && (0 == strcmp(longname, entry->longname)))
+		) {
+			for (i= 0; i < entry->argc; i++)
+				if (!(*argv)[i]) {
+					log_error("Missing argument for -%c%s", longname? '-' : shortname, longname? longname : "");
+					return false;
+				}
+			result= entry->handler(*argv);
+			(*argv)+= entry->argc;
+			return result;
+		}
+	}
+	log_error("Unknown option -%c%s", longname? '-' : shortname, longname? longname : "");
+	return false;
+}
+
+bool set_opt_verbose(char** argv) {
+	if      (log_error == log_null) log_error= log_error_;
+	else if (log_warn  == log_null) log_warn= log_warn_;
+	else if (log_info  == log_null) log_info= log_info_;
+	else if (log_debug == log_null) log_debug= log_debug_;
+	else     log_trace= log_trace_;
 	return true;
 }
 
-#include <stdio.h>
+bool set_opt_quiet(char** argv) {
+	if      (log_trace != log_null) log_trace= log_null;
+	else if (log_debug != log_null) log_debug= log_null;
+	else if (log_info  != log_null) log_info = log_null;
+	else if (log_warn  != log_null) log_warn = log_null;
+	else     log_error= log_null;
+	return true;
+}
+
+bool set_opt_configfile(char** argv) {
+	main_cfgfile= argv[0];
+	return true;
+}
+
+bool set_opt_scriptfile(char **argv) {
+	main_scriptfile= argv[0];
+	return true;
+}
+
 static void log_error_(const char *msg, ...) {
 	char msg2[256];
 	if (snprintf(msg2, sizeof(msg2), "error: %s\n", msg) >= sizeof(msg2))
