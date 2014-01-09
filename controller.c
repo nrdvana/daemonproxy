@@ -87,8 +87,11 @@ bool ctl_state_cfg_file(controller_t *ctl, wake_t *wake) {
 	if (ctl->recv_fd == -1) {
 		ctl->recv_eof= 0;
 		ctl->recv_fd= open(ctl->config_path, O_RDONLY|O_NONBLOCK|O_NOCTTY);
-		if (ctl->recv_fd == -1)
-			ctl_notify_error("error opening config file \"%s\": %m", ctl->config_path);
+		if (ctl->recv_fd == -1) {
+			n= errno;
+			log_error("open config file \"%s\": %d", ctl->config_path, n);
+			ctl_notify_error("open config file \"%s\": %d", ctl->config_path, n);
+		}
 	}
 	// process config file lines
 	while (ctl->out_buf_pos == 0 && ctl_next_command(ctl, &n)) {
