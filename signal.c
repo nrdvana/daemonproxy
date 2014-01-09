@@ -14,8 +14,8 @@ int sig_wake_wr= -1;
 volatile int signal_error= 0;
 
 // Handle non-posix signal numbers.  Posix signals always fit in a byte.  But just in case
-// some other system uses unusual numbers, we re-map the 5 that are actually specified
-// to work for this program.
+// some other system uses unusual numbers, we re-map the 5 that this program needs to be able
+// to relay *iff* they are wider than 7 bits
 #define ENCODE_SIGNAL(sig) \
 	((unsigned)(sig) < 128? sig \
 	: (sig) == SIGINT?  128 \
