@@ -204,7 +204,7 @@ bool ctl_state_script_run(controller_t *ctl, wake_t *wake) {
 		ctl->in_buf_pos-= n;
 		memmove(ctl->in_buf, ctl->in_buf + n, ctl->in_buf_pos);
 	}
-	return false;
+	return ctl->state_fn != ctl_state_script_run;
 }
 
 void ctl_run(wake_t *wake) {
@@ -263,7 +263,8 @@ bool ctl_read_more(controller_t *ctl) {
 	return true;
 }
 
-// Read command from recv_fd, and process it
+// Find end of next command, possibly reading more from recv_fd
+//  or discarding comment lines.
 bool ctl_next_command(controller_t *ctl, int *cmd_len_out) {
 	int prev;
 	char *eol;
@@ -321,8 +322,12 @@ static void ctl_process_command(controller_t *ctl, const char *str) {
 	if (strncmp(str, "echo", 4) == 0) {
 		ctl_write("%s\n", str);
 	}
-//	else if ()
-//	else if ()
+	else if (strcmp(str, "state_dump") == 0) {
+		ctl->state_fn= ctl_state_script_statedump;
+	}
+	else if (strcmp(str, "overflow") == 0) {
+		ctl_notify_error("line too long");
+	}
 	else {
 		// unrecognized command? then reply with error, but processed it fully, so return true.
 		if (strlen(str) > 30)
