@@ -28,10 +28,12 @@ typedef struct controller_s {
 	char out_buf[CONTROLLER_OUT_BUF_SIZE];
 	int  out_buf_pos;
 	bool out_buf_overflow;
-	int64_t out_buf_stalled;
+	int64_t out_buf_stall_time;
 	
 	char statedump_current[NAME_MAX+1];
 	int  statedump_part;
+	
+	int command_len;
 	
 	//char exec_buf[CONFIG_SERVICE_EXEC_BUF_SIZE];
 	//int  arg_count, env_count;
@@ -42,23 +44,20 @@ controller_t controller;
 // Each of the following functions returns true/false of whether to continue
 //  processing (true), or yield until later (false).
 
-static bool ctl_state_cfg_file(controller_t *ctl, wake_t *wake);
-static bool ctl_state_script(controller_t *ctl, wake_t *wake);
-static bool ctl_state_script_statedump(controller_t *ctl, wake_t *wake);
-static bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake);
-static bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake);
-static bool ctl_state_script_run(controller_t *ctl, wake_t *wake);
+static bool ctl_state_cfg_open(controller_t *ctl);
+static bool ctl_state_cfg_close(controller_t *ctl);
+static bool ctl_state_read_command(controller_t *ctl);
+static bool ctl_state_cmd_overflow(controller_t *ctl);
+static bool ctl_state_cmd_statedump(controller_t *ctl);
+static bool ctl_state_cmd_statedump_fd(controller_t *ctl);
+static bool ctl_state_cmd_statedump_svc(controller_t *ctl);
 static bool ctl_read_more(controller_t *ctl);
-static bool ctl_next_command(controller_t *ctl, int *cmd_len_out);
-static void ctl_process_command(controller_t *ctl, const char *str);
 static bool ctl_flush_outbuf();
 
 void ctl_init(const char* cfg_file, bool use_stdin) {
 	memset(&controller, 0, sizeof(controller_t));
-	controller.state_fn= &ctl_state_cfg_file;
+	controller.state_fn= &ctl_state_cfg_open;
 	controller.config_path= cfg_file;
-	controller.send_fd= -1;
-	controller.recv_fd= -1;
 	// create input / output pipes for talking to controller script
 	if (pipe(controller.script_pipe[0]) || pipe(controller.script_pipe[1])) {
 		perror("pipe");
@@ -72,62 +71,108 @@ void ctl_init(const char* cfg_file, bool use_stdin) {
 		controller.script_pipe[0][0]= 0;
 		controller.script_pipe[1][1]= 1;
 	}
-	// read end of input pipe and write end of output pipe must be nonblocking
+	// read-end of input pipe and write-end of output pipe must be nonblocking
 	if (fcntl(controller.script_pipe[0][0], F_SETFL, O_NONBLOCK)
 		|| fcntl(controller.script_pipe[1][1], F_SETFL, O_NONBLOCK)
 	) {
 		perror("fcntl(O_NONBLOCK)");
 		abort();
 	}
+	
+	controller.recv_fd= ctl->script_pipe[0][0];
+	controller.send_fd= ctl->script_pipe[1][1];
 }
 
-bool ctl_state_cfg_file(controller_t *ctl, wake_t *wake) {
+bool ctl_state_cfg_open(controller_t *ctl) {
 	int n;
-	// First, open config file if not open yet
+	// First, open config file
+	ctl->recv_eof= 0;
+	ctl->recv_fd= open(ctl->config_path, O_RDONLY|O_NONBLOCK|O_NOCTTY);
 	if (ctl->recv_fd == -1) {
-		ctl->recv_eof= 0;
-		ctl->recv_fd= open(ctl->config_path, O_RDONLY|O_NONBLOCK|O_NOCTTY);
-		if (ctl->recv_fd == -1) {
-			n= errno;
-			log_error("open config file \"%s\": %d", ctl->config_path, n);
-			ctl_notify_error("open config file \"%s\": %d", ctl->config_path, n);
-		}
-	}
-	// process config file lines
-	while (ctl->out_buf_pos == 0 && ctl_next_command(ctl, &n)) {
-		ctl->in_buf[n++]= '\0';
-		ctl_process_command(ctl, ctl->in_buf);
-		ctl->in_buf_pos-= n;
-		memmove(ctl->in_buf, ctl->in_buf + n, ctl->in_buf_pos);
-	}
-	if (ctl->recv_eof) {
-		// If EOF and buffer not consumed, make sure buffer ends with "\n".
-		// We know there is room for "\n" because we would never call read() if the buffer
-		// were full.
-		if (ctl->in_buf_pos > 0 && ctl->in_buf[ctl->in_buf_pos-1] != '\n') {
-			ctl->in_buf[ctl->in_buf_pos++]= '\n';
-			// back to loop one last time
-			return true;
-		}
-		// if EOF and buffer is consumed, close config file
-		else if (ctl->in_buf_pos == 0) {
-			close(ctl->recv_fd);
-			ctl->recv_fd= -1;
-		}
-	}
-	// If end of config (or failed to open) pass control to "script" state
-	if (ctl->recv_fd == -1) {
-		ctl->state_fn= &ctl_state_script;
+		n= errno;
+		log_error("open config file \"%s\": %d", ctl->config_path, n);
+		ctl_notify_error("open config file \"%s\": %d", ctl->config_path, n);
+		ctl->state_fn= ctl_state_cfg_close;
 		return true;
 	}
-	return false;
+	else {
+		ctl->state_fn= ctl_state_read_command;
+		return true;
+	}
 }
 
-bool ctl_state_script(controller_t *ctl, wake_t *wake) {
-	log_debug("controller state: ctl_state_script");
+bool ctl_state_cfg_close(controller_t *ctl) {
+	close(ctl->recv_fd);
 	ctl->recv_fd= ctl->script_pipe[0][0];
-	ctl->send_fd= ctl->script_pipe[1][1];
-	ctl->state_fn= ctl_state_script_statedump;
+	ctl->state_fn= ctl_state_read_command;
+	return true;
+}
+
+// This state is really just a fancy non-blocking readline(), with special
+// handling for long lines (and EOF, when reading the config file)
+bool ctl_state_read_command(controller_t *ctl) {
+	int prev, n;
+	char *eol;
+
+	// clean up old command, if any.
+	if (ctl->command_len > 0) {
+		ctl->in_buf_pos -= ctl->command_len;
+		memmove(ctl->in_buf, ctl->in_buf + ctl->command_len, ctl->in_buf_pos);
+		ctl->command_len= 0;
+	}
+	
+	// see if we have a full line in the input.  else read some more.
+	eol= (char*) memchr(ctl->in_buf, '\n', ctl->in_buf_pos);
+	while (!eol) {
+		// if buffer is full, then command is too big, and we ignore the rest of the line
+		if (ctl->in_buf_pos >= CONTROLLER_IN_BUF_SIZE) {
+			// If comment, preserve comment character (long comments are not an error)
+			if (ctl->in_buf[0] == '#')
+				ctl->in_buf_pos= 1;
+			else {
+				ctl->in_buf_pos= 0;
+				ctl->command_len= -1; // flag overrun
+			}
+		}
+		// Try reading more from our non-blocking handle
+		prev= ctl->in_buf_pos;
+		if (ctl_read_more(ctl)) {
+			// See if new data has a "\n"
+			eol= (char*) memchr(ctl->in_buf + prev, '\n', ctl->in_buf_pos - prev);
+		}
+		else {
+			// else, if reading file, check for EOF (and append newline if needed)
+			if (ctl->recv_fd != ctl->script_pipe[0][0] && ctl->in_eof) {
+				// If last line missing newline, append newline and process command
+				if (ctl->in_buf_pos > 0) {
+					ctl->in_buf[ctl->in_buf_pos]= '\n';
+					eol= ctl->in_buf + ctl->in_buf_pos++;
+					break;
+				}
+				// else switch back to pipe and try again
+				ctl->state_fn= ctl_state_cfg_close;
+				return true;
+			}
+			// else done for now, until more data available on pipe
+			return false;
+		}
+	}
+	// We now have a complete line
+	ctl->command_len= eol - ctl->in_buf + 1;
+	// Ignore overflow lines, empty lines, lines starting with #, and lines that start with whitespace
+	if (eol == ctl->in_buf
+		|| ctl->in_buf[0] == '#'
+		|| ctl->in_buf[0] == ' '
+		|| ctl->in_buf[0] == '\t'
+	)
+	{} // continue back to this state
+	// check for command overflow
+	else if (ctl->in_buf_overflow)
+		ctl->state_fn= ctl_state_cmd_overflow;
+	// else try to parse and dispatch it
+	else {
+		...;
+	}
 	return true;
 }
 
