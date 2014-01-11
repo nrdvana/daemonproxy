@@ -105,7 +105,7 @@ bool sig_dispatch() {
 				queue_n += n;
 			}
 			else {
-				log_trace("signal pipe read: %d", errno);
+				log_trace("signal pipe read errno: %d", errno);
 				if (!queue_n)
 					return true;
 			}

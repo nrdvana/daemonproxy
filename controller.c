@@ -1,18 +1,12 @@
 #include "config.h"
 #include "init-frame.h"
 
-#define CTL_STATE_UNDEF             0
-#define CTL_STATE_CFGFILE           1
-#define CTL_STATE_SCRIPT_START      2
-#define CTL_STATE_SCRIPT_SEND_FD    3
-#define CTL_STATE_SCRIPT_SEND_SVC   4
-#define CTL_STATE_SCRIPT_RUN        5
-#define CTL_STATE_SCRIPT_RESTART    6
-#define CTL_STATE_NONE              7
+struct controller_s;
+typedef bool ctl_state_fn_t(struct controller_s *);
 
 typedef struct controller_s {
 	const char *config_path, *script_path;
-	bool (*state_fn)(struct controller_s*, wake_t*);
+	ctl_state_fn_t *state_fn;
 	
 	int  script_pipe[2][2];
 
@@ -44,15 +38,33 @@ controller_t controller;
 // Each of the following functions returns true/false of whether to continue
 //  processing (true), or yield until later (false).
 
-static bool ctl_state_cfg_open(controller_t *ctl);
-static bool ctl_state_cfg_close(controller_t *ctl);
-static bool ctl_state_read_command(controller_t *ctl);
-static bool ctl_state_cmd_overflow(controller_t *ctl);
-static bool ctl_state_cmd_statedump(controller_t *ctl);
-static bool ctl_state_cmd_statedump_fd(controller_t *ctl);
-static bool ctl_state_cmd_statedump_svc(controller_t *ctl);
+#define STATE(name, ...) static bool name(controller_t *ctl)
+STATE(ctl_state_cfg_open);
+STATE(ctl_state_cfg_close);
+STATE(ctl_state_read_command);
+STATE(ctl_state_cmd_overflow);
+STATE(ctl_state_cmd_unknown);
+STATE(ctl_state_cmd_statedump, "statedump");
+STATE(ctl_state_cmd_statedump_fd);
+STATE(ctl_state_cmd_statedump_svc);
+//STATE(ctl_state_cmd_svcargs, "service.args");
+//STATE(ctl_state_cmd_svcmeta, "service.meta");
+//STATE(ctl_state_cmd_svcfds,  "service.fds");
+
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf();
+
+typedef struct ctl_command_table_entry_s {
+	const char *command;
+	ctl_state_fn_t *state_fn;
+} ctl_command_table_entry_t;
+
+#include "controller_data.autogen.c"
+
+const ctl_command_table_entry_t * ctl_find_command(const char *buffer) {
+	const ctl_command_table_entry_t *result= &ctl_command_table[ ctl_command_hash_func(buffer) ];
+	return result->state_fn && strstr(buffer, result->command) == buffer? result : NULL;
+}
 
 void ctl_init(const char* cfg_file, bool use_stdin) {
 	memset(&controller, 0, sizeof(controller_t));
@@ -79,8 +91,8 @@ void ctl_init(const char* cfg_file, bool use_stdin) {
 		abort();
 	}
 	
-	controller.recv_fd= ctl->script_pipe[0][0];
-	controller.send_fd= ctl->script_pipe[1][1];
+	controller.recv_fd= controller.script_pipe[0][0];
+	controller.send_fd= controller.script_pipe[1][1];
 }
 
 bool ctl_state_cfg_open(controller_t *ctl) {
@@ -112,7 +124,8 @@ bool ctl_state_cfg_close(controller_t *ctl) {
 // handling for long lines (and EOF, when reading the config file)
 bool ctl_state_read_command(controller_t *ctl) {
 	int prev, n;
-	char *eol;
+	char *eol, *p;
+	const ctl_command_table_entry_t *cmd;
 
 	// clean up old command, if any.
 	if (ctl->command_len > 0) {
@@ -126,21 +139,19 @@ bool ctl_state_read_command(controller_t *ctl) {
 	while (!eol) {
 		// if buffer is full, then command is too big, and we ignore the rest of the line
 		if (ctl->in_buf_pos >= CONTROLLER_IN_BUF_SIZE) {
-			// If comment, preserve comment character (long comments are not an error)
-			if (ctl->in_buf[0] == '#')
-				ctl->in_buf_pos= 1;
-			else {
-				ctl->in_buf_pos= 0;
-				ctl->command_len= -1; // flag overrun
-			}
+			// In case its a comment, preserve comment character (long comments are not an error)
+			ctl->in_buf_overflow= true;
+			ctl->in_buf_pos= 1;
 		}
 		// Try reading more from our non-blocking handle
 		prev= ctl->in_buf_pos;
 		if (ctl_read_more(ctl)) {
+			log_trace("controller read %d bytes", ctl->in_buf_pos - prev);
 			// See if new data has a "\n"
 			eol= (char*) memchr(ctl->in_buf + prev, '\n', ctl->in_buf_pos - prev);
 		}
 		else {
+			log_trace("controller unable to read more yet");
 			// else, if reading file, check for EOF (and append newline if needed)
 			if (ctl->recv_fd != ctl->script_pipe[0][0] && ctl->in_eof) {
 				// If last line missing newline, append newline and process command
@@ -159,34 +170,56 @@ bool ctl_state_read_command(controller_t *ctl) {
 	}
 	// We now have a complete line
 	ctl->command_len= eol - ctl->in_buf + 1;
+	*eol= '\0';
+	log_debug("controller got line: \"%s\"", ctl->in_buf);
 	// Ignore overflow lines, empty lines, lines starting with #, and lines that start with whitespace
-	if (eol == ctl->in_buf
+	if (ctl->in_buf[0] == '\n'
+		|| ctl->in_buf[0] == '\r'
 		|| ctl->in_buf[0] == '#'
 		|| ctl->in_buf[0] == ' '
 		|| ctl->in_buf[0] == '\t'
 	)
-	{} // continue back to this state
+	{
+		log_trace("Ignoring comment line");
+		// continue back to this state by doing nothing
+	}
 	// check for command overflow
 	else if (ctl->in_buf_overflow)
 		ctl->state_fn= ctl_state_cmd_overflow;
 	// else try to parse and dispatch it
-	else {
-		...;
-	}
+	else if ((cmd= ctl_find_command(ctl->in_buf)))
+		ctl->state_fn= cmd->state_fn;
+	else
+		ctl->state_fn= ctl_state_cmd_unknown;
 	return true;
 }
 
-bool ctl_state_script_statedump(controller_t *ctl, wake_t *wake) {
-	log_debug("controller state: ctl_state_script_statedump");
+bool ctl_state_cmd_overflow(controller_t *ctl) {
+	if (!ctl_write("overflow\n"))
+		return false;
+	ctl->state_fn= ctl_state_read_command;
+	return true;
+}
+
+bool ctl_state_cmd_unknown(controller_t *ctl) {
+	// find comand string
+	const char *p= strchr(ctl->in_buf, '\t');
+	int n= p? p - ctl->in_buf : strlen(ctl->in_buf);
+	if (!ctl_notify_error("Unknown command: %.*s", n, ctl->in_buf))
+		return false;
+	ctl->state_fn= ctl_state_read_command;
+	return true;
+}
+
+bool ctl_state_cmd_statedump(controller_t *ctl) {
 	ctl->statedump_current[0]= '\0';
 	ctl->statedump_part= 0;
 	// Dump FDs first
-	ctl->state_fn= ctl_state_script_statedump_fd;
+	ctl->state_fn= ctl_state_cmd_statedump_fd;
 	return true;
 }
 
-bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
-	log_debug("controller state: ctl_state_script_statedump_fd");
+bool ctl_state_cmd_statedump_fd(controller_t *ctl) {
 	fd_t *fd= NULL;
 	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
 		if (!fd_notify_state(fd)) {
@@ -196,14 +229,13 @@ bool ctl_state_script_statedump_fd(controller_t *ctl, wake_t *wake) {
 			return false;
 		}
 	}
-	ctl->state_fn= ctl_state_script_statedump_svc;
+	ctl->state_fn= ctl_state_cmd_statedump_svc;
 	ctl->statedump_current[0]= '\0';
 	ctl->statedump_part= 0;
 	return true;
 }
 
-bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
-	log_debug("controller state: ctl_state_script_statedump_svc");
+bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
 	int n;
 	const char *strings;
 	service_t *svc= svc_by_name(ctl->statedump_current, false);
@@ -235,21 +267,8 @@ bool ctl_state_script_statedump_svc(controller_t *ctl, wake_t *wake) {
 			}
 		}
 	}
-	ctl->state_fn= ctl_state_script_run;
+	ctl->state_fn= ctl_state_read_command;
 	return true;
-}
-
-bool ctl_state_script_run(controller_t *ctl, wake_t *wake) {
-	log_debug("controller state: ctl_state_script_run");
-	int n;
-	// process commands while available and no output queued
-	while (ctl->out_buf_pos == 0 && ctl_next_command(ctl, &n)) {
-		ctl->in_buf[n++]= '\0';
-		ctl_process_command(ctl, ctl->in_buf);
-		ctl->in_buf_pos-= n;
-		memmove(ctl->in_buf, ctl->in_buf + n, ctl->in_buf_pos);
-	}
-	return ctl->state_fn != ctl_state_script_run;
 }
 
 void ctl_run(wake_t *wake) {
@@ -259,11 +278,14 @@ void ctl_run(wake_t *wake) {
 	if (ctl->out_buf_pos)
 		ctl_flush_outbuf();
 	// Run iterations of state machine while state returns true
-	while (ctl->state_fn && ctl->state_fn(ctl, wake)) {}
-	log_debug("ctl->out_buf_pos %d", ctl->out_buf_pos);
+	log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
+	while (ctl->state_fn(ctl)) {
+		log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
+	}
 	// If incoming fd, wake on data available, unless input buffer full
 	// (this could also be the config file, initially)
 	if (ctl->recv_fd != -1 && ctl->in_buf_pos < CONTROLLER_IN_BUF_SIZE) {
+		log_trace("wake on controller recv_fd");
 		FD_SET(ctl->recv_fd, &wake->fd_read);
 		FD_SET(ctl->recv_fd, &wake->fd_err);
 		if (ctl->recv_fd > wake->max_fd)
@@ -275,18 +297,18 @@ void ctl_run(wake_t *wake) {
 		if (!ctl_flush_outbuf()) {
 			// If this is the first write which has not succeeded, then we set the
 			// timestamp for the write timeout.
-			if (!ctl->out_buf_stalled) {
+			if (!ctl->out_buf_stall_time) {
 				// we use 0 as a "not stalled" flag, so if the actual timestamp is 0 fudge it to 1
-				ctl->out_buf_stalled= wake->now? wake->now : 1;
-			} else if (wake->now - ctl->out_buf_stalled > CONTROLLER_WRITE_TIMEOUT) {
+				ctl->out_buf_stall_time= wake->now? wake->now : 1;
+			} else if (wake->now - ctl->out_buf_stall_time > CONTROLLER_WRITE_TIMEOUT) {
 				// TODO: kill controller script
 			}
 			FD_SET(ctl->send_fd, &wake->fd_write);
 			FD_SET(ctl->send_fd, &wake->fd_err);
 			if (ctl->send_fd > wake->max_fd)
 				wake->max_fd= ctl->send_fd;
-			if (wake->next - ctl->out_buf_stalled > 0)
-				wake->next= ctl->out_buf_stalled;
+			if (wake->next - ctl->out_buf_stall_time > 0)
+				wake->next= ctl->out_buf_stall_time;
 		}
 	}
 }
@@ -301,85 +323,11 @@ bool ctl_read_more(controller_t *ctl) {
 		if (n == 0)
 			ctl->in_eof= 1;
 		else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			perror("read(controller pipe");
+			log_error("read(controller pipe): %d", errno);
 		return false;
 	}
 	ctl->in_buf_pos += n;
 	return true;
-}
-
-// Find end of next command, possibly reading more from recv_fd
-//  or discarding comment lines.
-bool ctl_next_command(controller_t *ctl, int *cmd_len_out) {
-	int prev;
-	char *eol;
-	while (1) {
-		// see if we have a full line in the input.  else read some more.
-		eol= (char*) memchr(ctl->in_buf, '\n', ctl->in_buf_pos);
-		while (!eol) {
-			// if buffer is full, then command is too big, and we replace everything til
-			// end of next line with the string "overflow".  This strange handling of
-			// converting long lines into an actual command "overflow" was helpful because
-			// it reduces the number of input-reading states that we can be in, and makes
-			// this function the only place where we ever need to worry about the overflow flag.
-			// (other than resetting the pipe)
-			if (!ctl->in_buf_ignore && ctl->in_buf_pos >= CONTROLLER_IN_BUF_SIZE) {
-				ctl->in_buf_ignore= true;
-				if (ctl->in_buf[0] == '#' || ctl->in_buf[0] == ' ' || ctl->in_buf[0] == '\t') {
-					ctl->in_buf_pos= 1;
-				} else {
-					memcpy(ctl->in_buf, "overflow", 8);
-					ctl->in_buf_pos= 8;
-				}
-			}
-			prev= ctl->in_buf_pos;
-			// If can't read more, then next command not available
-			if (!ctl_read_more(ctl))
-				return false;
-			// See if new data has a "\n"
-			eol= (char*) memchr(ctl->in_buf + prev, '\n', ctl->in_buf_pos - prev);
-			if (ctl->in_buf_overflow) {
-				// Resolve overflow condition if found end of line
-				if (eol) {
-					ctl->in_buf_pos -= (eol - ctl->in_buf) - prev;
-					memmove(ctl->in_buf + prev, eol, ctl->in_buf_pos);
-					eol= ctl->in_buf + prev;
-					ctl->in_buf_ignore= false;
-				}
-				else ctl->in_buf_pos= prev;
-			}
-		}
-		// Ignore empty lines, lines starting with #, and lines that start with whitespace
-		if (eol > ctl->in_buf
-			&& ctl->in_buf[0] != '#'
-			&& ctl->in_buf[0] != ' '
-			&& ctl->in_buf[0] != '\t')
-			break;
-		// discard otherwise
-		memmove(ctl->in_buf, eol+1, ctl->in_buf_pos - (eol - ctl->in_buf) - 1);
-	}
-	if (cmd_len_out) *cmd_len_out= eol - ctl->in_buf;
-	return true;
-}
-
-static void ctl_process_command(controller_t *ctl, const char *str) {
-	log_debug("ctl_process_command(%s)", str);
-	if (strncmp(str, "echo", 4) == 0) {
-		ctl_write("%s\n", str);
-	}
-	else if (strcmp(str, "state_dump") == 0) {
-		ctl->state_fn= ctl_state_script_statedump;
-	}
-	else if (strcmp(str, "overflow") == 0) {
-		ctl_notify_error("line too long");
-	}
-	else {
-		// unrecognized command? then reply with error, but processed it fully, so return true.
-		if (strlen(str) > 30)
-			ctl_notify_error("Invalid command: \"%.30s...", str);
-		else
-			ctl_notify_error("Invalid command: \"%s\"...", str);
-	}
 }
 
 // Try to write data to the controller script, nonblocking (or possibly stdout)
@@ -432,6 +380,8 @@ static bool ctl_flush_outbuf() {
 	controller_t *ctl= &controller;
 	int n;
 	while (ctl->out_buf_pos) {
+		log_trace("controller write buffer %d bytes pending %s",
+			ctl->out_buf_pos, controller.out_buf_overflow? "(overflow flag set)" : "");
 		// if no send_fd, discard buffer
 		if (ctl->send_fd == -1)
 			ctl->out_buf_pos= 0;
@@ -439,11 +389,13 @@ static bool ctl_flush_outbuf() {
 		else {
 			n= write(ctl->send_fd, ctl->out_buf, ctl->out_buf_pos);
 			if (n > 0) {
+				log_trace("controller flushed %d bytes", n);
 				ctl->out_buf_pos -= n;
-				ctl->out_buf_stalled= 0;
+				ctl->out_buf_stall_time= 0;
 				memmove(ctl->out_buf, ctl->out_buf + n, ctl->out_buf_pos);
 			}
 			else {
+				log_debug("controller outbuf write failed: $d", errno);
 				// we have an error, or the write would block.
 				return false;
 			}
