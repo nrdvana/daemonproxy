@@ -60,6 +60,7 @@ extern const int min_service_obj_size;
 void svc_init(int service_count, int size_each);
 
 const char * svc_get_name(service_t *svc);
+bool svc_check_name(const char *name);
 
 bool svc_notify_state(service_t *svc);
 

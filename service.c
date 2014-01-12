@@ -75,6 +75,14 @@ const char * svc_get_name(service_t *svc) {
 	return svc->buffer;
 }
 
+bool svc_check_name(const char *name) {
+	const char *p= name;
+	for (; *p; p++)
+		if (!(*p >= 'a' && *p <= 'z' || *p >= 'A' && *p <= 'Z' || *p >= '0' && *p <= '9' || *p == '.' || *p == '_' || *p == '-'))
+			return false;
+	return true;
+}
+
 const char * svc_get_meta(service_t *svc) {
 	return svc->buffer + svc->name_len + 1;
 }
@@ -282,8 +290,6 @@ service_t *svc_by_name(const char *name, bool create) {
 	RBTreeNode* node;
 	service_t *svc;
 	int n;
-	// services can be lazy-initialized
-	if (!svc_pool) return NULL;
 	
 	RBTreeSearch s= RBTree_Find( &svc_by_name_index, name );
 	if (s.Relation == 0)
@@ -313,6 +319,7 @@ service_t *svc_by_name(const char *name, bool create) {
 		RBTreeNode_Init( &svc->name_index_node );
 		svc->name_index_node.Object= svc;
 		RBTree_Add( &svc_by_name_index, &svc->name_index_node, svc->buffer);
+		return svc;
 	}
 	return NULL;
 }

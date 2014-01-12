@@ -28,6 +28,8 @@ typedef struct controller_s {
 	int  statedump_part;
 	
 	int command_len;
+	int command_argc;
+	char * command_argv[8];
 	
 	//char exec_buf[CONFIG_SERVICE_EXEC_BUF_SIZE];
 	//int  arg_count, env_count;
@@ -47,9 +49,10 @@ STATE(ctl_state_cmd_unknown);
 STATE(ctl_state_cmd_statedump, "statedump");
 STATE(ctl_state_cmd_statedump_fd);
 STATE(ctl_state_cmd_statedump_svc);
-//STATE(ctl_state_cmd_svcargs, "service.args");
-//STATE(ctl_state_cmd_svcmeta, "service.meta");
-//STATE(ctl_state_cmd_svcfds,  "service.fds");
+STATE(ctl_state_cmd_svcargs, "service.args");
+STATE(ctl_state_cmd_svcargs_fail);
+STATE(ctl_state_cmd_svcmeta, "service.meta");
+STATE(ctl_state_cmd_svcfds,  "service.fds");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf();
@@ -93,6 +96,15 @@ void ctl_init(const char* cfg_file, bool use_stdin) {
 	
 	controller.recv_fd= controller.script_pipe[0][0];
 	controller.send_fd= controller.script_pipe[1][1];
+}
+
+#define END_CMD(cond) end_cmd_(ctl, cond)
+static inline bool end_cmd_(controller_t *ctl, bool final_cond) {
+	if (final_cond) {
+		ctl->state_fn= ctl_state_read_command;
+		return true;
+	}
+	return false;
 }
 
 bool ctl_state_cfg_open(controller_t *ctl) {
@@ -187,10 +199,22 @@ bool ctl_state_read_command(controller_t *ctl) {
 	else if (ctl->in_buf_overflow)
 		ctl->state_fn= ctl_state_cmd_overflow;
 	// else try to parse and dispatch it
-	else if ((cmd= ctl_find_command(ctl->in_buf)))
-		ctl->state_fn= cmd->state_fn;
-	else
-		ctl->state_fn= ctl_state_cmd_unknown;
+	else {
+		// as a convenience to the command, parse out its first 8 arguments (tab delimited)
+		p= ctl->in_buf;
+		ctl->command_argv[0]= p;
+		for (ctl->command_argc= 1; ctl->command_argc < sizeof(ctl->command_argv)/sizeof(*ctl->command_argv); ctl->command_argc++) {
+			p= strchr(p, '\t');
+			if (!p) break;
+			ctl->command_argv[ctl->command_argc]= ++p;
+		}
+		// Now see if we can find the command
+		if ((cmd= ctl_find_command(ctl->in_buf))) {
+			ctl->state_fn= cmd->state_fn;
+		}
+		else
+			ctl->state_fn= ctl_state_cmd_unknown;
+	}
 	return true;
 }
 
@@ -267,6 +291,39 @@ bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
 			}
 		}
 	}
+	return END_CMD(true);
+}
+
+bool ctl_state_cmd_svcargs(controller_t *ctl) {
+	if (ctl->command_argc < 2)
+		return END_CMD( ctl_notify_error("Missing service name") );
+	
+	if (ctl->command_argc < 3)
+		return END_CMD( ctl_notify_error("Missing argument list") );
+	
+	ctl->command_argv[2][-1]= '\0'; // terminate service name
+	if (!svc_check_name(ctl->command_argv[1]))
+		return END_CMD( ctl_notify_error("Invalid service name: \"%s\"", ctl->command_argv[1]) );
+	
+	service_t *svc= svc_by_name(ctl->command_argv[1], true);
+	if (!svc_set_argv(svc, ctl->command_argv[2])) {
+		ctl->state_fn= ctl_state_cmd_svcargs_fail;
+		return true;
+	}
+		
+	return END_CMD( ctl_notify_svc_argv(svc_get_name(svc), svc_get_argv(svc)) );
+}
+
+bool ctl_state_cmd_svcargs_fail(controller_t *ctl) {
+	return END_CMD( ctl_notify_error("unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+}
+
+bool ctl_state_cmd_svcmeta(controller_t *ctl) {
+	ctl->state_fn= ctl_state_read_command;
+	return true;
+}
+
+bool ctl_state_cmd_svcfds(controller_t *ctl) {
 	ctl->state_fn= ctl_state_read_command;
 	return true;
 }
