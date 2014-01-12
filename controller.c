@@ -50,7 +50,6 @@ STATE(ctl_state_cmd_statedump, "statedump");
 STATE(ctl_state_cmd_statedump_fd);
 STATE(ctl_state_cmd_statedump_svc);
 STATE(ctl_state_cmd_svcargs, "service.args");
-STATE(ctl_state_cmd_svcargs_fail);
 STATE(ctl_state_cmd_svcmeta, "service.meta");
 STATE(ctl_state_cmd_svcfds,  "service.fds");
 
@@ -235,6 +234,8 @@ bool ctl_state_cmd_unknown(controller_t *ctl) {
 	return true;
 }
 
+/** Statedump command, part 1: Initialize vars and pass to part 2.
+ */
 bool ctl_state_cmd_statedump(controller_t *ctl) {
 	ctl->statedump_current[0]= '\0';
 	ctl->statedump_part= 0;
@@ -243,6 +244,11 @@ bool ctl_state_cmd_statedump(controller_t *ctl) {
 	return true;
 }
 
+/** Statedump command, part 2: iterate fd objects and dump each one.
+ * Uses an iterator of fd_t's name so that if fds are creeated or destroyed during our
+ * iteration, we can safely resume.  (and this iteration could be idle for a while if
+ * the controller script doesn't read its pipe)
+ */
 bool ctl_state_cmd_statedump_fd(controller_t *ctl) {
 	fd_t *fd= NULL;
 	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
@@ -259,6 +265,10 @@ bool ctl_state_cmd_statedump_fd(controller_t *ctl) {
 	return true;
 }
 
+/** Statedump command, part 3: iterate services and dump each one.
+ * Like part 2 above, except a service has 4 lines of output, and we need to be able to resume
+ * if a full buffer interrupts us half way through one service.
+ */
 bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
 	int n;
 	const char *strings;
@@ -294,6 +304,10 @@ bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
 	return END_CMD(true);
 }
 
+/** service.args command
+ * Set the argv for a service object
+ * Also report the state change when done.
+ */
 bool ctl_state_cmd_svcargs(controller_t *ctl) {
 	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error("Missing service name") );
@@ -306,16 +320,12 @@ bool ctl_state_cmd_svcargs(controller_t *ctl) {
 		return END_CMD( ctl_notify_error("Invalid service name: \"%s\"", ctl->command_argv[1]) );
 	
 	service_t *svc= svc_by_name(ctl->command_argv[1], true);
-	if (!svc_set_argv(svc, ctl->command_argv[2])) {
-		ctl->state_fn= ctl_state_cmd_svcargs_fail;
-		return true;
-	}
-		
-	return END_CMD( ctl_notify_svc_argv(svc_get_name(svc), svc_get_argv(svc)) );
-}
-
-bool ctl_state_cmd_svcargs_fail(controller_t *ctl) {
-	return END_CMD( ctl_notify_error("unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+	if (svc_set_argv(svc, ctl->command_argv[2]))
+		return END_CMD( ctl_notify_svc_argv(svc_get_name(svc), svc_get_argv(svc)) );
+	else
+		return END_CMD( ctl_notify_error("unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+	// If reporting the result above fails, the whole function will be re-run, but we don't care
+	// since that isn't a common case and isn't too expensive.
 }
 
 bool ctl_state_cmd_svcmeta(controller_t *ctl) {
@@ -328,6 +338,10 @@ bool ctl_state_cmd_svcfds(controller_t *ctl) {
 	return true;
 }
 
+/** Run all processing needed for the controller for this time slice
+ * This function is mainly a wrapper that repeatedly executes the current state until
+ * the state_fn returns false.  We then flush buffers and decide what to wake on.
+ */
 void ctl_run(wake_t *wake) {
 	controller_t *ctl= &controller;
 	int n;
