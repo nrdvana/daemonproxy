@@ -87,10 +87,11 @@ const char * svc_get_fds(service_t *svc);
 void svc_handle_exec(service_t *svc);
 
 // update service state machine after PID is reaped
-void svc_handle_reap(service_t *svc, int wstat);
+void svc_handle_reaped(service_t *svc, int wstat);
 
 // run an iteration of the state machine for the service
 void svc_run(service_t *svc, wake_t *wake);
+void svc_run_active(wake_t *wake);
 
 // Lookup services by attributes
 service_t * svc_by_name(const char *name, bool create);
@@ -144,5 +145,11 @@ void sig_init();
 void sig_run(wake_t *wake);
 
 const char * sig_name(int sig_num);
+
+#ifdef NDEBUG
+#define svc_check(svc)
+#else
+void svc_check(service_t *svc);
+#endif
 
 #endif

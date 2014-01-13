@@ -10,8 +10,11 @@
 #include <string.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdarg.h>
 #include <time.h>
 #include <assert.h>

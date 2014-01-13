@@ -36,7 +36,7 @@ typedef struct service_s {
 // Want at least struct size, plus room for name, small argv list, and short names of file descriptors
 const int min_service_obj_size= sizeof(service_t) + NAME_MAX + 128;
 
-service_t *svc_pool= NULL;
+void *svc_pool= NULL;
 RBTree svc_by_name_index;
 RBTree svc_by_pid_index;
 service_t *svc_active_list= NULL; // linked list of active services
@@ -56,6 +56,7 @@ int  svc_by_pid_compare(void *key, RBTreeNode *node) {
 }
 
 void svc_init(int service_count, int size_each) {
+	service_t *svc;
 	int i;
 	svc_pool= malloc(service_count * size_each);
 	if (!svc_pool)
@@ -63,10 +64,11 @@ void svc_init(int service_count, int size_each) {
 	memset(svc_pool, 0, service_count * size_each);
 	svc_free_list= svc_pool;
 	for (i=0; i < service_count; i++) {
-		svc_pool[i].size= size_each;
-		svc_pool[i].next_free= svc_pool+i+1;
+		svc= (service_t*) (((char*)svc_pool) + i * size_each);
+		svc->size= size_each;
+		svc->next_free= (i+1 >= service_count)? NULL
+			: (service_t*) (((char*)svc_pool) + (i+1) * size_each);
 	}
-	svc_pool[service_count-1].next_free= NULL;
 	RBTree_Init( &svc_by_name_index, svc_by_name_compare );
 	RBTree_Init( &svc_by_pid_index,  svc_by_pid_compare );
 }
@@ -78,7 +80,7 @@ const char * svc_get_name(service_t *svc) {
 bool svc_check_name(const char *name) {
 	const char *p= name;
 	for (; *p; p++)
-		if (!(*p >= 'a' && *p <= 'z' || *p >= 'A' && *p <= 'Z' || *p >= '0' && *p <= '9' || *p == '.' || *p == '_' || *p == '-'))
+		if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
 			return false;
 	return true;
 }
@@ -113,6 +115,9 @@ bool svc_set_meta(service_t *svc, const char *tsv_fields) {
 	memcpy(svc->buffer + svc->name_len + 1, tsv_fields, new_meta_len+1);
 	svc->meta_len= new_meta_len;
 	// TODO: parse metadata values for known arguments, like "auto-restart"
+	// unless NDEBUG:
+		svc_check(svc);
+		assert(strcmp(svc_get_meta(svc), tsv_fields) == 0);
 	return true;
 }
 
@@ -134,6 +139,9 @@ bool svc_set_argv(service_t *svc, const char *tsv_fields) {
 			svc->fds_len + 1);
 	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1, tsv_fields, new_argv_len+1);
 	svc->argv_len= new_argv_len;
+	// unless NDEBUG:
+		svc_check(svc);
+		assert(strcmp(svc_get_argv(svc), tsv_fields) == 0);
 	return true;
 }
 
@@ -154,6 +162,9 @@ bool svc_set_fds(service_t *svc, const char *tsv_fields) {
 	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
 		tsv_fields, new_fds_len+1);
 	svc->fds_len= new_fds_len;
+	// unless NDEBUG:
+		svc_check(svc);
+		assert(strcmp(svc_get_fds(svc), tsv_fields) == 0);
 	return true;
 }
 
@@ -186,6 +197,9 @@ void svc_set_active(service_t *svc, bool activate) {
 			svc->active_next->active_prev_ptr= svc->active_prev_ptr;
 		*svc->active_prev_ptr= svc->active_next;
 	}
+	#ifdef UNIT_TESTING
+	svc_check(svc);
+	#endif
 }
 
 /** Run the state machine for each active service.
@@ -204,8 +218,6 @@ void svc_run_active(wake_t *wake) {
  */
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
-	int exit;
-	int sig;
 	switch (svc->state) {
 	case SVC_STATE_START_PENDING: svc_state_start_pending:
 		// if not wake time yet,
@@ -273,6 +285,9 @@ void svc_run(service_t *svc, wake_t *wake) {
 	default:
 		assert(0);
 	}
+	#ifdef UNIT_TESTING
+	svc_check(svc);
+	#endif
 }
 
 /** Perform the exec() to launch the service's daemon (or runscript)
@@ -287,7 +302,6 @@ bool svc_notify_state(service_t *svc) {
 }
 
 service_t *svc_by_name(const char *name, bool create) {
-	RBTreeNode* node;
 	service_t *svc;
 	int n;
 	
@@ -318,7 +332,11 @@ service_t *svc_by_name(const char *name, bool create) {
 		svc->reap_time= 0;
 		RBTreeNode_Init( &svc->name_index_node );
 		svc->name_index_node.Object= svc;
+		RBTreeNode_Init( &svc->pid_index_node );
 		RBTree_Add( &svc_by_name_index, &svc->name_index_node, svc->buffer);
+		#ifdef UNIT_TESTING
+		svc_check(svc);
+		#endif
 		return svc;
 	}
 	return NULL;
@@ -333,12 +351,12 @@ void svc_change_pid(service_t *svc, pid_t pid) {
 		svc->pid_index_node.Object= svc;
 		RBTree_Add( &svc_by_pid_index, &svc->pid_index_node, &svc->pid);
 	}
+	#ifdef UNIT_TESTING
+	svc_check(svc);
+	#endif
 }
 
 service_t *svc_by_pid(pid_t pid) {
-	RBTreeNode* node;
-	// services can be lazy-initialized
-	if (!svc_pool) return NULL;
 	RBTreeSearch s= RBTree_Find( &svc_by_pid_index, &pid );
 	if (s.Relation == 0)
 		return (service_t*) s.Nearest->Object;
@@ -347,18 +365,20 @@ service_t *svc_by_pid(pid_t pid) {
 
 service_t * svc_iter_next(service_t *svc, const char *from_name) {
 	RBTreeNode *node;
+	log_trace("next service from %p or \"%s\"", svc, from_name? from_name : "");
 	if (svc) {
 		node= RBTreeNode_GetNext(&svc->name_index_node);
 	} else {
 		RBTreeSearch s= RBTree_Find( &svc_by_name_index, from_name );
+		log_trace("find(\"%s\"): { %d, %p }", from_name, s.Relation, s.Nearest);
 		if (s.Nearest == NULL)
 			node= NULL;
-		else if (s.Relation > 0)
+		else if (s.Relation <= 0)
 			node= s.Nearest;
 		else
 			node= RBTreeNode_GetNext(s.Nearest);
-		return node? (service_t *) node->Object : NULL;
 	}
+	return node? (service_t *) node->Object : NULL;
 }
 
 void svc_delete(service_t *svc) {
@@ -371,3 +391,26 @@ void svc_delete(service_t *svc) {
 	svc->next_free= svc_free_list;
 	svc_free_list= svc;
 }
+
+#ifndef NDEBUG
+void svc_check(service_t *svc) {
+	int buf_len;
+	assert(svc != NULL);
+	assert(svc->size > min_service_obj_size);
+	buf_len= svc->size - sizeof(service_t);
+	assert(svc->name_len >= 0 && svc->name_len < buf_len);
+	assert(svc->meta_len >= 0 && svc->meta_len < buf_len);
+	assert(svc->argv_len >= 0 && svc->argv_len < buf_len);
+	assert(svc->fds_len  >= 0 && svc->fds_len  < buf_len);
+	assert(svc->name_len + svc->meta_len + svc->argv_len + svc->fds_len +4 <= buf_len);
+	assert(svc->name_index_node.Color == RBTreeNode_Black || svc->name_index_node.Color == RBTreeNode_Red);
+	if (svc->pid)
+		assert(svc->pid_index_node.Color == RBTreeNode_Black || svc->pid_index_node.Color == RBTreeNode_Red);
+	else
+		assert(svc->pid_index_node.Color == RBTreeNode_Unassigned);
+	assert(svc->buffer[svc->name_len] == 0);
+	assert(svc->buffer[svc->name_len + 1 + svc->meta_len] == 0);
+	assert(svc->buffer[svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len] == 0);
+	assert(svc->buffer[svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + svc->fds_len] == 0);
+}
+#endif

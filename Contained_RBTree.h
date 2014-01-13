@@ -18,9 +18,9 @@
 *   Contained RBTree Data Structure
 \******************************************************************************/
 
-#define RBTreeNode_Black 0
-#define RBTreeNode_Red 1
-#define RBTreeNode_Unassigned 2
+#define RBTreeNode_Unassigned 0
+#define RBTreeNode_Black 1
+#define RBTreeNode_Red 2
 typedef struct RBTreeNode_s {
 //	enum NodeColor { Black= 0, Red= 1, Unassigned= 2 };
 

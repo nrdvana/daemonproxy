@@ -74,7 +74,7 @@ void ctl_init(const char* cfg_file, bool use_stdin) {
 	controller.config_path= cfg_file;
 	// create input / output pipes for talking to controller script
 	if (pipe(controller.script_pipe[0]) || pipe(controller.script_pipe[1])) {
-		perror("pipe");
+		log_error("pipe: errno = %d", errno);
 		abort();
 	}
 	// If controller_script is "-", we use stdin/stdout
@@ -89,7 +89,7 @@ void ctl_init(const char* cfg_file, bool use_stdin) {
 	if (fcntl(controller.script_pipe[0][0], F_SETFL, O_NONBLOCK)
 		|| fcntl(controller.script_pipe[1][1], F_SETFL, O_NONBLOCK)
 	) {
-		perror("fcntl(O_NONBLOCK)");
+		log_error("fcntl(O_NONBLOCK): errno = %d", errno);
 		abort();
 	}
 	
@@ -134,7 +134,7 @@ bool ctl_state_cfg_close(controller_t *ctl) {
 // This state is really just a fancy non-blocking readline(), with special
 // handling for long lines (and EOF, when reading the config file)
 bool ctl_state_read_command(controller_t *ctl) {
-	int prev, n;
+	int prev;
 	char *eol, *p;
 	const ctl_command_table_entry_t *cmd;
 
@@ -270,14 +270,13 @@ bool ctl_state_cmd_statedump_fd(controller_t *ctl) {
  * if a full buffer interrupts us half way through one service.
  */
 bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
-	int n;
-	const char *strings;
 	service_t *svc= svc_by_name(ctl->statedump_current, false);
 	if (!svc) ctl->statedump_part= 0;
 	switch (ctl->statedump_part) {
 	case 0:
 		while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
 			log_debug("service iter = %s", svc_get_name(svc));
+			svc_check(svc);
 			strcpy(ctl->statedump_current, svc_get_name(svc)); // length of name has already been checked
 	case 1:
 			if (!svc_notify_state(svc)) {
@@ -374,7 +373,6 @@ bool ctl_state_cmd_svcfds(controller_t *ctl) {
  */
 void ctl_run(wake_t *wake) {
 	controller_t *ctl= &controller;
-	int n;
 	// if anything in output buffer, try writing it
 	if (ctl->out_buf_pos)
 		ctl_flush_outbuf();

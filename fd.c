@@ -136,7 +136,7 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 // Open a file on the given name, possibly closing a handle by that name
 fd_t * fd_open(const char *name, char *path, char *opts) {
 	int flags, fd, n, buf_free;
-	char *s, *buf_pos, *buf_end, *start, *end;
+	char *start, *end;
 	fd_t *fd_obj;
 	bool f_read, f_write, f_mkdir;
 	
@@ -271,6 +271,6 @@ fd_t * fd_iter_next(fd_t *current, const char *from_name) {
 			node= s.Nearest;
 		else
 			node= RBTreeNode_GetNext(s.Nearest);
-		return node? (fd_t *) node->Object : NULL;
 	}
+	return node? (fd_t *) node->Object : NULL;
 }

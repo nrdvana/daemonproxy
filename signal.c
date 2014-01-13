@@ -45,7 +45,7 @@ bool sig_dispatch();
 
 void sig_init() {
 	int pipe_fd[2];
-	struct sigaction act, act_chld, act_ign;
+	struct sigaction act;
 	
 	// Create pipe and set non-blocking
 	if (pipe(pipe_fd)
@@ -54,7 +54,7 @@ void sig_init() {
 		|| fcntl(pipe_fd[0], F_SETFL, O_NONBLOCK)
 		|| fcntl(pipe_fd[1], F_SETFL, O_NONBLOCK)
 	) {
-		perror("signal pipe setup");
+		log_error("signal pipe setup: errno = %d", errno);
 		abort();
 	}
 	sig_wake_rd= pipe_fd[0];
@@ -71,7 +71,7 @@ void sig_init() {
 		|| (act.sa_handler= SIG_DFL, sigaction(SIGCHLD, &act, NULL))
 		|| (act.sa_handler= SIG_IGN, sigaction(SIGPIPE, &act, NULL))
 	) {
-		perror("signal handler setup");
+		log_error("signal handler setup: errno = %d", errno);
 		abort();
 	}
 }
