@@ -46,12 +46,12 @@ STATE(ctl_state_cfg_close);
 STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
-STATE(ctl_state_cmd_statedump, "statedump");
+STATE(ctl_state_cmd_statedump,     "statedump");
 STATE(ctl_state_cmd_statedump_fd);
 STATE(ctl_state_cmd_statedump_svc);
-STATE(ctl_state_cmd_svcargs, "service.args");
-STATE(ctl_state_cmd_svcmeta, "service.meta");
-STATE(ctl_state_cmd_svcfds,  "service.fds");
+STATE(ctl_state_cmd_svcargs,       "service.args");
+STATE(ctl_state_cmd_svcmeta,       "service.meta");
+STATE(ctl_state_cmd_svcfds,        "service.fds");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf();
@@ -329,13 +329,43 @@ bool ctl_state_cmd_svcargs(controller_t *ctl) {
 }
 
 bool ctl_state_cmd_svcmeta(controller_t *ctl) {
-	ctl->state_fn= ctl_state_read_command;
-	return true;
+	if (ctl->command_argc < 2)
+		return END_CMD( ctl_notify_error("Missing service name") );
+	
+	if (ctl->command_argc < 3)
+		return END_CMD( ctl_notify_error("Missing argument list") );
+	
+	ctl->command_argv[2][-1]= '\0'; // terminate service name
+	if (!svc_check_name(ctl->command_argv[1]))
+		return END_CMD( ctl_notify_error("Invalid service name: \"%s\"", ctl->command_argv[1]) );
+	
+	service_t *svc= svc_by_name(ctl->command_argv[1], true);
+	if (svc_set_meta(svc, ctl->command_argv[2]))
+		return END_CMD( ctl_notify_svc_meta(svc_get_name(svc), svc_get_meta(svc)) );
+	else
+		return END_CMD( ctl_notify_error("unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+	// If reporting the result above fails, the whole function will be re-run, but we don't care
+	// since that isn't a common case and isn't too expensive.
 }
 
 bool ctl_state_cmd_svcfds(controller_t *ctl) {
-	ctl->state_fn= ctl_state_read_command;
-	return true;
+	if (ctl->command_argc < 2)
+		return END_CMD( ctl_notify_error("Missing service name") );
+	
+	if (ctl->command_argc < 3)
+		return END_CMD( ctl_notify_error("Missing argument list") );
+	
+	ctl->command_argv[2][-1]= '\0'; // terminate service name
+	if (!svc_check_name(ctl->command_argv[1]))
+		return END_CMD( ctl_notify_error("Invalid service name: \"%s\"", ctl->command_argv[1]) );
+	
+	service_t *svc= svc_by_name(ctl->command_argv[1], true);
+	if (svc_set_fds(svc, ctl->command_argv[2]))
+		return END_CMD( ctl_notify_svc_fds(svc_get_name(svc), svc_get_fds(svc)) );
+	else
+		return END_CMD( ctl_notify_error("unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+	// If reporting the result above fails, the whole function will be re-run, but we don't care
+	// since that isn't a common case and isn't too expensive.
 }
 
 /** Run all processing needed for the controller for this time slice
