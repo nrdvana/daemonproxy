@@ -14,3 +14,4 @@ controller_data.autogen.c: controller.c
 clean:
 	rm controller_data.autogen.c
 	rm *.o
+	rm *.d
