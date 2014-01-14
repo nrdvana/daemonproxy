@@ -52,6 +52,7 @@ STATE(ctl_state_cmd_statedump_svc);
 STATE(ctl_state_cmd_svcargs,       "service.args");
 STATE(ctl_state_cmd_svcmeta,       "service.meta");
 STATE(ctl_state_cmd_svcfds,        "service.fds");
+STATE(ctl_state_cmd_svcstart,      "service.start");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf();
@@ -367,6 +368,42 @@ bool ctl_state_cmd_svcfds(controller_t *ctl) {
 	// since that isn't a common case and isn't too expensive.
 }
 
+/** service.exec command
+ * Forks and execs named service, if it is not running.
+ * Errors in specification (or if service is up) are reported immediately.
+ * Results of exec attempt are reported via other events.
+ */
+bool ctl_state_cmd_svcstart(controller_t *ctl) {
+	const char *argv;
+	char *endp;
+	int64_t wake_timestamp;
+	if (ctl->command_argc < 2)
+		return END_CMD( ctl_notify_error("Missing service name") );
+	
+	if (ctl->command_argc > 2) {
+		if (ctl->command_argc > 3)
+			return END_CMD( ctl_notify_error("Too many arguments") );
+		ctl->command_argv[2][-1]= '\0'; // terminate service name
+		
+		wake_timestamp= strtoll(ctl->command_argv[2], &endp, 10) << 32;
+		if (*endp)
+			return END_CMD( ctl_notify_error("Invalid timestamp") );
+	}
+	else
+		wake_timestamp= wake->now;
+	
+	service_t *svc= svc_by_name(ctl->command_argv[1], false);
+	if (!svc)
+		return END_CMD( ctl_notify_error("No such service \"%s\"", ctl->command_argv[1]) );
+	
+	argv= svc_get_argv(svc);
+	if (!argv[0] || argv[0] == '\t')
+		return END_CMD( ctl_notify_error("Missing/invalid argument list for \"%s\"", ctl->command_argv[1]) );
+	
+	svc_handle_start(svc, wake_timestamp);
+	return END_CMD(true);
+}
+
 /** Run all processing needed for the controller for this time slice
  * This function is mainly a wrapper that repeatedly executes the current state until
  * the state_fn returns false.  We then flush buffers and decide what to wake on.
@@ -381,6 +418,10 @@ void ctl_run(wake_t *wake) {
 	while (ctl->state_fn(ctl)) {
 		log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
 	}
+}
+
+void ctl_flush(wake_t *wake) {
+	controller_t *ctl= &controller;
 	// If incoming fd, wake on data available, unless input buffer full
 	// (this could also be the config file, initially)
 	if (ctl->recv_fd != -1 && ctl->in_buf_pos < CONTROLLER_IN_BUF_SIZE) {
@@ -452,8 +493,10 @@ bool ctl_write(const char *fmt, ... ) {
 		log_debug("message len %d > buffer free %d", n, CONTROLLER_OUT_BUF_SIZE - controller.out_buf_pos);
 		// See if we can flush output buffer to free up space
 		ctl_flush_outbuf();
-		if (n >= CONTROLLER_OUT_BUF_SIZE - controller.out_buf_pos)
+		if (n >= CONTROLLER_OUT_BUF_SIZE - controller.out_buf_pos) {
+			log_debug("controller out buf can't hold %d bytes", n);
 			return false;
+		}
 		// If we have the space now, repeat the sprintf, assuming that n is idential to before.
 		va_start(val, fmt);
 		vsnprintf(
@@ -516,9 +559,10 @@ bool ctl_notify_signal(int sig_num) {
 }
 
 bool ctl_notify_svc_state(const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat) {
+	log_trace("ctl_notify_svc_state(%s, %lld, %lld, %d, %d)", name, up_ts, reap_ts, pid, wstat);
 	if (!up_ts)
 		return ctl_write("service.state	%s	down\n", name);
-	else if ((up_ts - wake->now) >= 0)
+	else if ((up_ts - wake->now) >= 0 && !pid)
 		return ctl_write("service.state	%s	starting	%d\n", name, up_ts>>32);
 	else if (!reap_ts)
 		return ctl_write("service.state	%s	up	%d	pid	%d\n", name, up_ts>>32, (int) pid);

@@ -168,14 +168,44 @@ bool svc_set_fds(service_t *svc, const char *tsv_fields) {
 	return true;
 }
 
+bool svc_handle_start(service_t *svc, int64_t when) {
+	if (svc->state != SVC_STATE_DOWN && svc->state != SVC_STATE_START_PENDING) {
+		log_debug("Can't start service \"%s\": state is %d", svc_get_name(svc), svc->state);
+		return false;
+	}
+	
+	if (when - wake->now > 0) {
+		log_debug("start service \"%s\" in %d seconds", svc_get_name(svc), (int)((when - wake->now) >> 32));
+		svc->state= SVC_STATE_START_PENDING;
+		svc->start_time= when;
+	}
+	else {
+		log_debug("start service \"%s\" now", svc_get_name(svc), (int)((when - wake->now) >> 32));
+		svc->state= SVC_STATE_START;
+		svc->start_time= wake->now;
+	}
+	if (svc->start_time == 0) svc->start_time++; // 0 means undefined
+	svc_change_pid(svc, 0);
+	svc->reap_time= 0;
+	svc->wait_status= -1;
+	svc_set_active(svc, true);
+	svc_notify_state(svc);
+	return true;
+}
+
 /** Handle the case where a service's pid was reaped with wait().
  * This wakes up the service state machine, to possibly restart the daemon.
+ * It is assumed that this is called by main() before iterating the active services.
  */
 void svc_handle_reaped(service_t *svc, int wstat) {
-	svc->wait_status= wstat;
-	if (svc->state == SVC_STATE_UP)
+	if (svc->state == SVC_STATE_UP) {
+		log_trace("Setting service \"%s\" state to reaped", svc_get_name(svc));
+		svc->wait_status= wstat;
 		svc->state= SVC_STATE_REAPED;
-	svc_set_active(svc, true);
+		svc->reap_time= wake->now;
+		svc_set_active(svc, true);
+	}
+	else log_trace("Service \"%s\" pid %d reaped, but service is not up", svc_get_name(svc), svc->pid);
 }
 
 /** Activate or deactivate a service.
@@ -196,10 +226,10 @@ void svc_set_active(service_t *svc, bool activate) {
 		if (svc->active_next)
 			svc->active_next->active_prev_ptr= svc->active_prev_ptr;
 		*svc->active_prev_ptr= svc->active_next;
+		svc->active_prev_ptr= NULL;
 	}
-	#ifdef UNIT_TESTING
-	svc_check(svc);
-	#endif
+	// unless NDEBUG:
+		svc_check(svc);
 }
 
 /** Run the state machine for each active service.
@@ -218,6 +248,7 @@ void svc_run_active(wake_t *wake) {
  */
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
+	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
 	switch (svc->state) {
 	case SVC_STATE_START_PENDING: svc_state_start_pending:
 		// if not wake time yet,
@@ -237,13 +268,14 @@ void svc_run(service_t *svc, wake_t *wake) {
 		if (pid > 0) {
 			svc_change_pid(svc, pid);
 			svc->start_time= wake->now;
+			if (!svc->start_time) svc->start_time= 1;
 		} else if (pid == 0) {
 			svc_do_exec(svc);
+			assert(0);
 			// never returns
 		} else {
 			// else fork failed, and we need to wait 3 sec and try again
-			svc->start_time= wake->now + FORK_RETRY_DELAY;
-			svc->state= SVC_STATE_START_PENDING;
+			svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
 			svc_notify_state(svc);
 			goto svc_state_start_pending;
 		}
@@ -255,23 +287,17 @@ void svc_run(service_t *svc, wake_t *wake) {
 		// waitpid in main loop will re-activate us and set state to REAPED
 		break;
 	case SVC_STATE_REAPED:
-		svc->reap_time= wake->now;
 		if (!svc_notify_state(svc))
 			ctl_notify_overflow();
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
 			if (svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY) {
-				svc->start_time= svc->reap_time + SERVICE_RESTART_DELAY;
-				svc->state= SVC_STATE_START_PENDING;
-				svc->pid= 0;
-				svc->reap_time= 0;
+				svc_handle_start(svc, wake->now + SERVICE_RESTART_DELAY);
 				if (!svc_notify_state(svc))
 					ctl_notify_overflow();
 				goto svc_state_start_pending;
 			} else {
-				svc->state= SVC_STATE_START;
-				svc->pid= 0;
-				svc->reap_time= 0;
+				svc_handle_start(svc, wake->now);
 				goto svc_state_start;
 			}
 		}
@@ -285,19 +311,20 @@ void svc_run(service_t *svc, wake_t *wake) {
 	default:
 		assert(0);
 	}
-	#ifdef UNIT_TESTING
-	svc_check(svc);
-	#endif
+	// unless NDEBUG:
+		svc_check(svc);
 }
 
 /** Perform the exec() to launch the service's daemon (or runscript)
  * This sets up FDs, and calls exec() with the argv for the service.
  */
 void svc_do_exec(service_t *svc) {
-	// TODO
+	log_info("TODO: implement service exec");
+	_exit(1);
 }
 
 bool svc_notify_state(service_t *svc) {
+	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
 	return ctl_notify_svc_state(svc->buffer, svc->start_time, svc->reap_time, svc->pid, svc->wait_status);
 }
 
@@ -334,9 +361,8 @@ service_t *svc_by_name(const char *name, bool create) {
 		svc->name_index_node.Object= svc;
 		RBTreeNode_Init( &svc->pid_index_node );
 		RBTree_Add( &svc_by_name_index, &svc->name_index_node, svc->buffer);
-		#ifdef UNIT_TESTING
-		svc_check(svc);
-		#endif
+		// unless NDEBUG:
+			svc_check(svc);
 		return svc;
 	}
 	return NULL;
@@ -351,9 +377,8 @@ void svc_change_pid(service_t *svc, pid_t pid) {
 		svc->pid_index_node.Object= svc;
 		RBTree_Add( &svc_by_pid_index, &svc->pid_index_node, &svc->pid);
 	}
-	#ifdef UNIT_TESTING
-	svc_check(svc);
-	#endif
+	// unless NDEBUG:
+		svc_check(svc);
 }
 
 service_t *svc_by_pid(pid_t pid) {

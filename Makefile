@@ -8,6 +8,8 @@ CFLAGS := -MMD -MP -D UNIT_TESTING -O0 -g3 -Wall
 init-frame: $(OBJS)
 	gcc -o $@ -O1 -g3 $^
 
+controller.o: controller_data.autogen.c
+
 controller_data.autogen.c: controller.c
 	perl generate_controller_data.pl < $< > $@
 

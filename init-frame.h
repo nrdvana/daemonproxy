@@ -48,6 +48,7 @@ bool ctl_notify_fd_state(const char *name, const char *file_path, const char *pi
 
 // Handle state transitions based on communication with the controller
 void ctl_run(wake_t *wake);
+void ctl_flush(wake_t *wake);
 
 //----------------------------------------------------------------------------
 // service.c interface
@@ -84,7 +85,7 @@ bool svc_set_fds(service_t *svc, const char *tsv_fields);
 const char * svc_get_fds(service_t *svc);
 
 // update service state machine when requested to start
-void svc_handle_exec(service_t *svc);
+bool svc_handle_start(service_t *svc, int64_t when);
 
 // update service state machine after PID is reaped
 void svc_handle_reaped(service_t *svc, int wstat);

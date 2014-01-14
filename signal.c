@@ -23,6 +23,7 @@ volatile int signal_error= 0;
 	: (sig) == SIGHUP?  130 \
 	: (sig) == SIGUSR1? 131 \
 	: (sig) == SIGUSR2? 132 \
+	: (sig) == SIGCHLD? 133 \
 	: 0)
 #define DECODE_SIGNAL(sig) \
 	((unsigned)(sig) < 128? sig \
@@ -31,6 +32,7 @@ volatile int signal_error= 0;
 	: (sig) == 130? SIGHUP \
 	: (sig) == 131? SIGUSR1 \
 	: (sig) == 132? SIGUSR2 \
+	: (sig) == 133? SIGCHLD \
 	: 0)
 
 void sig_handler(int sig) {
@@ -68,7 +70,7 @@ void sig_init() {
 		|| sigaction(SIGTERM, &act, NULL)
 		|| sigaction(SIGUSR1, &act, NULL)
 		|| sigaction(SIGUSR2, &act, NULL)
-		|| (act.sa_handler= SIG_DFL, sigaction(SIGCHLD, &act, NULL))
+		|| sigaction(SIGCHLD, &act, NULL)
 		|| (act.sa_handler= SIG_IGN, sigaction(SIGPIPE, &act, NULL))
 	) {
 		log_error("signal handler setup: errno = %d", errno);
@@ -94,7 +96,7 @@ void sig_run(wake_t *wake) {
 bool sig_dispatch() {
 	static char queue[32];
 	static int queue_n= 0;
-	int i, n;
+	int i, n, sig;
 	
 	while (1) {
 		// drain the signal pipe as much as possible (pipe is nonblocking)
@@ -114,13 +116,16 @@ bool sig_dispatch() {
 		// deliver as many notifications as posible
 		for (i= 0; i < queue_n; i++) {
 			log_debug("deliver signal %d (%s)", queue[i], sig_name(queue[i]));
-			if (!ctl_notify_signal(DECODE_SIGNAL(queue[i] & 0xFF))) {
-				// controller output is blocked, so shift remaining queue to start of buffer
-				// and resume here next time
-				if (i > 0) {
-					memmove(queue, queue + i, queue_n - i);
-					queue_n -= i;
-					return false;
+			sig= DECODE_SIGNAL(queue[i] & 0xFF);
+			if (sig != SIGCHLD) {
+				if (!ctl_notify_signal(DECODE_SIGNAL(queue[i] & 0xFF))) {
+					// controller output is blocked, so shift remaining queue to start of buffer
+					// and resume here next time
+					if (i > 0) {
+						memmove(queue, queue + i, queue_n - i);
+						queue_n -= i;
+						return false;
+					}
 				}
 			}
 		}
@@ -131,6 +136,7 @@ bool sig_dispatch() {
 #define CASE_SIG(sig) case sig: return #sig;
 const char* sig_name(int sig_num) {
 	switch (sig_num) {
+	CASE_SIG(SIGCHLD)
 	CASE_SIG(SIGHUP)
 	CASE_SIG(SIGINT)
 	CASE_SIG(SIGQUIT)

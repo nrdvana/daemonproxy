@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
 	wake->now= gettime_mon_frac();
 	while (!main_terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
-		wake->next= wake->now + (60LL<<32); // wake at least every 60 seconds
+		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
 		FD_ZERO(&wake->fd_read);
 		FD_ZERO(&wake->fd_write);
 		FD_ZERO(&wake->fd_err);
@@ -76,15 +76,23 @@ int main(int argc, char** argv) {
 		sig_run(wake);
 		
 		// reap all zombies, possibly waking services
-		while ((pid= waitpid(-1, &wstat, WNOHANG)) > 0)
+		while ((pid= waitpid(-1, &wstat, WNOHANG)) > 0) {
+			log_trace("waitpid found pid = %d", (int)pid);
 			if ((svc= svc_by_pid(pid)))
 				svc_handle_reaped(svc, wstat);
+			else
+				log_trace("pid does not belong to any service");
+		}
+		if (pid < 0)
+			log_trace("waitpid: errno= %m");
 		
 		// run controller state machine
 		ctl_run(wake);
 		
 		// run state machine of each service that is active.
 		svc_run_active(wake);
+		
+		ctl_flush(wake);
 		
 		// resume normal signal mask
 		if (!sigprocmask(SIG_SETMASK, &old, NULL) == 0)
