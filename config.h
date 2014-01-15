@@ -27,7 +27,7 @@
 #define NAME_MAX                     63
 #define FORK_RETRY_DELAY             (3 * 1000000)
 #define CONTROLLER_WRITE_TIMEOUT    (30 * 1000000)
-#define CONTROLLER_IN_BUF_SIZE     1024
-#define CONTROLLER_OUT_BUF_SIZE    1024
+#define CONTROLLER_RECV_BUF_SIZE   1024
+#define CONTROLLER_SEND_BUF_SIZE   1024
 #define CONTROLLER_DEFAULT_PATH    "/sbin/init-frame-controller"
 #define CONFIG_FILE_DEFAULT_PATH   "/etc/init-frame.conf"
