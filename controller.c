@@ -17,7 +17,7 @@ typedef struct controller_s {
 	char send_buf[CONTROLLER_SEND_BUF_SIZE];
 	int  send_buf_pos;
 	bool send_overflow;
-	int64_t send_stall_time;
+	int64_t send_abort_ts;
 	
 	const char* filename;
 	
@@ -454,10 +454,12 @@ void ctl_flush(wake_t *wake) {
 				if (!ctl_flush_outbuf(ctl)) {
 					// If this is the first write which has not succeeded, then we set the
 					// timestamp for the write timeout.
-					if (!ctl->send_stall_time) {
+					if (!ctl->send_abort_ts) {
+						ctl->send_abort_ts= wake->now + CONTROLLER_WRITE_TIMEOUT;
 						// we use 0 as a "not stalled" flag, so if the actual timestamp is 0 fudge it to 1
-						ctl->send_stall_time= wake->now? wake->now : 1;
-					} else if (wake->now - ctl->send_stall_time > CONTROLLER_WRITE_TIMEOUT) {
+						if (!ctl->send_abort_ts) ctl->send_abort_ts++;
+					}
+					else if (wake->now - ctl->send_abort_ts > 0) {
 						ctl_dtor(ctl); // destroy client
 						continue;      // next client
 					}
@@ -466,8 +468,8 @@ void ctl_flush(wake_t *wake) {
 					FD_SET(ctl->send_fd, &wake->fd_err);
 					if (ctl->send_fd > wake->max_fd)
 						wake->max_fd= ctl->send_fd;
-					if (wake->next - ctl->send_stall_time > 0)
-						wake->next= ctl->send_stall_time;
+					if (wake->next - ctl->send_abort_ts > 0)
+						wake->next= ctl->send_abort_ts;
 				}
 			}
 			// If incoming fd, wake on data available, unless input buffer full
@@ -598,7 +600,7 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 			if (n > 0) {
 				log_trace("controller flushed %d bytes", n);
 				ctl->send_buf_pos -= n;
-				ctl->send_stall_time= 0;
+				ctl->send_abort_ts= 0;
 				memmove(ctl->send_buf, ctl->send_buf + n, ctl->send_buf_pos);
 			}
 			else {
