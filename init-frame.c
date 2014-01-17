@@ -16,6 +16,7 @@ void log_null (const char *msg, ...) {
 bool main_terminate= false;
 const char *main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
 bool main_use_stdin= false;
+bool main_mlockall= false;
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
@@ -68,9 +69,11 @@ int main(int argc, char** argv) {
 			log_error("failed to initialize stdio controller client!");
 	}
 	
-	// Lock all memory into ram. init should never be "swapped out".
-	if (mlockall(MCL_CURRENT | MCL_FUTURE))
-		perror("mlockall");
+	if (main_mlockall) {
+		// Lock all memory into ram. init should never be "swapped out".
+		if (mlockall(MCL_CURRENT | MCL_FUTURE))
+			perror("mlockall");
+	}
 	
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
@@ -174,8 +177,9 @@ bool parse_opts(char **argv) {
 
 bool set_opt_verbose(char**);
 bool set_opt_quiet(char**);
-bool set_opt_configfile(char** argv);
-bool set_opt_stdin(char **argv);
+bool set_opt_configfile(char** argv) { main_cfgfile= argv[0]; return true; }
+bool set_opt_stdin(char **argv)      { main_use_stdin= true;  return true; }
+bool set_opt_mlockall(char **argv)   { main_mlockall= true;   return true; }
 
 const struct option_table_entry_s {
 	char shortname;
@@ -187,6 +191,7 @@ const struct option_table_entry_s {
 	{ 'q', "quiet",        0, set_opt_quiet },
 	{ 'c', "config-file",  1, set_opt_configfile },
 	{  0 , "stdin",        0, set_opt_stdin },
+	{  0 , "mlockall",     0, set_opt_mlockall },
 	{ 0, NULL, 0, NULL }
 };
 
@@ -228,16 +233,6 @@ bool set_opt_quiet(char** argv) {
 	else if (log_info  != log_null) log_info = log_null;
 	else if (log_warn  != log_null) log_warn = log_null;
 	else     log_error= log_null;
-	return true;
-}
-
-bool set_opt_configfile(char** argv) {
-	main_cfgfile= argv[0];
-	return true;
-}
-
-bool set_opt_stdin(char **argv) {
-	main_use_stdin= 1;
 	return true;
 }
 
