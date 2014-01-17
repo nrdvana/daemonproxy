@@ -42,6 +42,7 @@ RBTree svc_by_pid_index;
 service_t *svc_active_list= NULL; // linked list of active services
 service_t *svc_free_list= NULL; // linked list re-using next_active and prev_active
 
+void svc_notify_state(service_t *svc);
 void svc_change_pid(service_t *svc, pid_t pid);
 void svc_do_exec(service_t *svc);
 void svc_set_active(service_t *svc, bool activate);
@@ -95,6 +96,19 @@ const char * svc_get_argv(service_t *svc) {
 
 const char * svc_get_fds(service_t *svc) {
 	return svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1;
+}
+
+pid_t   svc_get_pid(service_t *svc) {
+	return svc->pid;
+}
+int     svc_get_wstat(service_t *svc) {
+	return svc->wait_status;
+}
+int64_t svc_get_up_ts(service_t *svc) {
+	return svc->start_time;
+}
+int64_t svc_get_reap_ts(service_t *svc) {
+	return svc->reap_time;
 }
 
 /** Set the string for the service's metadata
@@ -280,21 +294,18 @@ void svc_run(service_t *svc, wake_t *wake) {
 			goto svc_state_start_pending;
 		}
 		svc->state= SVC_STATE_UP;
-		if (!svc_notify_state(svc))
-			ctl_notify_overflow();
+		svc_notify_state(svc);
 	case SVC_STATE_UP:
 		svc_set_active(svc, false);
 		// waitpid in main loop will re-activate us and set state to REAPED
 		break;
 	case SVC_STATE_REAPED:
-		if (!svc_notify_state(svc))
-			ctl_notify_overflow();
+		svc_notify_state(svc);
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
 			if (svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY) {
 				svc_handle_start(svc, wake->now + SERVICE_RESTART_DELAY);
-				if (!svc_notify_state(svc))
-					ctl_notify_overflow();
+				svc_notify_state(svc);
 				goto svc_state_start_pending;
 			} else {
 				svc_handle_start(svc, wake->now);
@@ -323,9 +334,9 @@ void svc_do_exec(service_t *svc) {
 	_exit(1);
 }
 
-bool svc_notify_state(service_t *svc) {
+void svc_notify_state(service_t *svc) {
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
-	return ctl_notify_svc_state(svc->buffer, svc->start_time, svc->reap_time, svc->pid, svc->wait_status);
+	ctl_notify_svc_state(NULL, svc->buffer, svc->start_time, svc->reap_time, svc->wait_status, svc->pid);
 }
 
 service_t *svc_by_name(const char *name, bool create) {

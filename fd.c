@@ -70,10 +70,10 @@ const char* fd_get_pipe_write_end(fd_t *fd) {
 
 bool fd_notify_state(fd_t *fd) {
 	switch (fd->type) {
-	case FD_TYPE_FILE: return ctl_notify_fd_state(fd->buffer, fd->path, NULL, NULL);
-	case FD_TYPE_PIPE_R: return ctl_notify_fd_state(fd->buffer, NULL, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)");
-	case FD_TYPE_PIPE_W: return ctl_notify_fd_state(fd->buffer, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)", NULL);
-	default: return ctl_notify_error("File descriptor has invalid state");
+	case FD_TYPE_FILE: return ctl_notify_fd_state(NULL, fd->buffer, fd->path, NULL, NULL);
+	case FD_TYPE_PIPE_R: return ctl_notify_fd_state(NULL, fd->buffer, NULL, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)");
+	case FD_TYPE_PIPE_W: return ctl_notify_fd_state(NULL, fd->buffer, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)", NULL);
+	default: return ctl_notify_error(NULL, "File descriptor has invalid state");
 	}
 }
 

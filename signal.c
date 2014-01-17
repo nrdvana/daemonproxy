@@ -118,7 +118,7 @@ bool sig_dispatch() {
 			log_debug("deliver signal %d (%s)", queue[i], sig_name(queue[i]));
 			sig= DECODE_SIGNAL(queue[i] & 0xFF);
 			if (sig != SIGCHLD) {
-				if (!ctl_notify_signal(DECODE_SIGNAL(queue[i] & 0xFF))) {
+				if (!ctl_notify_signal(NULL, DECODE_SIGNAL(queue[i] & 0xFF))) {
 					// controller output is blocked, so shift remaining queue to start of buffer
 					// and resume here next time
 					if (i > 0) {
