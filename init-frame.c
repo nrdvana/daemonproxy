@@ -29,6 +29,7 @@ int main(int argc, char** argv) {
 	int wstat, f;
 	pid_t pid;
 	struct timeval tv;
+	bool config_on_stdin= false;
 	service_t *svc;
 	controller_t *ctl;
 	wake_t wake_instance;
@@ -52,7 +53,9 @@ int main(int argc, char** argv) {
 	// Initialize controller state machine
 	ctl_init();
 	
-	if (main_cfgfile) {
+	config_on_stdin= (strcmp(main_cfgfile, "-") == 0);
+	
+	if (!config_on_stdin) {
 		f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
 		if (f == -1)
 			log_error("failed to open config file \"%s\": %d", main_cfgfile, errno);
@@ -64,9 +67,11 @@ int main(int argc, char** argv) {
 			ctl_set_auto_final_newline(ctl, true);
 	}
 	
-	if (main_use_stdin) {
+	if (main_use_stdin || config_on_stdin) {
 		if (!(ctl= ctl_new(0, 1)))
 			log_error("failed to initialize stdio controller client!");
+		else
+			ctl_set_auto_final_newline(ctl, config_on_stdin);
 	}
 	
 	if (main_mlockall) {
