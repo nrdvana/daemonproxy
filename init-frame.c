@@ -15,7 +15,7 @@ void log_null (const char *msg, ...) {
 
 bool main_terminate= false;
 const char *main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
-const char *main_scriptfile= CONTROLLER_DEFAULT_PATH;
+bool main_use_stdin= false;
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
@@ -25,12 +25,12 @@ bool parse_opts(char **argv);
 bool parse_option(char shortname, char* longname, char ***argv);
 
 int main(int argc, char** argv) {
-	int wstat;
+	int wstat, f;
 	pid_t pid;
 	struct timeval tv;
 	service_t *svc;
+	controller_t *ctl;
 	wake_t wake_instance;
-	bool use_stdin;
 	
 	memset(&wake_instance, 0, sizeof(wake_instance));
 	wake= &wake_instance;
@@ -48,9 +48,25 @@ int main(int argc, char** argv) {
 	fd_init(FD_POOL_SIZE, FD_OBJ_SIZE);
 	// Initialize service object pool and indexes
 	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
-	// Initialize controller state machine and pipes
-	use_stdin= (0 == strcmp(main_scriptfile, "-"));
-	ctl_init(main_cfgfile, use_stdin);
+	// Initialize controller state machine
+	ctl_init();
+	
+	if (main_cfgfile) {
+		f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
+		if (f == -1)
+			log_error("failed to open config file \"%s\": %d", main_cfgfile, errno);
+		else if (!(ctl= ctl_new(f, -1))) {
+			log_error("failed to allocate controller for config file!");
+			close(f);
+		}
+		else
+			ctl_set_auto_final_newline(ctl, true);
+	}
+	
+	if (main_use_stdin) {
+		if (!(ctl= ctl_new(0, 1)))
+			log_error("failed to initialize stdio controller client!");
+	}
 	
 	// Lock all memory into ram. init should never be "swapped out".
 	if (mlockall(MCL_CURRENT | MCL_FUTURE))
@@ -159,7 +175,7 @@ bool parse_opts(char **argv) {
 bool set_opt_verbose(char**);
 bool set_opt_quiet(char**);
 bool set_opt_configfile(char** argv);
-bool set_opt_scriptfile(char **argv);
+bool set_opt_stdin(char **argv);
 
 const struct option_table_entry_s {
 	char shortname;
@@ -170,7 +186,7 @@ const struct option_table_entry_s {
 	{ 'v', "verbose",      0, set_opt_verbose },
 	{ 'q', "quiet",        0, set_opt_quiet },
 	{ 'c', "config-file",  1, set_opt_configfile },
-	{ 's', "script",       1, set_opt_scriptfile },
+	{  0 , "stdin",        0, set_opt_stdin },
 	{ 0, NULL, 0, NULL }
 };
 
@@ -220,8 +236,8 @@ bool set_opt_configfile(char** argv) {
 	return true;
 }
 
-bool set_opt_scriptfile(char **argv) {
-	main_scriptfile= argv[0];
+bool set_opt_stdin(char **argv) {
+	main_use_stdin= 1;
 	return true;
 }
 

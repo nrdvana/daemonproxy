@@ -64,26 +64,27 @@ const ctl_command_table_entry_t * ctl_find_command(const char *buffer) {
 	return result->state_fn && strstr(buffer, result->command) == buffer? result : NULL;
 }
 
-void ctl_init(const char* cfg_file, bool use_stdin) {
-	int i, f;
+void ctl_set_auto_final_newline(controller_t *ctl, bool enable) {
+	ctl->append_final_newline= enable;
+}
+
+void ctl_init() {
+	int i;
 	assert(CONTROLLER_MAX_CLIENTS >= 2);
 	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++)
 		client[i].state_fn= NULL;
-	
-	if (cfg_file) {
-		f= open(cfg_file, O_RDONLY|O_NONBLOCK|O_NOCTTY);
-		if (f == -1)
-			log_error("open config file \"%s\": %d", cfg_file, errno);
-		else {
-			ctl_ctor(&client[0], f, -1);
-			client[0].append_final_newline= true; // because config file might not end with LF
-		}
-	}
-	if (use_stdin)
-		ctl_ctor(&client[1], 0, 1);
+}
+
+controller_t *ctl_new(int recv_fd, int send_fd) {
+	int i;
+	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++)
+		if (!client[i].state_fn)
+			return ctl_ctor(&client[i], recv_fd, send_fd)? &client[i] : NULL;
+	return NULL;
 }
 
 static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
+	log_debug("creating client %d with handles %d,%d", ctl - client, recv_fd, send_fd);
 	// file descriptors must be nonblocking
 	if (recv_fd != -1)
 		if (fcntl(recv_fd, F_SETFL, O_NONBLOCK)) {
@@ -104,6 +105,7 @@ static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 }
 
 static void ctl_dtor(controller_t *ctl) {
+	log_debug("destroying client %d", ctl - client);
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
 	if (ctl->send_fd >= 0) close(ctl->send_fd);
 	ctl->state_fn= NULL;

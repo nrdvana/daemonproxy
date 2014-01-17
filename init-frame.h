@@ -27,10 +27,9 @@ struct controller_s;
 typedef struct controller_s controller_t;
 
 // Initialize controller state machine.
-// if cfg_file is NULL, skip reading config file
-// if controller_script is NULL, no controller wil be used.
-// if controller_script is "-", controller is on stdin/stdout
-void ctl_init(const char* cfg_file, bool use_stdin);
+void ctl_init();
+controller_t * ctl_new(int recv_fd, int send_fd);
+void ctl_set_auto_final_newline(controller_t *ctl, bool enable);
 
 // Queue a message to the controller, possibly overflowing the output buffer
 // and requiring a state reset event.
