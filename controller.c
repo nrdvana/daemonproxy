@@ -46,6 +46,7 @@ STATE(ctl_state_cmd_svcargs,       "service.args");
 STATE(ctl_state_cmd_svcmeta,       "service.meta");
 STATE(ctl_state_cmd_svcfds,        "service.fds");
 STATE(ctl_state_cmd_svcstart,      "service.start");
+STATE(ctl_state_cmd_exit,          "exit");
 
 static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
 static void ctl_dtor(controller_t *ctl);
@@ -234,13 +235,21 @@ bool ctl_state_cmd_overflow(controller_t *ctl) {
 }
 
 bool ctl_state_cmd_unknown(controller_t *ctl) {
-	// find comand string
+	// find command string
 	const char *p= strchr(ctl->recv_buf, '\t');
 	int n= p? p - ctl->recv_buf : strlen(ctl->recv_buf);
 	if (!ctl_notify_error(ctl, "Unknown command: %.*s", n, ctl->recv_buf))
 		return false;
 	ctl->state_fn= ctl_state_read_command;
 	return true;
+}
+
+bool ctl_state_cmd_exit(controller_t *ctl) {
+	// they asked for it...
+	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
+	ctl->recv_fd= -1;
+	ctl->state_fn= ctl_state_close;
+	return false;
 }
 
 /** Statedump command, part 1: Initialize vars and pass to part 2.
