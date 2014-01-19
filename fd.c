@@ -34,7 +34,8 @@ void add_fd_by_name(fd_t *fd);
 void create_missing_dirs(char *path);
 
 int fd_by_name_compare(void *data, RBTreeNode *node) {
-	return strcmp((const char*) data, ((fd_t *) node->Object)->buffer);
+	strseg_t *name= (strseg_t*) data;
+	return strncmp(name->data, ((fd_t *) node->Object)->buffer, name->len);
 }
 
 void fd_init(int fd_count, int size_each) {
@@ -54,6 +55,10 @@ void fd_init(int fd_count, int size_each) {
 
 const char* fd_get_name(fd_t *fd) {
 	return fd->buffer;
+}
+
+int fd_get_fdnum(fd_t *fd) {
+	return fd->fd;
 }
 
 const char* fd_get_file_path(fd_t *fd) {
@@ -80,30 +85,28 @@ bool fd_notify_state(fd_t *fd) {
 // Open a pipe from one named FD to another
 // returns a ref to the read end, which holds a ref to the write end.
 fd_t * fd_pipe(const char *name1, const char *name2) {
-	int pair[2], n;
+	int pair[2], name1_len, name2_len;
 	fd_t *fd1, *fd2, *next;
-	fd1= fd_by_name(name1);
-	fd2= fd_by_name(name2);
+	fd1= fd_by_name((strseg_t){ name1, name1_len= strlen(name1) });
+	fd2= fd_by_name((strseg_t){ name2, name2_len= strlen(name2) });
 	next= fd_free_list;
 	// Check that we have name1, or available fd_t object and name fits in it.
 	if (!fd1) {
-		n= strlen(name1);
-		if (!next || n >= next->size - sizeof(fd_t))
+		if (!next || name1_len >= next->size - sizeof(fd_t))
 			return NULL;
 		fd1= next;
 		fd1->type= FD_TYPE_UNDEF;
 		next= next->next_free;
-		memcpy(fd1->buffer, name1, n+1);
+		memcpy(fd1->buffer, name1, name1_len+1);
 	}
 	// Check that we have name2, or another available fd_t object and name fits in it.
 	if (!fd2) {
-		n= strlen(name2);
-		if (!next || n >= next->size - sizeof(fd_t))
+		if (!next || name2_len >= next->size - sizeof(fd_t))
 			return NULL;
 		fd2= next;
 		fd2->type= FD_TYPE_UNDEF;
 		next= next->next_free;
-		memcpy(fd2->buffer, name2, n+1);
+		memcpy(fd2->buffer, name2, name2_len+1);
 	}
 	// Check that pipe() call succeeds
 	if (pipe(pair))
@@ -135,20 +138,19 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 
 // Open a file on the given name, possibly closing a handle by that name
 fd_t * fd_open(const char *name, char *path, char *opts) {
-	int flags, fd, n, buf_free;
+	int flags, fd, n, name_len, buf_free;
 	char *start, *end;
 	fd_t *fd_obj;
 	bool f_read, f_write, f_mkdir;
 	
-	fd_obj= fd_by_name(name);
+	fd_obj= fd_by_name((strseg_t){ name, name_len=strlen(name) });
 	// if doesn't exist, ensure we have a free slot, and name fits
 	if (!fd_obj) {
 		if (!fd_free_list)
 			return NULL;
-		n= strlen(name);
-		if (n >= fd_free_list->size - sizeof(fd_t))
+		if (name_len >= fd_free_list->size - sizeof(fd_t))
 			return NULL;
-		memcpy(fd_free_list->buffer, name, n+1);
+		memcpy(fd_free_list->buffer, name, name_len+1);
 	}
 	
 	// Now, try to perform the open
@@ -246,8 +248,8 @@ void fd_delete(fd_t *fd) {
 	fd_free_list= fd;
 }
 
-fd_t * fd_by_name(const char *name) {
-	RBTreeSearch s= RBTree_Find( &fd_by_name_index, name );
+fd_t * fd_by_name(strseg_t name) {
+	RBTreeSearch s= RBTree_Find( &fd_by_name_index, &name );
 	if (s.Relation == 0)
 		return (fd_t*) s.Nearest->Object;
 	return NULL;
@@ -256,7 +258,8 @@ fd_t * fd_by_name(const char *name) {
 void add_fd_by_name(fd_t *fd) {
 	RBTreeNode_Init( &fd->name_index_node );
 	fd->name_index_node.Object= fd;
-	RBTree_Add( &fd_by_name_index, &fd->name_index_node, fd->buffer );
+	strseg_t name= { fd->buffer, strlen(fd->buffer) };
+	RBTree_Add( &fd_by_name_index, &fd->name_index_node, &name );
 }
 
 fd_t * fd_iter_next(fd_t *current, const char *from_name) {

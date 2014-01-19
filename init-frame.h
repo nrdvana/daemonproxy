@@ -13,6 +13,11 @@ typedef struct wake_s {
 	int64_t next; // time when we next need to process something
 } wake_t;
 
+typedef struct strseg_s {
+	const char *data;
+	int len;
+} strseg_t;
+
 typedef void log_fn_t(const char *msg, ...);
 
 extern log_fn_t *log_error, *log_warn, *log_info, *log_debug, *log_trace, log_null;
@@ -113,6 +118,7 @@ extern const int min_fd_obj_size;
 void fd_init(int fd_count, int size_each);
 
 const char* fd_get_name(fd_t *);
+int         fd_get_fdnum(fd_t *fd);
 const char* fd_get_file_path(fd_t *);
 const char* fd_get_pipe_read_end(fd_t *fd);
 const char* fd_get_pipe_write_end(fd_t *fd);
@@ -129,7 +135,7 @@ bool fd_close(const char *name);
 
 bool fd_notify_state(fd_t *fd);
 
-fd_t * fd_by_name(const char *name);
+fd_t * fd_by_name(strseg_t name);
 fd_t * fd_by_fd(int fd);
 fd_t * fd_iter_next(fd_t *current, const char *from_name);
 
