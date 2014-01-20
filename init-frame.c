@@ -17,6 +17,7 @@ bool main_terminate= false;
 const char *main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
 bool main_use_stdin= false;
 bool main_mlockall= false;
+bool main_failsafe= false;
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
@@ -24,6 +25,7 @@ wake_t *wake= &main_wake;
 // Parse options and apply to global vars; return false if fails
 bool parse_opts(char **argv);
 bool parse_option(char shortname, char* longname, char ***argv);
+int open_dev_null();
 
 int main(int argc, char** argv) {
 	int wstat, f;
@@ -36,13 +38,12 @@ int main(int argc, char** argv) {
 	
 	memset(&wake_instance, 0, sizeof(wake_instance));
 	wake= &wake_instance;
-
+	main_failsafe= (getpid() == 1);
+	
 	// parse arguments, overriding default values
-	if (!parse_opts(argv+1)) {
-		if (getpid() != 1)
-			return 2;
-		log_error("Invalid arguments, but continuing anyway");
-	}
+	if (!parse_opts(argv+1))
+		fatal(2, "invalid arguments");
+		// if failsafe, will not exit()
 	
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
@@ -50,18 +51,29 @@ int main(int argc, char** argv) {
 	fd_init(FD_POOL_SIZE, FD_OBJ_SIZE);
 	// Initialize service object pool and indexes
 	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
-	// Initialize controller state machine
+	// Initialize controller object pool
 	ctl_init();
 	
+	// A handle to dev/null is mandatory...
+	f= open("/dev/null", O_RDWR);
+	if (f < 0) {
+		fatal(3, "Can't open /dev/null: %d", errno);
+		// if we're in failsafe mode, fatal doesn't exit()
+		log_error("Will use stderr instead of /dev/null!");
+		f= 2;
+	}
+	
+	fd_assign("null", f, true, "/dev/null");
+
 	config_on_stdin= (strcmp(main_cfgfile, "-") == 0);
 	
 	if (!config_on_stdin) {
 		f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
 		if (f == -1)
-			log_error("failed to open config file \"%s\": %d", main_cfgfile, errno);
+			fatal(2, "failed to open config file \"%s\": %d", main_cfgfile, errno);
 		else if (!(ctl= ctl_new(f, -1))) {
-			log_error("failed to allocate controller for config file!");
 			close(f);
+			fatal(3, "failed to allocate controller for config file!");
 		}
 		else
 			ctl_set_auto_final_newline(ctl, true);
@@ -69,7 +81,7 @@ int main(int argc, char** argv) {
 	
 	if (main_use_stdin || config_on_stdin) {
 		if (!(ctl= ctl_new(0, 1)))
-			log_error("failed to initialize stdio controller client!");
+			fatal(3, "failed to initialize stdio controller client!");
 		else
 			ctl_set_auto_final_newline(ctl, config_on_stdin);
 	}
@@ -173,7 +185,7 @@ bool parse_opts(char **argv) {
 					success= false;
 		}
 		else {
-			printf("Unexpected argument \"%s\"\n", current);
+			log_error("Unexpected argument \"%s\"\n", current);
 			success= false;
 		}
 	}
@@ -185,6 +197,7 @@ bool set_opt_quiet(char**);
 bool set_opt_configfile(char** argv) { main_cfgfile= argv[0]; return true; }
 bool set_opt_stdin(char **argv)      { main_use_stdin= true;  return true; }
 bool set_opt_mlockall(char **argv)   { main_mlockall= true;   return true; }
+bool set_opt_failsafe(char **argv)   { main_failsafe= true;   return true; }
 
 const struct option_table_entry_s {
 	char shortname;
@@ -196,7 +209,8 @@ const struct option_table_entry_s {
 	{ 'q', "quiet",        0, set_opt_quiet },
 	{ 'c', "config-file",  1, set_opt_configfile },
 	{  0 , "stdin",        0, set_opt_stdin },
-	{  0 , "mlockall",     0, set_opt_mlockall },
+	{ 'M', "mlockall",     0, set_opt_mlockall },
+	{ 'F', "failsafe",     0, set_opt_failsafe },
 	{ 0, NULL, 0, NULL }
 };
 
@@ -239,6 +253,21 @@ bool set_opt_quiet(char** argv) {
 	else if (log_warn  != log_null) log_warn = log_null;
 	else     log_error= log_null;
 	return true;
+}
+
+void fatal(int exitcode, const char *msg, ...) {
+	char buffer[1024];
+	va_list val;
+	va_start(val, msg);
+	vsnprintf(buffer, sizeof(buffer), msg, val);
+	va_end(val);
+	
+	if (main_failsafe) {
+		fprintf(stderr, "fatal (but attempting to continue): %s\n", buffer);
+	} else {
+		fprintf(stderr, "fatal: %s\n", buffer);
+		exit(exitcode);
+	}
 }
 
 static void log_error_(const char *msg, ...) {
