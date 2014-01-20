@@ -4,6 +4,8 @@
 // Get CLOCK_MONOTONIC time as 32.32 fixed-point number
 int64_t gettime_mon_frac();
 
+void fatal(int exitcode, const char* msg, ...);
+
 typedef struct wake_s {
 	fd_set fd_read, fd_write, fd_err;
 	int max_fd;
@@ -130,12 +132,15 @@ fd_t * fd_pipe(const char *name1, const char *name2);
 // Open a file on the given name, possibly closing a handle by that name
 fd_t * fd_open(const char *name, char *path, char *opts);
 
+// Manually inject a named FD into the lookup table.  allow_close determines whether users can remove it.
+fd_t * fd_assign(const char *name, int fd, bool is_const, const char *description);
+
 // Close a named handle
 bool fd_close(const char *name);
 
 bool fd_notify_state(fd_t *fd);
 
-fd_t * fd_by_name(strseg_t name);
+fd_t * fd_by_name(strseg_t name, bool create);
 fd_t * fd_by_fd(int fd);
 fd_t * fd_iter_next(fd_t *current, const char *from_name);
 

@@ -358,7 +358,7 @@ void svc_do_exec(service_t *svc) {
 		else if (*p == '-' && p2 - p == 1)
 			fd_list[fd_count++]= -1; // dash means "closed"
 		else {
-			fd= fd_by_name((strseg_t){ p, p2-p });
+			fd= fd_by_name((strseg_t){ p, p2-p }, false);
 			if (!fd) {
 				log_error("file descriptor \"%.*s\" does not exist", p2-p, p);
 				abort();
