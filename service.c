@@ -330,10 +330,93 @@ void svc_run(service_t *svc, wake_t *wake) {
  * This sets up FDs, and calls exec() with the argv for the service.
  */
 void svc_do_exec(service_t *svc) {
-	log_info("TODO: implement service exec");
+	int fd_count, arg_count, i;
+	int *fd_list;
+	fd_t *fd;
+	char **argv, *fd_spec, *arg_spec, *p, *p2;
+	
+	// Make mutable copies (which we don't need to free because we're calling exec)
+	fd_spec= strdup(svc_get_fds(svc));
+	arg_spec= strdup(svc_get_argv(svc));
+	if (!fd_spec || !arg_spec) {
+		log_error("out of memory");
+		abort();
+	}
+
+	// count our file descriptors, to allocate buffer
+	for (fd_count= 1, p= fd_spec; *p; p++)
+		if (*p == '\t')
+			fd_count++;
+	fd_list= alloca(fd_count);
+	// now iterate again to resolve them from name to number
+	fd_count= 0;
+	p= p2= fd_spec;
+	while (1) {
+		while (*p2 && *p2 != '\t') p2++;
+		if (p == p2)
+			log_warn("ignoring zero-length file descriptor name");
+		else if (*p == '-' && p2 - p == 1)
+			fd_list[fd_count++]= -1; // dash means "closed"
+		else {
+			fd= fd_by_name((strseg_t){ p, p2-p });
+			if (!fd) {
+				log_error("file descriptor \"%.*s\" does not exist", p2-p, p);
+				abort();
+			}
+			fd_list[fd_count++]= fd_get_fdnum(fd);
+		}
+		if (!*p2) break;
+		p= ++p2;
+	}
+	
+	// Now move them into correct places
+	// But first, we need to make sure all the file descriptors we're about to copy
+	//   are out of the way...
+	for (i= 0; i < fd_count; i++) {
+		// If file descriptor is less than the max destination, dup it to a higher number
+		// We have no way to know which higher numbers are safe, so repeat until we get one.
+		while (fd_list[i] >= 0 && fd_list[i] < fd_count) {
+			fd_list[i]= dup(fd_list[i]);
+			if (fd_list[i] < 0) {
+				log_error("failed to dup file descriptor %d", fd_list[i]);
+				abort();
+			}
+		}
+	}
+	// Now dup2 each into its correct slot, and close the rest
+	for (i= 0; i < fd_count; i++) {
+		if (fd_list[i] >= 0) {
+			if (dup2(fd_list[i], i) < 0) {
+				log_error("failed to dup file descriptor %d to %d", fd_list[i], i);
+				abort();
+			}
+		}
+		else close(i);
+	}
+	// close all fd we arent keeping
+	while (i < FD_SETSIZE) close(i++);
+	
+	// convert argv into pointers
+	// count, allocate, then populate
+	for (arg_count= 1, p= arg_spec; *p; p++)
+		if (*p == '\t')
+			arg_count++;
+	argv= alloca(arg_count+1);
+	// then populate
+	i= 0;
+	for (argv[0]= p= arg_spec; *p; p++)
+		if (*p == '\t') {
+			*p= '\0';
+			argv[++i]= p+1;
+		}
+	argv[++i]= NULL;
+	
+	p= NULL;
+	execvpe(argv[0], argv, &p);
+	log_error("exec(%s, ...) failed: errno= %d", argv[0], errno);
 	_exit(1);
 }
-
+	
 void svc_notify_state(service_t *svc) {
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
 	ctl_notify_svc_state(NULL, svc->buffer, svc->start_time, svc->reap_time, svc->wait_status, svc->pid);
