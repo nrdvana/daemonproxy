@@ -3,7 +3,8 @@
 #include <stdio.h>
 
 bool main_terminate= false;
-const char *main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
+const char *main_cfgfile= NULL;
+const char *main_exec_on_exit= NULL;
 bool main_use_stdin= false;
 bool main_mlockall= false;
 bool main_failsafe= false;
@@ -13,9 +14,8 @@ wake_t main_wake;
 wake_t *wake= &main_wake;
 
 // Parse options and apply to global vars; return false if fails
-bool parse_opts(char **argv);
-bool parse_option(char shortname, char* longname, char ***argv);
-int open_dev_null();
+void parse_opts(char **argv);
+void parse_option(char shortname, char* longname, char ***argv);
 
 int main(int argc, char** argv) {
 	int wstat, f;
@@ -28,12 +28,15 @@ int main(int argc, char** argv) {
 	
 	memset(&wake_instance, 0, sizeof(wake_instance));
 	wake= &wake_instance;
-	main_failsafe= (getpid() == 1);
+	
+	// Special defaults when running as init
+	if (getpid() == 1) {
+		main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
+		main_failsafe= true;
+	}
 	
 	// parse arguments, overriding default values
-	if (!parse_opts(argv+1))
-		fatal(2, "invalid arguments");
-		// if failsafe, will not exit()
+	parse_opts(argv+1);
 	
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
@@ -47,7 +50,7 @@ int main(int argc, char** argv) {
 	// A handle to dev/null is mandatory...
 	f= open("/dev/null", O_RDWR);
 	if (f < 0) {
-		fatal(3, "Can't open /dev/null: %d", errno);
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %d", errno);
 		// if we're in failsafe mode, fatal doesn't exit()
 		log_error("Will use stderr instead of /dev/null!");
 		f= 2;
@@ -55,18 +58,21 @@ int main(int argc, char** argv) {
 	
 	fd_assign("null", f, true, "/dev/null");
 
-	config_on_stdin= (strcmp(main_cfgfile, "-") == 0);
-	
-	if (!config_on_stdin) {
-		f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
-		if (f == -1)
-			fatal(2, "failed to open config file \"%s\": %d", main_cfgfile, errno);
-		else if (!(ctl= ctl_new(f, -1))) {
-			close(f);
-			fatal(3, "failed to allocate controller for config file!");
+	if (main_cfgfile) {
+		if (0 == strcmp(main_cfgfile, "-"))
+			config_on_stdin= true;
+		else {
+			f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
+			if (f == -1)
+				fatal(EXIT_INVALID_ENVIRONMENT, "failed to open config file \"%s\": %d",
+					main_cfgfile, errno);
+			else if (!(ctl= ctl_new(f, -1))) {
+				close(f);
+				fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to allocate controller for config file!");
+			}
+			else
+				ctl_set_auto_final_newline(ctl, true);
 		}
-		else
-			ctl_set_auto_final_newline(ctl, true);
 	}
 	
 	if (main_use_stdin || config_on_stdin) {
@@ -144,6 +150,8 @@ int main(int argc, char** argv) {
 		}
 	}
 	
+	if (main_exec_on_exit)
+		fatal(0, "terminated normally");
 	return 0;
 }
 
@@ -160,40 +168,47 @@ int64_t gettime_mon_frac() {
 	);
 }
 
-bool parse_opts(char **argv) {
+void parse_opts(char **argv) {
 	char *current;
-	bool success= true;
 	
 	while ((current= *argv++)) {
 		if (current[0] == '-' && current[1] == '-') {
-			if (!parse_option(0, current+2, &argv))
-				success= false;
+			parse_option(0, current+2, &argv);
 		}
 		else if (current[0] == '-') {
 			for (++current; *current; current++)
-				if (!parse_option(*current, NULL, &argv))
-					success= false;
+				parse_option(*current, NULL, &argv);
 		}
 		else {
-			log_error("Unexpected argument \"%s\"\n", current);
-			success= false;
+			// if failsafe, will not exit()
+			fatal(EXIT_BAD_OPTIONS, "Unexpected argument \"%s\"\n", current);
 		}
 	}
-	return success;
 }
 
-bool set_opt_verbose(char** argv)    { main_loglevel--;       return true; }
-bool set_opt_quiet(char** argv)      { main_loglevel++;       return true; }
-bool set_opt_configfile(char** argv) { main_cfgfile= argv[0]; return true; }
-bool set_opt_stdin(char **argv)      { main_use_stdin= true;  return true; }
-bool set_opt_mlockall(char **argv)   { main_mlockall= true;   return true; }
-bool set_opt_failsafe(char **argv)   { main_failsafe= true;   return true; }
+void set_opt_verbose(char** argv)     { main_loglevel--;      }
+void set_opt_quiet(char** argv)       { main_loglevel++;      }
+void set_opt_stdin(char **argv)       { main_use_stdin= true; }
+void set_opt_mlockall(char **argv)    { main_mlockall= true;  }
+void set_opt_failsafe(char **argv)    { main_failsafe= true;  }
+void set_opt_configfile(char** argv ) {
+	struct stat st;
+	if (stat(argv[0], &st))
+		fatal(EXIT_BAD_OPTIONS, "Cannot stat configfile \"%s\"", argv[0]);
+	main_cfgfile= argv[0];
+}
+void set_opt_exec_on_exit(char **argv) {
+	struct stat st;
+	if (stat(argv[0], &st))
+		fatal(EXIT_BAD_OPTIONS, "Cannot stat exec-on-exit program \"%s\"", argv[0]);
+	main_exec_on_exit= argv[0];
+}
 
 const struct option_table_entry_s {
 	char shortname;
 	const char *longname;
 	int argc;
-	bool (*handler)(char **argv);
+	void (*handler)(char **argv);
 } option_table[]= {
 	{ 'v', "verbose",      0, set_opt_verbose },
 	{ 'q', "quiet",        0, set_opt_quiet },
@@ -201,13 +216,13 @@ const struct option_table_entry_s {
 	{  0 , "stdin",        0, set_opt_stdin },
 	{ 'M', "mlockall",     0, set_opt_mlockall },
 	{ 'F', "failsafe",     0, set_opt_failsafe },
+	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit },
 	{ 0, NULL, 0, NULL }
 };
 
-bool parse_option(char shortname, char* longname, char ***argv) {
+void parse_option(char shortname, char* longname, char ***argv) {
 	const struct option_table_entry_s *entry;
 	int i;
-	bool result;
 	
 	for (entry= option_table; entry->handler; entry++) {
 		if ((shortname && (shortname == entry->shortname))
@@ -215,24 +230,37 @@ bool parse_option(char shortname, char* longname, char ***argv) {
 		) {
 			for (i= 0; i < entry->argc; i++)
 				if (!(*argv)[i]) {
-					log_error("Missing argument for -%c%s", longname? '-' : shortname, longname? longname : "");
-					return false;
+					fatal(EXIT_BAD_OPTIONS, "Missing argument for -%c%s",
+						longname? '-' : shortname, longname? longname : "");
 				}
-			result= entry->handler(*argv);
+			entry->handler(*argv);
 			(*argv)+= entry->argc;
-			return result;
+			return;
 		}
 	}
-	log_error("Unknown option -%c%s", longname? '-' : shortname, longname? longname : "");
-	return false;
+	fatal(EXIT_BAD_OPTIONS, "Unknown option -%c%s", longname? '-' : shortname, longname? longname : "");
 }
 
 void fatal(int exitcode, const char *msg, ...) {
 	char buffer[1024];
+	int i;
 	va_list val;
 	va_start(val, msg);
 	vsnprintf(buffer, sizeof(buffer), msg, val);
 	va_end(val);
+	
+	if (main_exec_on_exit) {
+		// Pass params to child as environment vars
+		setenv("INIT_FRAME_ERROR", buffer, 1);
+		sprintf(buffer, "%d", exitcode);
+		setenv("INIT_FRAME_EXITCODE", buffer, 1);
+		// Close all nonstandard FDs
+		for (i= 3; i < FD_SETSIZE; i++) close(i);
+		// exec child
+		execl(main_exec_on_exit, main_exec_on_exit, NULL);
+		log_error("Unable to exec \"%s\": %d", main_exec_on_exit, errno);
+		// If that failed... continue?
+	}
 	
 	if (main_failsafe) {
 		fprintf(stderr, "fatal (but attempting to continue): %s\n", buffer);

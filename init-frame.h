@@ -4,6 +4,11 @@
 // Get CLOCK_MONOTONIC time as 32.32 fixed-point number
 int64_t gettime_mon_frac();
 
+#define EXIT_NO_OP                1
+#define EXIT_BAD_OPTIONS          2
+#define EXIT_INVALID_ENVIRONMENT  3
+#define EXIT_BROKEN_PROGRAM_STATE 4
+#define EXIT_IMPOSSIBLE_SCENARIO  5
 void fatal(int exitcode, const char * msg, ...);
 
 typedef struct wake_s {
