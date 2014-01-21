@@ -4,7 +4,7 @@
 // Get CLOCK_MONOTONIC time as 32.32 fixed-point number
 int64_t gettime_mon_frac();
 
-void fatal(int exitcode, const char* msg, ...);
+void fatal(int exitcode, const char * msg, ...);
 
 typedef struct wake_s {
 	fd_set fd_read, fd_write, fd_err;
@@ -20,9 +20,23 @@ typedef struct strseg_s {
 	int len;
 } strseg_t;
 
-typedef void log_fn_t(const char *msg, ...);
+#define LOG_LEVEL_ERROR 2
+#define LOG_LEVEL_WARN 1
+#define LOG_LEVEL_INFO 0
+#define LOG_LEVEL_DEBUG -1
+#define LOG_LEVEL_TRACE -2
 
-extern log_fn_t *log_error, *log_warn, *log_info, *log_debug, *log_trace, log_null;
+void log_write(int level, const char * msg, ...);
+
+#define log_error(args...) log_write(LOG_LEVEL_ERROR, args)
+#define log_warn(args...)  log_write(LOG_LEVEL_WARN,  args)
+#define log_info(args...)  log_write(LOG_LEVEL_INFO,  args)
+#define log_debug(args...) log_write(LOG_LEVEL_DEBUG, args)
+#ifndef NDEBUG
+#define log_trace(args...) log_write(LOG_LEVEL_TRACE, args)
+#else
+#define log_trace(args...) do {} while (0)
+#endif
 
 extern bool main_terminate;
 extern wake_t *wake;

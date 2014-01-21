@@ -2,22 +2,12 @@
 #include "init-frame.h"
 #include <stdio.h>
 
-static log_fn_t log_error_, log_warn_, log_info_, log_debug_, log_trace_;
-log_fn_t *log_error= log_error_,
-	*log_warn=  log_warn_,
-	*log_info=  log_info_,
-	*log_debug= log_null,
-	*log_trace= log_null;
-
-void log_null (const char *msg, ...) {
-	// no-op
-}
-
 bool main_terminate= false;
 const char *main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
 bool main_use_stdin= false;
 bool main_mlockall= false;
 bool main_failsafe= false;
+int main_loglevel= LOG_LEVEL_INFO;
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
@@ -192,8 +182,8 @@ bool parse_opts(char **argv) {
 	return success;
 }
 
-bool set_opt_verbose(char**);
-bool set_opt_quiet(char**);
+bool set_opt_verbose(char** argv)    { main_loglevel--;       return true; }
+bool set_opt_quiet(char** argv)      { main_loglevel++;       return true; }
 bool set_opt_configfile(char** argv) { main_cfgfile= argv[0]; return true; }
 bool set_opt_stdin(char **argv)      { main_use_stdin= true;  return true; }
 bool set_opt_mlockall(char **argv)   { main_mlockall= true;   return true; }
@@ -237,24 +227,6 @@ bool parse_option(char shortname, char* longname, char ***argv) {
 	return false;
 }
 
-bool set_opt_verbose(char** argv) {
-	if      (log_error == log_null) log_error= log_error_;
-	else if (log_warn  == log_null) log_warn= log_warn_;
-	else if (log_info  == log_null) log_info= log_info_;
-	else if (log_debug == log_null) log_debug= log_debug_;
-	else     log_trace= log_trace_;
-	return true;
-}
-
-bool set_opt_quiet(char** argv) {
-	if      (log_trace != log_null) log_trace= log_null;
-	else if (log_debug != log_null) log_debug= log_null;
-	else if (log_info  != log_null) log_info = log_null;
-	else if (log_warn  != log_null) log_warn = log_null;
-	else     log_error= log_null;
-	return true;
-}
-
 void fatal(int exitcode, const char *msg, ...) {
 	char buffer[1024];
 	va_list val;
@@ -270,54 +242,16 @@ void fatal(int exitcode, const char *msg, ...) {
 	}
 }
 
-static void log_error_(const char *msg, ...) {
-	char msg2[256];
-	if (snprintf(msg2, sizeof(msg2), "error: %s\n", msg) >= sizeof(msg2))
-		memset(msg2+sizeof(msg2)-4, '.', 3);
+void log_write(int level, const char *msg, ...) {
+	if (main_loglevel > level)
+		return;
 	
-	va_list val;
-	va_start(val, msg);
-	vfprintf(stderr, msg2, val);
-	va_end(val);
-}
-
-static void log_warn_ (const char *msg, ...) {
-	char msg2[256];
-	if (snprintf(msg2, sizeof(msg2), "warning: %s\n", msg) >= sizeof(msg2))
-		memset(msg2+sizeof(msg2)-4, '.', 3);
+	const char *prefix= level > LOG_LEVEL_INFO? (level > LOG_LEVEL_WARN? "error":"warning")
+		: (level > LOG_LEVEL_DEBUG? "info" : (level > LOG_LEVEL_TRACE? "debug":"trace"));
 	
-	va_list val;
-	va_start(val, msg);
-	vfprintf(stderr, msg2, val);
-	va_end(val);
-}
-
-static void log_info_ (const char *msg, ...) {
 	char msg2[256];
-	if (snprintf(msg2, sizeof(msg2), "info: %s\n", msg) >= sizeof(msg2))
-		memset(msg2+sizeof(msg2)-4, '.', 3);
-	
-	va_list val;
-	va_start(val, msg);
-	vfprintf(stderr, msg2, val);
-	va_end(val);
-}
-
-static void log_debug_(const char *msg, ...) {
-	char msg2[256];
-	if (snprintf(msg2, sizeof(msg2), "debug: %s\n", msg) >= sizeof(msg2))
-		memset(msg2+sizeof(msg2)-4, '.', 3);
-	
-	va_list val;
-	va_start(val, msg);
-	vfprintf(stderr, msg2, val);
-	va_end(val);
-}
-
-static void log_trace_(const char *msg, ...) {
-	char msg2[256];
-	if (snprintf(msg2, sizeof(msg2), "trace: %s\n", msg) >= sizeof(msg2))
-		memset(msg2+sizeof(msg2)-4, '.', 3);
+	if (snprintf(msg2, sizeof(msg2), "%s: %s\n", prefix, msg) >= sizeof(msg2))
+		memset(msg2+sizeof(msg2)-4, '.', 3); // append "..." if pattern doesn't fit.  But it always should.
 	
 	va_list val;
 	va_start(val, msg);
