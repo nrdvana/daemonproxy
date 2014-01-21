@@ -43,11 +43,38 @@ void sig_handler(int sig) {
 			signal_error= errno;
 }
 
+void fatal_sig_handler(int sig) {
+	fatal(EXIT_BROKEN_PROGRAM_STATE, "Received signal %s (%d)", sig_name(sig), sig);
+	// probably can't actually recover from fatal signal...
+	exit(EXIT_BROKEN_PROGRAM_STATE);
+}
+
 bool sig_dispatch();
+
+struct signal_spec_s {
+	int signum;
+	void (*handler)(int);
+} signal_spec[]= {
+	{ SIGINT,   sig_handler },
+	{ SIGHUP,   sig_handler },
+	{ SIGTERM,  sig_handler },
+	{ SIGUSR1,  sig_handler },
+	{ SIGUSR2,  sig_handler },
+	{ SIGCHLD,  sig_handler },
+	{ SIGPIPE,  SIG_IGN },
+	{ SIGABRT,  fatal_sig_handler },
+	{ SIGFPE,   fatal_sig_handler },
+	{ SIGILL,   fatal_sig_handler },
+	{ SIGSEGV,  fatal_sig_handler },
+	{ SIGBUS,   fatal_sig_handler },
+	{ SIGTRAP,  fatal_sig_handler },
+	{ 0, NULL }
+};
 
 void sig_init() {
 	int pipe_fd[2];
 	struct sigaction act;
+	struct signal_spec_s *ss;
 	
 	// Create pipe and set non-blocking
 	if (pipe(pipe_fd)
@@ -56,25 +83,17 @@ void sig_init() {
 		|| fcntl(pipe_fd[0], F_SETFL, O_NONBLOCK)
 		|| fcntl(pipe_fd[1], F_SETFL, O_NONBLOCK)
 	) {
-		log_error("signal pipe setup: errno = %d", errno);
-		abort();
+		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: errno = %d", errno);
 	}
 	sig_wake_rd= pipe_fd[0];
 	sig_wake_wr= pipe_fd[1];
 	
 	// set signal handlers
 	memset(&act, 0, sizeof(act));
-	act.sa_handler= (void(*)(int)) sig_handler;
-	if (sigaction(SIGINT, &act, NULL)
-		|| sigaction(SIGHUP,  &act, NULL)
-		|| sigaction(SIGTERM, &act, NULL)
-		|| sigaction(SIGUSR1, &act, NULL)
-		|| sigaction(SIGUSR2, &act, NULL)
-		|| sigaction(SIGCHLD, &act, NULL)
-		|| (act.sa_handler= SIG_IGN, sigaction(SIGPIPE, &act, NULL))
-	) {
-		log_error("signal handler setup: errno = %d", errno);
-		abort();
+	for (ss= signal_spec; ss->signum != 0; ss++) {
+		act.sa_handler= ss->handler;
+		if (sigaction(ss->signum, &act, NULL))
+			fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal handler setup: errno = %d", errno);
 	}
 }
 
