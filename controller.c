@@ -1,10 +1,10 @@
 #include "config.h"
-#include "init-frame.h"
+#include "daemonproxy.h"
 
 struct controller_s;
 typedef bool ctl_state_fn_t(struct controller_s *);
 
-typedef struct controller_s {
+struct controller_s {
 	ctl_state_fn_t *state_fn;
 	
 	int  recv_fd;
@@ -27,7 +27,7 @@ typedef struct controller_s {
 	
 	char statedump_current[NAME_MAX+1];
 	int  statedump_part;
-} controller_t;
+};
 
 controller_t client[CONTROLLER_MAX_CLIENTS];
 

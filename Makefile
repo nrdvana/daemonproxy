@@ -1,12 +1,12 @@
-all: init-frame
+all: daemonproxy
 
-OBJS := fd.o service.o signal.o controller.o Contained_RBTree.o init-frame.o
+OBJS := fd.o service.o signal.o controller.o Contained_RBTree.o daemonproxy.o
 CFLAGS := -MMD -MP -D UNIT_TESTING -O0 -g3 -Wall
 
 -include $(OBJS:.o=.d)
 
-init-frame: $(OBJS)
-	gcc -o $@ -O1 -g3 $^
+daemonproxy: $(OBJS)
+	gcc -o $@ -O1 -g3 $^ -lrt
 
 controller.o: controller_data.autogen.c
 

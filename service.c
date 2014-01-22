@@ -1,5 +1,5 @@
 #include "config.h"
-#include "init-frame.h"
+#include "daemonproxy.h"
 #include "Contained_RBTree.h"
 
 // Describes a service, complete with metadata,
@@ -14,7 +14,7 @@
 #define SVC_STATE_UP            4
 #define SVC_STATE_REAPED        5
 
-typedef struct service_s {
+struct service_s {
 	int size, state;
 	int name_len, meta_len, argv_len, fds_len;
 	RBTreeNode name_index_node;
@@ -30,7 +30,7 @@ typedef struct service_s {
 	int64_t start_time;
 	int64_t reap_time;
 	char buffer[];
-} service_t;
+};
 
 // Define a sensible minimum for service size.
 // Want at least struct size, plus room for name, small argv list, and short names of file descriptors

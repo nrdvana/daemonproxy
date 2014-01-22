@@ -1,5 +1,5 @@
 #include "config.h"
-#include "init-frame.h"
+#include "daemonproxy.h"
 #include <stdio.h>
 
 bool main_terminate= false;

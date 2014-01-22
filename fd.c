@@ -1,5 +1,5 @@
 #include "config.h"
-#include "init-frame.h"
+#include "daemonproxy.h"
 #include "Contained_RBTree.h"
 
 // Describes a named file handle

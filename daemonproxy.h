@@ -1,5 +1,5 @@
-#ifndef INIT_FRAME_H
-#define INIT_FRAME_H
+#ifndef DAEMONPROXY_H
+#define DAEMONPROXY_H
 
 // Get CLOCK_MONOTONIC time as 32.32 fixed-point number
 int64_t gettime_mon_frac();
