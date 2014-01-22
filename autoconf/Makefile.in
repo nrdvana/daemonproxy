@@ -1,0 +1,47 @@
+SHELL = /bin/sh
+
+all: daemonproxy
+
+.SUFFIXES:
+.SUFFIXES: .c .o
+
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+bindir = @bindir@
+srcdir = @srcdir@/../src
+datarootdir = @datarootdir@
+sysconfdir = @sysconfdir@
+localstatedir = @localstatedir@
+runstatedir = $(localstatedir)/run
+mandir = @mandir@
+
+daemonproxy_src := fd.c service.c signal.c controller.c Contained_RBTree.c daemonproxy.c
+
+CFLAGS = @CFLAGS@ -MMD -MP -O2 -g3 -Wall
+CPPFLAGS = @CPPFLAGS@ -I. -I$(srcdir)
+LDFLAGS = @LDFLAGS@
+LIBS = @LIBS@
+
+-include $(daemonproxy_src:.c=.d)
+
+%.o: $(srcdir)/%.c
+	@test -e $(@:.o=.c) || ln -s $< $(@:.o=.c)
+	$(CC) -o $@ $(CPPFLAGS) -c $(@:.o=.c) $(CFLAGS)
+
+daemonproxy: $(daemonproxy_src:.c=.o)
+	$(CC) -o $@ $(CPPFLAGS) $^ $(CFLAGS) $(LDFLAGS) $(LIBS)
+
+controller.o: $(srcdir)/controller_data.autogen.c
+
+$(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c
+	perl $(srcdir)/generate_controller_data.pl < $< > $@
+
+install:
+	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)
+
+clean:
+	rm *.autogen.c
+	rm *.o
+	rm *.d
+
+.PHONY: install test

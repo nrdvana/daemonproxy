@@ -1,0 +1,13 @@
+#! /bin/sh
+
+if [ -f autoconf/configure ]; then
+	mkdir -p build && cd build && ../autoconf/configure "$@" && {
+		echo;
+		echo "We set you up with an out-of-tree build, in ./build";
+		echo 'Next, "cd build; make"';
+		echo;
+	};
+else
+	echo "Use ./autoconf/configure"
+	exit 1;
+fi
