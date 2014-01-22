@@ -131,7 +131,7 @@ bool sig_dispatch() {
 					return true;
 			}
 		}
-		log_debug("%d signals to deliver", n);
+		log_debug("%d signals to deliver", queue_n);
 		// deliver as many notifications as posible
 		for (i= 0; i < queue_n; i++) {
 			log_debug("deliver signal %d (%s)", queue[i], sig_name(queue[i]));
