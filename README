@@ -1,0 +1,103 @@
+daemonproxy
+===========
+
+A tight eficient process manager driven by external scripts
+
+philosophy
+==========
+
+This process manager is written in the spirit of daemontools,
+much like runit, s6, perp, and others.
+
+Their common philosophy is that the one true way to monitor a
+daemon is for the daemon to be a child of a process manager,
+such that the process manager receives SIGCHLD the moment the
+daemon exits, sees the exit status of the daemon, and can take
+appropriate steps to restart the daemon.
+
+The other semi-common philosophy is that the process manager
+should be able to restart a daemon connected to the same output
+pipe (for logging) that it was originally connected to, and
+also give it an identical environment each time it is started.
+(this is a thing that is hard to do when you run init scripts
+ from cron jobs or other sloppy methods like that)
+
+The point at which daemonproxy diverges from the rest is in
+configuration, and the actions taken to restart the service.
+
+configuration
+=============
+
+While the file-based configuration of daemontools and friends
+is a nice simple and unix-friendly way to configure services,
+there are times when setting up a tree of special scripts,
+directories, and control files with special filesystem flags
+is something of a hassle.  Particularly when you want to commit
+them to version control (losing the special permission flags),
+or want them to live on a read-only filesystem.
+
+While each of those tools have various workarounds available,
+nothing beats a plain old config file, which can be committed
+to version control, stored on read-only media, or even generated
+by a script on the fly.  daemonproxy makes this especially easy
+by even allowing the configuration to come from stdin.
+
+In fact, daemonproxy's config file isn't really even a config
+file; it is just a stream of commands that might happen to be
+read from a file (or stdin, or a variety of other inputs).
+These commands might configure new services and they might
+start some of them.
+
+But, the best feature of all is that commands can configure a
+"controller", which connects back to daemonproxy to dynamically
+issue more commands in response to events.
+
+daemon management
+=================
+
+daemonproxy is named daemonproxy because it is acting as a proxy
+for the actual service manager.  The service manager **you** want
+to handle your special cases and needs is probably best written
+as a script.  But, writing a process manager can be complicated,
+and a fatal bug could orphan all your daemons and make a difficult
+task of cleaning up the mess, or get stuck and stop performing its
+duties.
+
+daemonproxy takes over the important role of the parent process,
+and can act as a watchdog for your script, while maintaining the
+state of all the services and file handles that connect them to
+their loggers.  It also condenses signals and other events into a
+nice event stream (tab-delimited text) so your script doesn't have
+to deal with the complications of signal handling, nonblocking I/O,
+or waiting for children.  All you have to do is read stdin and
+write stdout!
+
+init replacement
+================
+
+daemonproxy is designed to be a suitable replacement for process 1.
+It uses a minimal pool of RAM, it allocates all its dynamic memory
+on startup (the table sizes can be controlled with commandline
+switches) and it has options to attempt recovery on lesser errors,
+or to exec() to a cleanup script in case of fatal error.
+
+It is a single-thread process written in non-blocking style as a
+state machine, and it has no external library dependencies, so is
+a natural fit for static compilation.  It is also very few lines
+of code!  Memory footprint numbers are not yet available.
+
+other uses
+==========
+
+However, daemonproxy is certainly not limited to running as init!
+One of my main design goals is to use it for background jobs that
+web services want to run.  A web service sometimes needs to kick
+off a background job, and then needs a way to check back on it
+to see if it is still running, whether it completed successfully,
+and maybe find the name of the output file (or screen session) it
+is using.
+
+daemonproxy is a perfect fit for this, and accepts commands for
+creating new services, attaching arbitrary metadata to them,
+querying their PID and exit status, and the timestamps when
+they started or exited.
