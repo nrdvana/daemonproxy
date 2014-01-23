@@ -6,25 +6,4 @@ if [ ! -d autoconf -o ! -d src ]; then
 	exit 1;
 fi
 
-# run autoconf if it hasn't been initialized
-if [ ! -f autoconf/configure ]; then
-	echo "Running autoconf..."
-	cd autoconf && autoconf || exit $?;
-	cd ..;
-fi
-
-mkdir -p build && cd build && ../autoconf/configure "$@" && cd .. && cat <<END > Makefile
-MAKE = make
-all:
-	\$(MAKE) -C build
-clean:
-	\$(MAKE) -C build clean
-distclean:
-	rm -r build
-	rm Makefile
-test:
-	\$(MAKE) -C build test
-install:
-	\$(MAKE) -C build install
-END
-
+make build/Makefile

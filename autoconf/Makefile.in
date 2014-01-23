@@ -29,7 +29,14 @@ LIBS = @LIBS@
 	$(CC) -o $@ $(CPPFLAGS) -c $(@:.o=.c) $(CFLAGS)
 
 daemonproxy: $(daemonproxy_src:.c=.o)
-	$(CC) -o $@ $(CPPFLAGS) $^ $(CFLAGS) $(LDFLAGS) $(LIBS)
+	@echo Generating version.c
+	@( echo '#include "config.h"'; \
+	   echo 'const char *  version_git_tag = "'`git tag | tail -n 1`'";'; \
+	   echo 'const int64_t version_build_ts = '`date +%s`';'; \
+	   echo 'const char *  version_git_head = "TODO: see Makefile.in";'; \
+	) > version.autogen.c
+	$(CC) -o version.autogen.o $(CPPFLAGS) -c version.autogen.c $(CFLAGS)
+	$(CC) -o $@ $(CPPFLAGS) $^ version.autogen.o $(CFLAGS) $(LDFLAGS) $(LIBS)
 
 controller.o: $(srcdir)/controller_data.autogen.c
 

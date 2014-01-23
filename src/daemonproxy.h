@@ -46,6 +46,10 @@ void log_write(int level, const char * msg, ...);
 extern bool main_terminate;
 extern wake_t *wake;
 
+extern const char *  version_git_tag;
+extern const int64_t version_build_ts;
+extern const char *  version_git_head;
+
 //----------------------------------------------------------------------------
 // controller.c interface
 

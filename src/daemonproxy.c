@@ -1,6 +1,5 @@
 #include "config.h"
 #include "daemonproxy.h"
-#include <stdio.h>
 
 bool main_terminate= false;
 const char *main_cfgfile= NULL;
@@ -186,6 +185,8 @@ void parse_opts(char **argv) {
 	}
 }
 
+void show_help(char **argv);
+void show_version(char **argv);
 void set_opt_verbose(char** argv)     { main_loglevel--;      }
 void set_opt_quiet(char** argv)       { main_loglevel++;      }
 void set_opt_stdin(char **argv)       { main_use_stdin= true; }
@@ -209,15 +210,18 @@ const struct option_table_entry_s {
 	const char *longname;
 	int argc;
 	void (*handler)(char **argv);
+	const char *help;
 } option_table[]= {
-	{ 'v', "verbose",      0, set_opt_verbose },
-	{ 'q', "quiet",        0, set_opt_quiet },
-	{ 'c', "config-file",  1, set_opt_configfile },
-	{  0 , "stdin",        0, set_opt_stdin },
-	{ 'M', "mlockall",     0, set_opt_mlockall },
-	{ 'F', "failsafe",     0, set_opt_failsafe },
-	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit },
-	{ 0, NULL, 0, NULL }
+	{  0 , "version",      0, show_version,         "display version info" },
+	{ 'h', "help",         0, show_help,            "display quick usage synopsys" },
+	{ 'v', "verbose",      0, set_opt_verbose,      "enable next level of logging (debug, trace)" },
+	{ 'q', "quiet",        0, set_opt_quiet,        "hide next level of logging (info, warn, error)" },
+	{ 'c', "config-file",  1, set_opt_configfile,   "read commands from file at startup" },
+	{  0 , "stdin",        0, set_opt_stdin,        "read commands from stdin, as a client" },
+	{ 'M', "mlockall",     0, set_opt_mlockall,     "call mlockall after allocating memory" },
+	{ 'F', "failsafe",     0, set_opt_failsafe,     "try not to exit, even on fatal errors" },
+	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit, "if program exits for any reason, call exec(VALUE) instead" },
+	{ 0, NULL, 0, NULL, NULL }
 };
 
 void parse_option(char shortname, char* longname, char ***argv) {
@@ -239,6 +243,38 @@ void parse_option(char shortname, char* longname, char ***argv) {
 		}
 	}
 	fatal(EXIT_BAD_OPTIONS, "Unknown option -%c%s", longname? '-' : shortname, longname? longname : "");
+}
+
+void show_help(char **argv) {
+	printf("daemonproxy version %s\noptions:\n", version_git_tag);
+	const struct option_table_entry_s *entry;
+	for (entry= option_table; entry->handler; entry++)
+		if (entry->help)
+			printf("  %c%c --%-12s %5s  %s\n",
+				entry->shortname? '-':' ', entry->shortname? entry->shortname : ' ',
+				entry->longname, entry->argc? "VALUE" : "", entry->help);
+	puts("");
+	
+	// now exit, unless they also specified exec-on-exit
+	if (main_exec_on_exit)
+		fatal(EXIT_NO_OP, "terminated normally");
+	exit(EXIT_NO_OP);
+}
+
+void show_version(char **argv) {
+	struct tm cal;
+	localtime_r(&version_build_ts, &cal);
+	printf("daemonproxy version %s\n"
+		" build timestamp: %lld (%4d-%02d-%02d %02d:%02d:%02d)\n"
+		" git HEAD: %s\n",
+		version_git_tag, (long long) version_build_ts,
+		cal.tm_year+1900, cal.tm_mon+1, cal.tm_mday, cal.tm_hour, cal.tm_min, cal.tm_sec,
+		version_git_head);
+	
+	// now exit, unless they also specified exec-on-exit
+	if (main_exec_on_exit)
+		fatal(EXIT_NO_OP, "terminated normally");
+	exit(EXIT_NO_OP);
 }
 
 void fatal(int exitcode, const char *msg, ...) {
