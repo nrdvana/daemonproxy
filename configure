@@ -1,13 +1,29 @@
 #! /bin/sh
 
-if [ -f autoconf/configure ]; then
-	mkdir -p build && cd build && ../autoconf/configure "$@" && {
-		echo;
-		echo "We set you up with an out-of-tree build, in ./build";
-		echo 'Next, "cd build; make"';
-		echo;
-	};
-else
-	echo "Use ./autoconf/configure"
+# if run from outside proj root, inform user whats going on
+if [ ! -d autoconf -o ! -d src ]; then
+	echo "For out-of-tree builds, run ./autoconf/configure directly."
 	exit 1;
 fi
+
+# run autoconf if it hasn't been initialized
+if [ ! -f autoconf/configure ]; then
+	echo "Running autoconf..."
+	cd autoconf && autoconf || exit $?;
+fi
+
+mkdir -p build && cd build && ../autoconf/configure "$@" && cd .. && cat <<END > Makefile
+MAKE = make
+all:
+	\$(MAKE) -C build
+clean:
+	\$(MAKE) -C build clean
+distclean:
+	rm -r build
+	rm Makefile
+test:
+	\$(MAKE) -C build test
+install:
+	\$(MAKE) -C build install
+END
+
