@@ -256,9 +256,7 @@ void show_help(char **argv) {
 	puts("");
 	
 	// now exit, unless they also specified exec-on-exit
-	if (main_exec_on_exit)
-		fatal(EXIT_NO_OP, "terminated normally");
-	exit(EXIT_NO_OP);
+	fatal(EXIT_NO_OP, "");
 }
 
 void show_version(char **argv) {
@@ -272,18 +270,20 @@ void show_version(char **argv) {
 		version_git_head);
 	
 	// now exit, unless they also specified exec-on-exit
-	if (main_exec_on_exit)
-		fatal(EXIT_NO_OP, "terminated normally");
-	exit(EXIT_NO_OP);
+	fatal(EXIT_NO_OP, "");
 }
 
 void fatal(int exitcode, const char *msg, ...) {
 	char buffer[1024];
 	int i;
 	va_list val;
-	va_start(val, msg);
-	vsnprintf(buffer, sizeof(buffer), msg, val);
-	va_end(val);
+	if (msg && msg[0]) {
+		va_start(val, msg);
+		vsnprintf(buffer, sizeof(buffer), msg, val);
+		va_end(val);
+	} else {
+		buffer[0]= '\0';
+	}
 	
 	if (main_exec_on_exit) {
 		// Pass params to child as environment vars
@@ -299,9 +299,11 @@ void fatal(int exitcode, const char *msg, ...) {
 	}
 	
 	if (main_failsafe) {
-		fprintf(stderr, "fatal (but attempting to continue): %s\n", buffer);
+		if (buffer[0])
+			fprintf(stderr, "fatal (but attempting to continue): %s\n", buffer);
 	} else {
-		fprintf(stderr, "fatal: %s\n", buffer);
+		if (buffer[0])
+			fprintf(stderr, "fatal: %s\n", buffer);
 		exit(exitcode);
 	}
 }
