@@ -46,6 +46,7 @@ void svc_notify_state(service_t *svc);
 void svc_change_pid(service_t *svc, pid_t pid);
 void svc_do_exec(service_t *svc);
 void svc_set_active(service_t *svc, bool activate);
+static void svc_reparse_meta(service_t *svc);
 
 int  svc_by_name_compare(void *key, RBTreeNode *node) {
 	return strcmp((char*) key, ((service_t*) node->Object)->buffer);
@@ -128,11 +129,33 @@ bool svc_set_meta(service_t *svc, const char *tsv_fields) {
 			svc->argv_len + 1 + svc->fds_len + 1);
 	memcpy(svc->buffer + svc->name_len + 1, tsv_fields, new_meta_len+1);
 	svc->meta_len= new_meta_len;
-	// TODO: parse metadata values for known arguments, like "auto-restart"
+	svc_reparse_meta(svc);
 	// unless NDEBUG:
 		svc_check(svc);
 		assert(strcmp(svc_get_meta(svc), tsv_fields) == 0);
 	return true;
+}
+
+/** Parse known meta flags.
+ */
+void svc_reparse_meta(service_t *svc) {
+	const char *p, *p2;
+	char *end;
+	int i;
+	
+	// reset flags to defaults
+	svc->auto_restart= false;
+	
+	p= p2= svc_get_meta(svc);
+	while (*p2) {
+		while (*p2 && *p2 != '\t') p2++;
+		if (strncmp(p, "auto-restart=", 13) == 0) {
+			i= strtol(p+13, &end, 10);
+			if (end == p2 && i)
+				svc->auto_restart= true;
+		}
+		if (*p2) p= ++p2;
+	}
 }
 
 /** Set the string for the service's argument list
@@ -263,8 +286,9 @@ void svc_run_active(wake_t *wake) {
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
+	re_switch_state:
 	switch (svc->state) {
-	case SVC_STATE_START_PENDING: svc_state_start_pending:
+	case SVC_STATE_START_PENDING:
 		// if not wake time yet,
 		if (svc->start_time - wake->now > 0) {
 			// set main-loop wake time if we're next
@@ -277,7 +301,7 @@ void svc_run(service_t *svc, wake_t *wake) {
 		// else we've reached the time to retry
 		svc->state= SVC_STATE_START;
 		svc_notify_state(svc);
-	case SVC_STATE_START: svc_state_start:
+	case SVC_STATE_START:
 		pid= fork();
 		if (pid > 0) {
 			svc_change_pid(svc, pid);
@@ -291,7 +315,7 @@ void svc_run(service_t *svc, wake_t *wake) {
 			// else fork failed, and we need to wait 3 sec and try again
 			svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
 			svc_notify_state(svc);
-			goto svc_state_start_pending;
+			goto re_switch_state;
 		}
 		svc->state= SVC_STATE_UP;
 		svc_notify_state(svc);
@@ -301,18 +325,17 @@ void svc_run(service_t *svc, wake_t *wake) {
 		break;
 	case SVC_STATE_REAPED:
 		svc_notify_state(svc);
+		svc->state= SVC_STATE_DOWN;
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
 			if (svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY) {
 				svc_handle_start(svc, wake->now + SERVICE_RESTART_DELAY);
 				svc_notify_state(svc);
-				goto svc_state_start_pending;
 			} else {
 				svc_handle_start(svc, wake->now);
-				goto svc_state_start;
 			}
 		}
-		svc->state= SVC_STATE_DOWN;
+		goto re_switch_state;
 	case SVC_STATE_DOWN:
 		svc_set_active(svc, false);
 		break;
@@ -414,7 +437,7 @@ void svc_do_exec(service_t *svc) {
 	p= NULL;
 	execvpe(argv[0], argv, &p);
 	log_error("exec(%s, ...) failed: errno= %d", argv[0], errno);
-	_exit(1);
+	_exit(EXIT_INVALID_ENVIRONMENT);
 }
 	
 void svc_notify_state(service_t *svc) {
