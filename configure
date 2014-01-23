@@ -10,6 +10,7 @@ fi
 if [ ! -f autoconf/configure ]; then
 	echo "Running autoconf..."
 	cd autoconf && autoconf || exit $?;
+	cd ..;
 fi
 
 mkdir -p build && cd build && ../autoconf/configure "$@" && cd .. && cat <<END > Makefile
