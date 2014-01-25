@@ -39,14 +39,16 @@ STATE(ctl_state_close);
 STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
-STATE(ctl_state_cmd_statedump,     "statedump");
+STATE(ctl_state_cmd_statedump,        "statedump");
 STATE(ctl_state_cmd_statedump_fd);
 STATE(ctl_state_cmd_statedump_svc);
-STATE(ctl_state_cmd_svcargs,       "service.args");
-STATE(ctl_state_cmd_svcmeta,       "service.meta");
-STATE(ctl_state_cmd_svcfds,        "service.fds");
-STATE(ctl_state_cmd_svcstart,      "service.start");
-STATE(ctl_state_cmd_exit,          "exit");
+STATE(ctl_state_cmd_svc_args_set,      "service.args");
+STATE(ctl_state_cmd_svc_meta,          "service.meta");
+STATE(ctl_state_cmd_svc_meta_set,      "service.meta.set");
+STATE(ctl_state_cmd_svc_meta_apply,    "service.meta.apply");
+STATE(ctl_state_cmd_svc_fds_set,       "service.fds");
+STATE(ctl_state_cmd_svc_start,         "service.start");
+STATE(ctl_state_cmd_exit,              "exit");
 
 static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
 static void ctl_dtor(controller_t *ctl);
@@ -327,7 +329,7 @@ bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
  * Set the argv for a service object
  * Also report the state change when done.
  */
-bool ctl_state_cmd_svcargs(controller_t *ctl) {
+bool ctl_state_cmd_svc_args_set(controller_t *ctl) {
 	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
 	
@@ -347,7 +349,18 @@ bool ctl_state_cmd_svcargs(controller_t *ctl) {
 	// since that isn't a common case and isn't too expensive.
 }
 
-bool ctl_state_cmd_svcmeta(controller_t *ctl) {
+bool ctl_state_cmd_svc_meta(controller_t *ctl) {
+	if (ctl->command_argc < 1)
+		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
+	if (ctl->command_argc > 1)
+		return END_CMD( ctl_notify_error(ctl, "Unexpected additional arguments") );
+	service_t *svc= svc_by_name(ctl->command_argv[1], false);
+	if (!svc)
+		return END_CMD( ctl_notify_error(ctl, "No such service") );
+	return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
+}
+
+bool ctl_state_cmd_svc_meta_set(controller_t *ctl) {
 	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
 	
@@ -367,7 +380,30 @@ bool ctl_state_cmd_svcmeta(controller_t *ctl) {
 	// since that isn't a common case and isn't too expensive.
 }
 
-bool ctl_state_cmd_svcfds(controller_t *ctl) {
+bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
+	char *p, *p2;
+	
+	if (ctl->command_argc < 2)
+		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
+	if (ctl->command_argc == 2)
+		return true; // no changes? no status change.
+	ctl->command_argv[2][-1]= '\0'; // terminate service name
+	if (!svc_check_name(ctl->command_argv[1]))
+		return END_CMD( ctl_notify_error(ctl, "Invalid service name: \"%s\"", ctl->command_argv[1]) );
+	service_t *svc= svc_by_name(ctl->command_argv[1], true);
+	// Apply each item in the TSV list
+	p= p2= ctl->command_argv[2];
+	while (*p2) {
+		while (*p2 && *p2 != '\t') p2++;
+		if (!svc_apply_meta(svc, (strseg_t){ p, p2-p }))
+			return END_CMD( ctl_notify_error(ctl, "Out of space for metadata change to service \"%s\"", ctl->command_argv[1]) );
+		if (*p2)
+			p= ++p2;
+	}
+	return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
+}
+
+bool ctl_state_cmd_svcfds_set(controller_t *ctl) {
 	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
 	
