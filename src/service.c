@@ -136,6 +136,44 @@ bool svc_set_meta(service_t *svc, const char *tsv_fields) {
 	return true;
 }
 
+bool svc_apply_meta(service_t *svc, strseg_t name, strseg_t value) {
+	// See if we have a metadata field of this name yet
+	char *p, *p2, *v= NULL;
+	int sizediff, buf_used;
+	p= p2= svc->buffer + svc->name_len + 1;
+	while (*p2) {
+		while (*p2 && *p2 != '\t') p2++;
+		if (0 == strncmp(name.data, p, name.len) && p[name.len] == '=') {
+			v= p+name.len+1;
+			break;
+		}
+		if (*p2) p= ++p2;
+	}
+	// find change in size of metadata
+	sizediff= v? (value.len - (p2 - v)) : name.len + 1 + value.len + 1;
+	buf_used= svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + svc->fds_len + 1;
+	if (buf_used + sizediff > svc->size - sizeof(service_t))
+		return false;
+	// memmove the strings after the value
+	if (sizediff)
+		memmove(p2 + sizediff, p2, buf_used - (p2 - svc->buffer));
+	// create "name=" if didn't exist
+	if (!v) {
+		if (p2 != svc->buffer+svc->name_len+1)
+			*p2++ = '\t';
+		memcpy(p2, name.data, name.len);
+		p2[name.len]= '=';
+		v= p2 + name.len + 1;
+	}
+	// overwrite value
+	memcpy(v, value.data, value.len);
+	svc->meta_len += sizediff;
+	svc_reparse_meta(svc);
+	// unless NDEBUG:
+		svc_check(svc);
+	return true;
+}
+
 /** Parse known meta flags.
  */
 void svc_reparse_meta(service_t *svc) {

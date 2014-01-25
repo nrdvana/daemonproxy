@@ -350,9 +350,9 @@ bool ctl_state_cmd_svc_args_set(controller_t *ctl) {
 }
 
 bool ctl_state_cmd_svc_meta(controller_t *ctl) {
-	if (ctl->command_argc < 1)
+	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
-	if (ctl->command_argc > 1)
+	if (ctl->command_argc > 2)
 		return END_CMD( ctl_notify_error(ctl, "Unexpected additional arguments") );
 	service_t *svc= svc_by_name(ctl->command_argv[1], false);
 	if (!svc)
@@ -375,13 +375,13 @@ bool ctl_state_cmd_svc_meta_set(controller_t *ctl) {
 	if (svc_set_meta(svc, ctl->command_argv[2]))
 		return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
 	else
-		return END_CMD( ctl_notify_error(ctl, "unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+		return END_CMD( ctl_notify_error(ctl, "unable to set meta for service \"%s\"", ctl->command_argv[1]) );
 	// If reporting the result above fails, the whole function will be re-run, but we don't care
 	// since that isn't a common case and isn't too expensive.
 }
 
 bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
-	char *p, *p2;
+	char *p, *p2, *v;
 	
 	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
@@ -395,7 +395,12 @@ bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
 	p= p2= ctl->command_argv[2];
 	while (*p2) {
 		while (*p2 && *p2 != '\t') p2++;
-		if (!svc_apply_meta(svc, (strseg_t){ p, p2-p }))
+		v= p;
+		while (v < p2 && *v != '=') v++;
+		if (*v != '=')
+			return END_CMD( ctl_notify_error(ctl, "Invalid metadata token (missing '=')") );
+		v++;
+		if (!svc_apply_meta(svc, (strseg_t){ p, v-p-1 }, (strseg_t){ v, p2-v }))
 			return END_CMD( ctl_notify_error(ctl, "Out of space for metadata change to service \"%s\"", ctl->command_argv[1]) );
 		if (*p2)
 			p= ++p2;
@@ -403,7 +408,7 @@ bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
 	return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
 }
 
-bool ctl_state_cmd_svcfds_set(controller_t *ctl) {
+bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
 	if (ctl->command_argc < 2)
 		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
 	
@@ -428,7 +433,7 @@ bool ctl_state_cmd_svcfds_set(controller_t *ctl) {
  * Errors in specification (or if service is up) are reported immediately.
  * Results of exec attempt are reported via other events.
  */
-bool ctl_state_cmd_svcstart(controller_t *ctl) {
+bool ctl_state_cmd_svc_start(controller_t *ctl) {
 	const char *argv;
 	char *endp;
 	int64_t wake_timestamp;
