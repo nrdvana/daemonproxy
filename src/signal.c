@@ -83,7 +83,7 @@ void sig_init() {
 		|| fcntl(pipe_fd[0], F_SETFL, O_NONBLOCK)
 		|| fcntl(pipe_fd[1], F_SETFL, O_NONBLOCK)
 	) {
-		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: errno = %d", errno);
+		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: %s", strerror(errno));
 	}
 	sig_wake_rd= pipe_fd[0];
 	sig_wake_wr= pipe_fd[1];
@@ -93,7 +93,7 @@ void sig_init() {
 	for (ss= signal_spec; ss->signum != 0; ss++) {
 		act.sa_handler= ss->handler;
 		if (sigaction(ss->signum, &act, NULL))
-			fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal handler setup: errno = %d", errno);
+			fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal handler setup: %s", strerror(errno));
 	}
 }
 
@@ -126,7 +126,7 @@ bool sig_dispatch() {
 				queue_n += n;
 			}
 			else {
-				log_trace("signal pipe read errno: %d", errno);
+				log_trace("signal pipe read: %s", strerror(errno));
 				if (!queue_n)
 					return true;
 			}

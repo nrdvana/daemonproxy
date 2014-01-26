@@ -39,7 +39,7 @@ STATE(ctl_state_close);
 STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
-STATE(ctl_state_cmd_statedump,        "statedump");
+STATE(ctl_state_cmd_statedump,         "statedump");
 STATE(ctl_state_cmd_statedump_fd);
 STATE(ctl_state_cmd_statedump_svc);
 STATE(ctl_state_cmd_svc_args_set,      "service.args");
@@ -48,6 +48,8 @@ STATE(ctl_state_cmd_svc_meta_set,      "service.meta.set");
 STATE(ctl_state_cmd_svc_meta_apply,    "service.meta.apply");
 STATE(ctl_state_cmd_svc_fds_set,       "service.fds");
 STATE(ctl_state_cmd_svc_start,         "service.start");
+STATE(ctl_state_cmd_fd_pipe,           "fd.pipe");
+STATE(ctl_state_cmd_fd_open,           "fd.open");
 STATE(ctl_state_cmd_exit,              "exit");
 
 static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
@@ -91,12 +93,12 @@ static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	// file descriptors must be nonblocking
 	if (recv_fd != -1)
 		if (fcntl(recv_fd, F_SETFL, O_NONBLOCK)) {
-			log_error("fcntl(O_NONBLOCK): errno = %d", errno);
+			log_error("fcntl(O_NONBLOCK): errno = %s (%d)", strerror(errno), errno);
 			return false;
 		}
 	if (send_fd != -1 && send_fd != recv_fd)
 		if (fcntl(send_fd, F_SETFL, O_NONBLOCK)) {
-			log_error("fcntl(O_NONBLOCK): errno = %d", errno);
+			log_error("fcntl(O_NONBLOCK): errno = %s (%d)", strerror(errno), errno);
 			return false;
 		}
 	// initialize object.  non-null state marks it as allocated
@@ -464,6 +466,31 @@ bool ctl_state_cmd_svc_start(controller_t *ctl) {
 	return END_CMD(true);
 }
 
+bool ctl_state_cmd_fd_pipe(controller_t *ctl) {
+	fd_t *f;
+	if (ctl->command_argc != 3)
+		return END_CMD( ctl_notify_error(ctl, "Expected exactly two handle names") );
+	
+	ctl->command_argv[2][-1]= '\0';
+	if (!(f= fd_pipe(ctl->command_argv[1], ctl->command_argv[2])))
+		return END_CMD( ctl_notify_error(ctl, "Failed to create pipe") );
+	
+	return END_CMD(true);
+}
+
+bool ctl_state_cmd_fd_open(controller_t *ctl) {
+	fd_t *f;
+	if (ctl->command_argc != 4)
+		return END_CMD( ctl_notify_error(ctl, "Expected handle name, flags, filename") );
+
+	ctl->command_argv[2][-1]= '\0';
+	ctl->command_argv[3][-1]= '\0';
+	if (!(f= fd_open(ctl->command_argv[1], ctl->command_argv[3], ctl->command_argv[2])))
+		return END_CMD( ctl_notify_error(ctl, "Unable to open file: errno = %s (%d)", strerror(errno), errno) );
+
+	return END_CMD(true);
+}
+
 /** Run all processing needed for the controller for this time slice
  * This function is mainly a wrapper that repeatedly executes the current state until
  * the state_fn returns false.  We then flush buffers and decide what to wake on.
@@ -548,7 +575,7 @@ bool ctl_read_more(controller_t *ctl) {
 			ctl->recv_fd= -1;
 		}
 		else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			log_error("read(controller pipe): %d", errno);
+			log_error("read(controller pipe): %s (%d)", strerror(errno), errno);
 		return false;
 	}
 	ctl->recv_buf_pos += n;
@@ -654,7 +681,7 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 				memmove(ctl->send_buf, ctl->send_buf + n, ctl->send_buf_pos);
 			}
 			else {
-				log_debug("controller outbuf write failed: $d", errno);
+				log_debug("controller outbuf write failed: %s (%d)", strerror(errno), errno);
 				// we have an error, or the write would block.
 				return false;
 			}

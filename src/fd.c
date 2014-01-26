@@ -43,14 +43,17 @@ int fd_by_name_compare(void *data, RBTreeNode *node) {
 
 void fd_init(int fd_count, int size_each) {
 	int i;
+	fd_t *fd;
 	fd_pool= (fd_t*) malloc(fd_count * size_each);
 	if (!fd_pool)
 		abort();
 	memset(fd_pool, 0, fd_count*size_each);
 	fd_free_list= fd_pool;
 	for (i=0; i < fd_count; i++) {
-		fd_pool[i].size= size_each;
-		fd_pool[i].next_free= fd_pool+i+1;
+		fd= (fd_t*) (((char*)fd_pool) + i * size_each);
+		fd->size= size_each;
+		fd->next_free= (i+1 >= fd_count)? NULL
+			: (fd_t*) (((char*)fd_pool) + (i+1) * size_each);
 	}
 	fd_pool[fd_count-1].next_free= NULL;
 	RBTree_Init( &fd_by_name_index, fd_by_name_compare );
@@ -113,6 +116,9 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 	fd2->type= FD_TYPE_PIPE_W;
 	fd2->fd= pair[1];
 	fd2->pipe_peer= fd1;
+	
+	fd_notify_state(fd1);
+	fd_notify_state(fd2);
 	return fd1;
 	
 	fail_cleanup:
@@ -194,6 +200,7 @@ fd_t * fd_open(const char *name, char *path, char *opts) {
 	// unless we don't even have 4 chars to spare, in which case we make it an empty string
 	else fd_obj->path--;
 	
+	fd_notify_state(fd_obj);
 	return fd_obj;
 	
 	fail_cleanup:

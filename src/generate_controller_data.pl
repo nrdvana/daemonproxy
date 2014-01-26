@@ -15,7 +15,7 @@ while (<STDIN>) {
 }
 
 # table size is 1.5 x number of entries rounded up to power of 2.
-my $mask= int(1.5 * keys %commands);
+my $mask= int(1.7 * keys %commands);
 $mask |= $mask >> 1;
 $mask |= $mask >> 2;
 $mask |= $mask >> 4;
@@ -25,20 +25,25 @@ my $table_size= $mask+1;
 
 sub hash_fn {
 	my ($string, $shift, $mul)= @_;
+	use integer;
 	my $result= 0;
 	$result= ($result << $shift) ^ (($result >> 24)&0xFF) ^ $_
 		for unpack( 'C' x length($string), $string );
+	#printf STDERR "%16X\n", $result*$mul;
 	return ($result * $mul) & $mask;
 }
 
 sub find_collisionless_hash_params {
 	# pick factors for the hash function until each command has a unique bucket
-	mul_loop: for (my $mul= 1; $mul < 1000000; $mul += 2) {
-		shift_loop: for (my $shift= 1; $shift < 15; $shift++) {
+	mul_loop: for (my $mul= 1; $mul < 100000; $mul += 2) {
+		shift_loop: for (my $shift= 1; $shift < 14; $shift++) {
 			my @table= (undef) x $table_size;
 			for (values %commands) {
 				my $bucket= hash_fn($_->{cmd}, $shift, $mul);
-				next shift_loop if defined $table[$bucket];
+				if (defined $table[$bucket]) {
+					#print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
+					next shift_loop;
+				}
 				$table[$bucket]= $_;
 			}
 			return ( \@table, $shift, $mul );

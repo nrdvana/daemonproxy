@@ -472,7 +472,7 @@ void svc_do_exec(service_t *svc) {
 	
 	p= NULL;
 	execvpe(argv[0], argv, &p);
-	log_error("exec(%s, ...) failed: errno= %d", argv[0], errno);
+	log_error("exec(%s, ...) failed: %s", argv[0], strerror(errno));
 	_exit(EXIT_INVALID_ENVIRONMENT);
 }
 	

@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
 	// A handle to dev/null is mandatory...
 	f= open("/dev/null", O_RDWR);
 	if (f < 0) {
-		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %d", errno);
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %s (%d)", strerror(errno), errno);
 		// if we're in failsafe mode, fatal doesn't exit()
 		log_error("Will use stderr instead of /dev/null!");
 		f= 2;
@@ -63,8 +63,8 @@ int main(int argc, char** argv) {
 		else {
 			f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
 			if (f == -1)
-				fatal(EXIT_INVALID_ENVIRONMENT, "failed to open config file \"%s\": %d",
-					main_cfgfile, errno);
+				fatal(EXIT_INVALID_ENVIRONMENT, "failed to open config file \"%s\": %s (%d)",
+					main_cfgfile, strerror(errno), errno);
 			else if (!(ctl= ctl_new(f, -1))) {
 				close(f);
 				fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to allocate controller for config file!");
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
 				log_trace("pid does not belong to any service");
 		}
 		if (pid < 0)
-			log_trace("waitpid: errno= %m");
+			log_trace("waitpid: %s", strerror(errno));
 		
 		// run controller state machine
 		ctl_run(wake);
@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
 		
 		// resume normal signal mask
 		if (!sigprocmask(SIG_SETMASK, &old, NULL) == 0)
-			perror("sigprocmask(reset)");
+			log_error("sigprocmask(reset): %s", strerror(errno));
 
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
 				// shouldn't ever fail, but if not EINTR, at least log it and prevent
 				// looping too fast
 				if (errno != EINTR) {
-					perror("select");
+					log_error("select: %s", strerror(errno));
 					tv.tv_usec= 500000;
 					tv.tv_sec= 0;
 					select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
@@ -294,7 +294,7 @@ void fatal(int exitcode, const char *msg, ...) {
 		for (i= 3; i < FD_SETSIZE; i++) close(i);
 		// exec child
 		execl(main_exec_on_exit, main_exec_on_exit, NULL);
-		log_error("Unable to exec \"%s\": %d", main_exec_on_exit, errno);
+		log_error("Unable to exec \"%s\": %s", main_exec_on_exit, strerror(errno));
 		// If that failed... continue?
 	}
 	
