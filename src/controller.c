@@ -51,6 +51,7 @@ STATE(ctl_state_cmd_svc_start,         "service.start");
 STATE(ctl_state_cmd_fd_pipe,           "fd.pipe");
 STATE(ctl_state_cmd_fd_open,           "fd.open");
 STATE(ctl_state_cmd_exit,              "exit");
+STATE(ctl_state_cmd_terminate,         "terminate");
 
 static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
 static void ctl_dtor(controller_t *ctl);
@@ -254,6 +255,12 @@ bool ctl_state_cmd_exit(controller_t *ctl) {
 	ctl->recv_fd= -1;
 	ctl->state_fn= ctl_state_close;
 	return false;
+}
+
+bool ctl_state_cmd_terminate(controller_t *ctl) {
+	main_terminate= true;
+	wake->next= wake->now;
+	return END_CMD(true);
 }
 
 /** Statedump command, part 1: Initialize vars and pass to part 2.
