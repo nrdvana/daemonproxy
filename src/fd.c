@@ -102,13 +102,18 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 	// Check that pipe() call succeeds
 	if (pipe(pair))
 		goto fail_cleanup;
+	log_trace("pipe => (%d, %d)", pair[0], pair[1]);
 	
 	// If fd1 is being overwritten, close it
-	if (fd1->type == FD_TYPE_UNDEF && fd1->fd >= 0)
+	if (fd1->type == FD_TYPE_UNDEF && fd1->fd >= 0) {
 		close(fd1->fd);
+		log_trace("close(%d)", fd1->fd);
+	}
 	// same for fd2
-	if (fd2->type == FD_TYPE_UNDEF && fd2->fd >= 0)
+	if (fd2->type == FD_TYPE_UNDEF && fd2->fd >= 0) {
 		close(fd2->fd);
+		log_trace("close(%d)", fd2->fd);
+	}
 	
 	fd1->type= FD_TYPE_PIPE_R;
 	fd1->fd= pair[0];
@@ -174,13 +179,16 @@ fd_t * fd_open(const char *name, char *path, char *opts) {
 	if (f_mkdir)
 		create_missing_dirs(path);
 
-	fd= open(path, flags, 600);
+	fd= open(path, flags, 0600);
+	log_trace("open => %d", fd);
 	if (fd < 0)
 		goto fail_cleanup;
 	
 	// Overwrite (and possibly setup) the fd_t object
-	if (fd_obj->type != FD_TYPE_UNDEF && fd_obj->fd >= 0)
-		close(fd_obj->fd);
+	if (fd_obj->type != FD_TYPE_UNDEF && fd_obj->fd >= 0) {
+		int result= close(fd_obj->fd);
+		log_trace("close(%d) => %d", fd_obj->fd, result);
+	}
 	
 	fd_obj->fd= fd;
 	fd_obj->type= FD_TYPE_FILE;
@@ -251,7 +259,10 @@ void fd_delete(fd_t *fd) {
 			fd->pipe_peer->pipe_peer= NULL;
 	}
 	// close descriptor.
-	if (fd->fd >= 0) close(fd->fd);
+	if (fd->fd >= 0) {
+		int result= close(fd->fd);
+		log_trace("close(%d) => %d", fd->fd, result);
+	}
 	// Remove name from index
 	RBTreeNode_Prune( &fd->name_index_node );
 	// Clear the type
@@ -272,6 +283,7 @@ fd_t * fd_by_name(strseg_t name, bool create) {
 		memset(ret, 0, obj_size);
 		ret->size= obj_size;
 		ret->type= FD_TYPE_UNDEF;
+		ret->fd= -1;
 		memcpy(ret->buffer, name.data, name.len);
 		ret->buffer[name.len]= '\0';
 		RBTreeNode_Init( &ret->name_index_node );

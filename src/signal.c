@@ -85,6 +85,7 @@ void sig_init() {
 	) {
 		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: %s", strerror(errno));
 	}
+	log_trace("pipe => (%d, %d)", pipe_fd[0], pipe_fd[1]);
 	sig_wake_rd= pipe_fd[0];
 	sig_wake_wr= pipe_fd[1];
 	

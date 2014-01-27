@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
 	
 	// A handle to dev/null is mandatory...
 	f= open("/dev/null", O_RDWR);
+	log_trace("open(/dev/null) => %d", f);
 	if (f < 0) {
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %s (%d)", strerror(errno), errno);
 		// if we're in failsafe mode, fatal doesn't exit()
@@ -93,6 +94,7 @@ int main(int argc, char** argv) {
 	while (!main_terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
 		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
+		wake->max_fd= -1;
 		FD_ZERO(&wake->fd_read);
 		FD_ZERO(&wake->fd_write);
 		FD_ZERO(&wake->fd_err);
@@ -136,6 +138,7 @@ int main(int argc, char** argv) {
 		if (wake->next - wake->now > 0) {
 			tv.tv_sec= (long)((wake->next - wake->now) >> 32);
 			tv.tv_usec= (long)((((wake->next - wake->now)&0xFFFFFFFFLL) * 1000000) >> 32);
+			
 			if (select(wake->max_fd, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv) < 0) {
 				// shouldn't ever fail, but if not EINTR, at least log it and prevent
 				// looping too fast
@@ -171,17 +174,15 @@ void parse_opts(char **argv) {
 	char *current;
 	
 	while ((current= *argv++)) {
-		if (current[0] == '-' && current[1] == '-') {
-			parse_option(0, current+2, &argv);
-		}
-		else if (current[0] == '-') {
-			for (++current; *current; current++)
+		if (current[0] == '-') {
+			if (current[1] == '-')
+				parse_option(0, current+2, &argv);
+			else for (++current; *current; current++)
 				parse_option(*current, NULL, &argv);
 		}
-		else {
+		else
 			// if failsafe, will not exit()
 			fatal(EXIT_BAD_OPTIONS, "Unexpected argument \"%s\"\n", current);
-		}
 	}
 }
 
