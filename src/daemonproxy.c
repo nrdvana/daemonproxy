@@ -6,6 +6,8 @@ const char *main_cfgfile= NULL;
 const char *main_exec_on_exit= NULL;
 bool main_use_stdin= false;
 bool main_mlockall= false;
+int  main_fd_pool_count= -1;
+int  main_fd_pool_obj_size= -1;
 bool main_failsafe= false;
 int main_loglevel= LOG_LEVEL_INFO;
 wake_t main_wake;
@@ -40,7 +42,10 @@ int main(int argc, char** argv) {
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
 	// Initialize file descriptor object pool and indexes
-	fd_init(FD_POOL_SIZE, FD_OBJ_SIZE);
+	fd_init();
+	if (main_fd_pool_count > 0 && main_fd_pool_size_each > 0)
+		if (!fd_preallocate(main_fd_pool_count, main_fd_pool_size_each))
+			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
 	// Initialize service object pool and indexes
 	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
 	// Initialize controller object pool
@@ -205,6 +210,27 @@ void set_opt_exec_on_exit(char **argv) {
 		fatal(EXIT_BAD_OPTIONS, "Cannot stat exec-on-exit program \"%s\"", argv[0]);
 	main_exec_on_exit= argv[0];
 }
+void set_opt_fd_prealloc(char **argv) {
+	int n, m;
+	char *end= NULL;
+	n= strtol(argv[0], &end, 10);
+	
+	if (*end == 'x')
+		m= parse_size(end+1, &end);
+	if (*end)
+		fatal(EXIT_BAD_OPTIONS, "Expected 'N' or 'NxM' where N and M are integers");
+	
+	if (n < FD_POOL_SIZE_MIN) {
+		fatal(EXIT_BAD_OPTIONS, "At least 6 fd objects required");
+		n= FD_POOL_SIZE_MIN;
+	} else if (n > FD_POOL_SIZE_MAX) {
+		fatal(EXIT_BAD_OPTIONS, "N exceeds max number of allowed file descriptors");
+		n= FD_POOL_SIZE_MAX;
+	}
+	
+	main_fd_pool_count= n;
+	main_fd_pool_size_each= m;
+}
 
 const struct option_table_entry_s {
 	char shortname;
@@ -212,16 +238,18 @@ const struct option_table_entry_s {
 	int argc;
 	void (*handler)(char **argv);
 	const char *help;
+	const char *argname;
 } option_table[]= {
-	{  0 , "version",      0, show_version,         "display version info" },
-	{ 'h', "help",         0, show_help,            "display quick usage synopsys" },
-	{ 'v', "verbose",      0, set_opt_verbose,      "enable next level of logging (debug, trace)" },
-	{ 'q', "quiet",        0, set_opt_quiet,        "hide next level of logging (info, warn, error)" },
-	{ 'c', "config-file",  1, set_opt_configfile,   "read commands from file at startup" },
-	{  0 , "stdin",        0, set_opt_stdin,        "read commands from stdin, as a client" },
-	{ 'M', "mlockall",     0, set_opt_mlockall,     "call mlockall after allocating memory" },
-	{ 'F', "failsafe",     0, set_opt_failsafe,     "try not to exit, even on fatal errors" },
-	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit, "if program exits for any reason, call exec(VALUE) instead" },
+	{  0 , "version",      0, show_version,         "display version info", "" },
+	{ 'h', "help",         0, show_help,            "display quick usage synopsys", "" },
+	{ 'v', "verbose",      0, set_opt_verbose,      "enable next level of logging (debug, trace)", "" },
+	{ 'q', "quiet",        0, set_opt_quiet,        "hide next level of logging (info, warn, error)", "" },
+	{ 'c', "config-file",  1, set_opt_configfile,   "read commands from file at startup", "PATH" },
+	{  0 , "stdin",        0, set_opt_stdin,        "read commands from stdin, as a client", "" },
+	{  0 , "prealloc-fd",  1, set_opt_fd_prealloc,  "Preallocate static pool of N named handles [of M bytes each]", "N[xM]" },
+	{ 'M', "mlockall",     0, set_opt_mlockall,     "call mlockall after allocating memory", "" },
+	{ 'F', "failsafe",     0, set_opt_failsafe,     "try not to exit, even on fatal errors", "" },
+	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit, "if program exits for any reason, call exec(PROG) instead", "PROG" },
 	{ 0, NULL, 0, NULL, NULL }
 };
 
@@ -246,6 +274,37 @@ void parse_option(char shortname, char* longname, char ***argv) {
 	fatal(EXIT_BAD_OPTIONS, "Unknown option -%c%s", longname? '-' : shortname, longname? longname : "");
 }
 
+/** Parse a positive integer with size suffix.
+ *
+ */
+int parse_size(const char *str, char **endp) {
+	int i, mul= 1, factor= 1024;
+	i= strtol(str, endp, 10);
+	if ((*endp)[0] && (*endp)[1] == 'B')
+		factor= 1000;
+	switch (**endp) {
+	case 'g': case 'G': mul*= factor;
+	case 'm': case 'M': mul*= factor;
+	case 'k': case 'K': mul*= factor;
+		break;
+	case 'b': case 'B': (*endp)++; break;
+	case 't': case 'T': mul= LONG_MAX;
+	default:
+	}
+	if (mul > 1) {
+		// consume /i?B/ at the end of the suffix
+		if ((*endp)[0] == 'i' && (*endp)[1] == 'B') (*endp) += 2;
+		else if (*endp)[0] == 'B') (*endp)++;
+		// make sure multiplied value fits in 'int'
+		if (i < 0 || i * mul / mul != i) {
+			errno= ERANGE;
+			return i > 0? LONG_MAX : 0;
+		}
+		i *= mul;
+	}
+	return i;
+}
+
 void show_help(char **argv) {
 	printf("daemonproxy version %s\noptions:\n", version_git_tag);
 	const struct option_table_entry_s *entry;
@@ -253,7 +312,7 @@ void show_help(char **argv) {
 		if (entry->help)
 			printf("  %c%c --%-12s %5s  %s\n",
 				entry->shortname? '-':' ', entry->shortname? entry->shortname : ' ',
-				entry->longname, entry->argc? "VALUE" : "", entry->help);
+				entry->longname, entry->argname, entry->help);
 	puts("");
 	
 	// now exit, unless they also specified exec-on-exit

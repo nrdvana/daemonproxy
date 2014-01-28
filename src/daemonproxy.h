@@ -141,15 +141,18 @@ void svc_delete(service_t *svc);
 //----------------------------------------------------------------------------
 // fd.c interface
 
-typedef struct fd_file_flags_s {
+typedef struct fd_flags_s {
 	bool read: 1,
 		write: 1,
 		create: 1,
 		append: 1,
 		mkdir: 1,
 		trunc: 1,
-		nonblock: 1;
-} fd_file_flags_t;
+		nonblock: 1,
+		pipe: 1,
+		special: 1,
+		is_const: 1;
+} fd_flags_t;
 extern const int min_fd_obj_size;
 
 // Initialize the fd pool from a static chunk of memory
@@ -158,20 +161,18 @@ bool fd_preallocate(int count, int size_each);
 
 const char* fd_get_name(fd_t *fd);
 int         fd_get_fdnum(fd_t *fd);
+fd_flags_t  fd_get_flags(fd_t *fd);
+const char* fd_get_file_path(fd_t *fd);
+fd_t *      fd_get_pipe_peer(fd_t *fd);
 
 // Open a pipe from one named FD to another
 // returns a ref to the write-end, which has a pointer to the read-end.
 fd_t * fd_new_pipe(strseg_t name1, int fd1, strseg_t name2, int fd2);
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_new_open(strseg_t name, int fdnum, fd_file_flags_t flags, strseg_t path);
-
-// Manually inject a named FD into the lookup table.  allow_close determines whether users can remove it.
-fd_t * fd_new_special(strseg_t name, int fd, bool is_const, strseg_t description);
+fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path);
 
 void fd_delete(fd_t *fd);
-
-bool fd_print_state(fd_t *fd, char *buffer, size_t buflen);
 
 fd_t * fd_by_name(strseg_t name);
 fd_t * fd_by_fd(int fd);
