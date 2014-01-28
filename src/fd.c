@@ -8,7 +8,7 @@
 #define FD_TYPE_FILE   1
 #define FD_TYPE_PIPE_R 2
 #define FD_TYPE_PIPE_W 3
-#define FD_TYPE_INTERNAL 4
+#define FD_TYPE_SPECIAL 4
 
 struct fd_s {
 	int size;
@@ -17,17 +17,20 @@ struct fd_s {
 		is_const: 1;
 	RBTreeNode name_index_node;
 	int fd;
-	union {
-		char *path;
-		struct fd_s *pipe_peer;
-		struct fd_s *next_free;
-	};
+	union attr_union_u {
+		struct file_attr_s {
+			fd_file_flags_t flags;
+			const char *path;
+		} file;
+		struct pipe_attr_s {
+			struct fd_s *peer;
+		} pipe;
+		struct special_attr_s {
+			const char *descrip;
+		} special;
+	} attr;
 	char buffer[];
 };
-
-// Define a sensible minimum for service size.
-// Want at least struct size, plus room for name of fd and short filesystem path
-const int min_fd_obj_size= sizeof(fd_t) + NAME_MAX * 2;
 
 fd_t **fd_list= NULL;
 int fd_list_count= 0, fd_list_limit= 0;
@@ -35,8 +38,10 @@ RBTree fd_by_name_index;
 void *fd_obj_pool= NULL;
 int fd_obj_pool_size_each= 0;
 
+bool fd_list_resize(int new_limit);
 void add_fd_by_name(fd_t *fd);
 void create_missing_dirs(char *path);
+static const char * append_elipses(char *buffer, int bufsize, strseg_t source);
 
 int fd_by_name_compare(void *data, RBTreeNode *node) {
 	strseg_t *name= (strseg_t*) data;
@@ -48,16 +53,18 @@ void fd_init() {
 }
 
 bool fd_preallocate(int count, int size_each) {
+	int i;
 	assert(fd_list == NULL);
 	assert(fd_obj_pool == NULL);
+	
 	if (!fd_list_resize(count))
 		return false;
 	
 	if (!(fd_obj_pool= malloc(count * size_each)))
 		return false;
 	fd_obj_pool_size_each= size_each;
-	for (i= 0; i < fd_count; i++)
-		fd_list[i]= ((char*) fd_pool) + size_each * i;
+	for (i= 0; i < count; i++)
+		fd_list[i]= (fd_t*) (((char*) fd_obj_pool) + size_each * i);
 	return true;
 }
 
@@ -69,13 +76,14 @@ bool fd_list_resize(int new_limit) {
 		return false;
 	fd_list= new_list;
 	fd_list_limit= new_limit;
+	return true;
 }
 
 fd_t * fd_new(int size, strseg_t name) {
 	fd_t *obj;
 	assert(size >= sizeof(fd_t) + name.len + 1);
 	// enlarge the container if needed (and not using a pool)
-	if (fd_list_count >= fd_list_limit) {
+	if (fd_list_count >= fd_list_limit)
 		if (fd_obj_pool || !fd_list_resize(fd_list_limit * 2))
 			return NULL;
 	// allocate space (unless using a pool)
@@ -104,21 +112,26 @@ fd_t * fd_new(int size, strseg_t name) {
 	return obj;
 }
 
-// Close a named handle
-void fd_delete(fd_t *fd) {
+void fd_close(fd_t *fd) {
 	// disassociate from other end of pipe, if its a pipe.
 	if (fd->type == FD_TYPE_PIPE_R || fd->type == FD_TYPE_PIPE_W) {
-		if (fd->pipe_peer)
-			fd->pipe_peer->pipe_peer= NULL;
+		if (fd->attr.pipe.peer)
+			fd->attr.pipe.peer->attr.pipe.peer= NULL;
 	}
 	// close descriptor.
 	if (fd->fd >= 0) {
 		int result= close(fd->fd);
 		log_trace("close(%d) => %d", fd->fd, result);
 	}
+}
+
+// Close a named handle
+void fd_delete(fd_t *fd) {
+	int i;
+	fd_close(fd);
 	// Remove name from index
 	RBTreeNode_Prune( &fd->name_index_node );
-	// remove the pointer from fd_list (or swap, for obj pool)
+	// remove the pointer from fd_list and free the mem (or swap within list, for obj pool)
 	for (i= 0; i < fd_list_count; i++) {
 		if (fd_list[i] == fd) {
 			fd_list[i]= fd_list[--fd_list_count];
@@ -143,138 +156,116 @@ int fd_get_fdnum(fd_t *fd) {
 }
 
 const char* fd_get_file_path(fd_t *fd) {
-	return fd->type == FD_TYPE_FILE? fd->path : NULL;
+	return fd->type == FD_TYPE_FILE? fd->attr.file.path : NULL;
 }
 
 const char* fd_get_pipe_read_end(fd_t *fd) {
-	return fd->type == FD_TYPE_PIPE_W && fd->pipe_peer? fd->pipe_peer->buffer : NULL;
+	return fd->type == FD_TYPE_PIPE_W && fd->attr.pipe.peer? fd->attr.pipe.peer->buffer : NULL;
 }
 
 const char* fd_get_pipe_write_end(fd_t *fd) {
-	return fd->type == FD_TYPE_PIPE_R && fd->pipe_peer? fd->pipe_peer->buffer : NULL;
-}
-
-bool fd_notify_state(fd_t *fd) {
-	switch (fd->type) {
-	case FD_TYPE_INTERNAL:
-	case FD_TYPE_FILE: return ctl_notify_fd_state(NULL, fd->buffer, fd->path, NULL, NULL);
-	case FD_TYPE_PIPE_R: return ctl_notify_fd_state(NULL, fd->buffer, NULL, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)");
-	case FD_TYPE_PIPE_W: return ctl_notify_fd_state(NULL, fd->buffer, NULL, fd->pipe_peer? fd->pipe_peer->buffer : "(closed)", NULL);
-	default: return ctl_notify_error(NULL, "File descriptor has invalid state");
-	}
+	return fd->type == FD_TYPE_PIPE_R && fd->attr.pipe.peer? fd->attr.pipe.peer->buffer : NULL;
 }
 
 // Open a pipe from one named FD to another
 // returns a ref to the read end, which holds a ref to the write end.
-fd_t * fd_new_pipe(int fd1, strseg_t name1, int fd2, strseg_t name2) {
-	int pair[2]= { -1, -1 };
-	fd_t *fd1, *fd2;
-	if (!(fd1= fd_by_name(name1))) fd1= fd_new(sizeof(fd_t) + name1.len + 1, name1);
-	if (!(fd2= fd_by_name(name2))) fd2= fd_new(sizeof(fd_t) + name2.len + 1, name2);
-	// If failed to allocate/find either of them, give up
-	// also fail if either of them is a constant
-	if (!fd1 || !fd2 || fd1->is_const || fd2->is_const)
-		goto fail_cleanup;
+fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
+	// Find any existing FD object by these names
+	fd_t *f1, *old1= fd_by_name(name1);
+	fd_t *f2, *old2= fd_by_name(name2);
 	
-	// If fd1 is being overwritten, close it
-	if (fd1->type == FD_TYPE_UNDEF && fd1->fd >= 0) {
-		close(fd1->fd);
-		log_trace("close(%d)", fd1->fd);
-	}
-	// same for fd2
-	if (fd2->type == FD_TYPE_UNDEF && fd2->fd >= 0) {
-		close(fd2->fd);
-		log_trace("close(%d)", fd2->fd);
+	// Fail if either name exists as a constant
+	if ((old1 && old1->is_const) || (old2 && old2->is_const))
+		return NULL;
+	
+	// Allocate new FD objects
+	f1= fd_new(sizeof(fd_t) + name1.len + 1, name1);
+	if (!f1) return NULL;
+	
+	f2= fd_new(sizeof(fd_t) + name2.len + 1, name2);
+	if (!f2) {
+		fd_delete(f1);
+		return NULL;
 	}
 	
-	fd1->type= FD_TYPE_PIPE_R;
-	fd1->fd= pair[0];
-	fd1->pipe_peer= fd2;
+	// It worked, so delete the old ones, if any
+	if (old1) fd_delete(old1);
+	if (old2) fd_delete(old2);
 
-	fd2->type= FD_TYPE_PIPE_W;
-	fd2->fd= pair[1];
-	fd2->pipe_peer= fd1;
+	f1->type= FD_TYPE_PIPE_R;
+	f1->fd= num1;
+	f1->attr.pipe.peer= f2;
+
+	f2->type= FD_TYPE_PIPE_W;
+	f2->fd= num2;
+	f2->attr.pipe.peer= f1;
 	
-	ctl_notify_fd_state(NULL, fd1);
-	ctl_notify_fd_state(NULL, fd2);
-	return fd1;
-	
-	fail_cleanup:
-	if (fd1 && fd1->type == FD_TYPE_UNDEF)
-		fd_delete(fd1);
-	if (fd2 && fd2->type == FD_TYPE_UNDEF)
-		fd_delete(fd2);
-	return NULL;
+	ctl_notify_fd_state(NULL, f1);
+	ctl_notify_fd_state(NULL, f2);
+	return f1;
 }
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_new_file(int fd, strseg_t name, int open_mode, int flags, strseg_t path) {
-	fd_t *fd_obj;
+fd_t * fd_new_file(strseg_t name, int fdnum, fd_file_flags_t flags, strseg_t path) {
+	int buf_free;
+	fd_t *f, *old= fd_by_name(name);
 	
-	if (!(fd_obj= fd_by_name(name)))
-		fd_obj= fd_new(sizeof(fd_t) + name.len + 1 + opts.len + 1 + path.len + 1);
-	if (!fd_obj || fd_obj->is_const)
+	// fail if name is a constant
+	if (old && old->is_const)
 		return NULL;
 	
-	// Now, try to perform the open
+	// Allocate new obj
+	f= fd_new(sizeof(fd_t) + name.len + 1 + path.len + 1, name);
+	if (!f) return NULL;
 	
+	// it worked, so delete the old one, if any
+	if (old) fd_delete(old);
 	
-	// Overwrite (and possibly setup) the fd_t object
-	if (fd_obj->type != FD_TYPE_UNDEF && fd_obj->fd >= 0) {
-		int result= close(fd_obj->fd);
-		log_trace("close(%d) => %d", fd_obj->fd, result);
-	}
-	
-	fd_obj->fd= fd;
-	fd_obj->type= FD_TYPE_FILE;
-	
+	f->type= FD_TYPE_FILE;
+	f->fd= fdnum;
+	f->attr.file.flags= flags;
 	// copy as much of path into the buffer as we can.
-	fd_obj->path= fd_obj->buffer + strlen(name) + 1;
-	buf_free= fd_obj->size - (fd_obj->path - (char*) fd_obj);
-	n= strlen(path);
-	if (n < buf_free)
-		memcpy(fd_obj->path, path, n+1);
-	// else truncate with "..."
-	else if (3 < buf_free) {
-		n= buf_free - 4;
-		memcpy(fd_obj->path, path, n);
-		memcpy(fd_obj->path + n, "...", 4);
-	}
-	// unless we don't even have 4 chars to spare, in which case we make it an empty string
-	else fd_obj->path--;
+	buf_free= f->size - sizeof(fd_t) - name.len - 1;
+	f->attr.file.path= append_elipses(f->buffer + name.len + 1, buf_free, path);
 	
-	fd_notify_state(fd_obj);
-	return fd_obj;
-	
-	fail_cleanup:
-	if (fd_obj && fd_obj->type == FD_TYPE_UNDEF)
-		fd_delete(fd_obj);
-	return NULL;
+	ctl_notify_fd_state(NULL, f);
+	return f;
 }
 
-fd_t *fd_assign(const char *name, int fd, bool is_const, const char *description) {
-	int n, buf_free;
-	fd_t *fd1= fd_by_name((strseg_t){ name, strlen(name) }, true);
-	if (fd1->type != FD_TYPE_UNDEF && fd1->fd >= 0)
-		close(fd1->fd);
-	fd1->type= FD_TYPE_INTERNAL;
-	fd1->fd= fd;
-	fd1->is_const= is_const;
+fd_t *fd_new_special(strseg_t name, int fdnum, bool is_const, strseg_t description) {
+	int buf_free;
+	fd_t *f, *old= fd_by_name(name);
+
+	f= fd_new(sizeof(fd_t) + name.len + 1 + description.len + 1, name);
+	if (!f) return NULL;
+	
+	if (old) fd_delete(old);
+	
+	f->type= FD_TYPE_SPECIAL;
+	f->fd= fdnum;
+	f->is_const= is_const;
 	// copy as much of path into the buffer as we can.
-	fd1->path= fd1->buffer + strlen(name) + 1;
-	buf_free= fd1->size - (fd1->path - (char*) fd1);
-	n= strlen(description);
-	if (n < buf_free)
-		memcpy(fd1->path, description, n+1);
-	// else truncate with "..."
-	else if (3 < buf_free) {
-		n= buf_free - 4;
-		memcpy(fd1->path, description, n);
-		memcpy(fd1->path + n, "...", 4);
+	buf_free= f->size - sizeof(fd_t) - name.len - 1;
+	f->attr.file.path= append_elipses(f->buffer + name.len + 1, buf_free, description);
+	
+	ctl_notify_fd_state(NULL, f);
+	return f;
+}
+
+const char* append_elipses(char *buffer, int bufsize, strseg_t source) {
+	if (source.len < bufsize) {
+		memcpy(buffer, source.data, source.len);
+		buffer[source.len]= '\0';
+		return buffer;
 	}
-	// unless we don't even have 4 chars to spare, in which case we make it an empty string
-	else fd1->path--;
-	return fd1;
+	// else truncate with "..."
+	else if (bufsize >= 4) {
+		int n= bufsize - 4;
+		memcpy(buffer, source.data, n);
+		memcpy(buffer + n, "...", 4);
+		return buffer;
+	}
+	else return "...";
 }
 
 void create_missing_dirs(char *path) {
@@ -294,12 +285,12 @@ fd_t * fd_by_name(strseg_t name) {
 	return NULL;
 }
 
-fd_t * fd_iter_next(fd_t *current, const char *from_name) {
+fd_t * fd_iter_next(fd_t *current, strseg_t from_name) {
 	RBTreeNode *node;
 	if (current) {
 		node= RBTreeNode_GetNext(&current->name_index_node);
 	} else {
-		RBTreeSearch s= RBTree_Find( &fd_by_name_index, from_name );
+		RBTreeSearch s= RBTree_Find( &fd_by_name_index, (void*) &from_name );
 		if (s.Nearest == NULL)
 			node= NULL;
 		else if (s.Relation > 0)

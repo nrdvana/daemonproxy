@@ -52,6 +52,11 @@ extern const char *  version_git_tag;
 extern const int64_t version_build_ts;
 extern const char *  version_git_head;
 
+struct fd_s;
+typedef struct fd_s fd_t;
+struct service_s;
+typedef struct service_s service_t;
+
 //----------------------------------------------------------------------------
 // controller.c interface
 
@@ -72,7 +77,7 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
-bool ctl_notify_fd_state(controller_t *ctl, const char *name, const char *file_path, const char *pipe_read, const char *pipe_write);
+bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd);
 #define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error: " msg "\n", ##__VA_ARGS__))
 
 // Handle state transitions based on communication with the controller
@@ -82,8 +87,6 @@ void ctl_flush(wake_t *wake);
 //----------------------------------------------------------------------------
 // service.c interface
 
-struct service_s;
-typedef struct service_s service_t;
 extern const int min_service_obj_size;
 
 // Initialize the service pool
@@ -138,39 +141,41 @@ void svc_delete(service_t *svc);
 //----------------------------------------------------------------------------
 // fd.c interface
 
-struct fd_s;
-typedef struct fd_s fd_t;
+typedef struct fd_file_flags_s {
+	bool read: 1,
+		write: 1,
+		create: 1,
+		append: 1,
+		mkdir: 1,
+		trunc: 1,
+		nonblock: 1;
+} fd_file_flags_t;
 extern const int min_fd_obj_size;
 
 // Initialize the fd pool from a static chunk of memory
-void fd_init(int fd_count, int size_each);
+void fd_init();
+bool fd_preallocate(int count, int size_each);
 
-const char* fd_get_name(fd_t *);
+const char* fd_get_name(fd_t *fd);
 int         fd_get_fdnum(fd_t *fd);
-const char* fd_get_file_path(fd_t *);
-const char* fd_get_pipe_read_end(fd_t *fd);
-const char* fd_get_pipe_write_end(fd_t *fd);
 
 // Open a pipe from one named FD to another
 // returns a ref to the write-end, which has a pointer to the read-end.
-fd_t * fd_pipe(const char *name1, const char *name2);
+fd_t * fd_new_pipe(strseg_t name1, int fd1, strseg_t name2, int fd2);
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_open(const char *name, char *path, char *opts);
+fd_t * fd_new_open(strseg_t name, int fdnum, fd_file_flags_t flags, strseg_t path);
 
 // Manually inject a named FD into the lookup table.  allow_close determines whether users can remove it.
-fd_t * fd_assign(const char *name, int fd, bool is_const, const char *description);
-
-// Close a named handle
-bool fd_close(const char *name);
-
-bool fd_notify_state(fd_t *fd);
-
-fd_t * fd_by_name(strseg_t name, bool create);
-fd_t * fd_by_fd(int fd);
-fd_t * fd_iter_next(fd_t *current, const char *from_name);
+fd_t * fd_new_special(strseg_t name, int fd, bool is_const, strseg_t description);
 
 void fd_delete(fd_t *fd);
+
+bool fd_print_state(fd_t *fd, char *buffer, size_t buflen);
+
+fd_t * fd_by_name(strseg_t name);
+fd_t * fd_by_fd(int fd);
+fd_t * fd_iter_next(fd_t *current, strseg_t from_name);
 
 //----------------------------------------------------------------------------
 // signal.c interface
