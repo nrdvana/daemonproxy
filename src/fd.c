@@ -12,22 +12,16 @@
 
 struct fd_s {
 	int size;
-	unsigned int
-		type: 31,
-		is_const: 1;
-	RBTreeNode name_index_node;
+	fd_flags_t flags;
 	int fd;
+	RBTreeNode name_index_node;
 	union attr_union_u {
 		struct file_attr_s {
-			fd_file_flags_t flags;
 			const char *path;
 		} file;
 		struct pipe_attr_s {
 			struct fd_s *peer;
 		} pipe;
-		struct special_attr_s {
-			const char *descrip;
-		} special;
 	} attr;
 	char buffer[];
 };
@@ -100,7 +94,6 @@ fd_t * fd_new(int size, strseg_t name) {
 	}
 	memset(obj, 0, size);
 	obj->size= size;
-	obj->type= FD_TYPE_UNDEF;
 	obj->fd= -1;
 	RBTreeNode_Init( &obj->name_index_node );
 	obj->name_index_node.Object= obj;
@@ -112,9 +105,11 @@ fd_t * fd_new(int size, strseg_t name) {
 	return obj;
 }
 
-void fd_close(fd_t *fd) {
+// Close a named handle
+void fd_delete(fd_t *fd) {
+	int i;
 	// disassociate from other end of pipe, if its a pipe.
-	if (fd->type == FD_TYPE_PIPE_R || fd->type == FD_TYPE_PIPE_W) {
+	if (fd->flags.pipe) {
 		if (fd->attr.pipe.peer)
 			fd->attr.pipe.peer->attr.pipe.peer= NULL;
 	}
@@ -123,12 +118,6 @@ void fd_close(fd_t *fd) {
 		int result= close(fd->fd);
 		log_trace("close(%d) => %d", fd->fd, result);
 	}
-}
-
-// Close a named handle
-void fd_delete(fd_t *fd) {
-	int i;
-	fd_close(fd);
 	// Remove name from index
 	RBTreeNode_Prune( &fd->name_index_node );
 	// remove the pointer from fd_list and free the mem (or swap within list, for obj pool)
@@ -155,16 +144,16 @@ int fd_get_fdnum(fd_t *fd) {
 	return fd->fd;
 }
 
+fd_flags_t fd_get_flags(fd_t *fd) {
+	return fd->flags;
+}
+
 const char* fd_get_file_path(fd_t *fd) {
-	return fd->type == FD_TYPE_FILE? fd->attr.file.path : NULL;
+	return !fd->flags.pipe? fd->attr.file.path : NULL;
 }
 
-const char* fd_get_pipe_read_end(fd_t *fd) {
-	return fd->type == FD_TYPE_PIPE_W && fd->attr.pipe.peer? fd->attr.pipe.peer->buffer : NULL;
-}
-
-const char* fd_get_pipe_write_end(fd_t *fd) {
-	return fd->type == FD_TYPE_PIPE_R && fd->attr.pipe.peer? fd->attr.pipe.peer->buffer : NULL;
+fd_t * fd_get_pipe_peer(fd_t *fd) {
+	return fd->flags.pipe? fd->attr.pipe.peer : NULL;
 }
 
 // Open a pipe from one named FD to another
@@ -175,7 +164,7 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 	fd_t *f2, *old2= fd_by_name(name2);
 	
 	// Fail if either name exists as a constant
-	if ((old1 && old1->is_const) || (old2 && old2->is_const))
+	if ((old1 && old1->flags.is_const) || (old2 && old2->flags.is_const))
 		return NULL;
 	
 	// Allocate new FD objects
@@ -192,11 +181,13 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 	if (old1) fd_delete(old1);
 	if (old2) fd_delete(old2);
 
-	f1->type= FD_TYPE_PIPE_R;
+	f1->flags.pipe= true;
+	f1->flags.read= true;
 	f1->fd= num1;
 	f1->attr.pipe.peer= f2;
 
-	f2->type= FD_TYPE_PIPE_W;
+	f2->flags.pipe= true;
+	f2->flags.write= true;
 	f2->fd= num2;
 	f2->attr.pipe.peer= f1;
 	
@@ -206,12 +197,12 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 }
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_new_file(strseg_t name, int fdnum, fd_file_flags_t flags, strseg_t path) {
+fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path) {
 	int buf_free;
 	fd_t *f, *old= fd_by_name(name);
 	
 	// fail if name is a constant
-	if (old && old->is_const)
+	if (old && old->flags.is_const)
 		return NULL;
 	
 	// Allocate new obj
@@ -221,32 +212,12 @@ fd_t * fd_new_file(strseg_t name, int fdnum, fd_file_flags_t flags, strseg_t pat
 	// it worked, so delete the old one, if any
 	if (old) fd_delete(old);
 	
-	f->type= FD_TYPE_FILE;
+	f->flags= flags;
 	f->fd= fdnum;
-	f->attr.file.flags= flags;
+	f->flags= flags;
 	// copy as much of path into the buffer as we can.
 	buf_free= f->size - sizeof(fd_t) - name.len - 1;
 	f->attr.file.path= append_elipses(f->buffer + name.len + 1, buf_free, path);
-	
-	ctl_notify_fd_state(NULL, f);
-	return f;
-}
-
-fd_t *fd_new_special(strseg_t name, int fdnum, bool is_const, strseg_t description) {
-	int buf_free;
-	fd_t *f, *old= fd_by_name(name);
-
-	f= fd_new(sizeof(fd_t) + name.len + 1 + description.len + 1, name);
-	if (!f) return NULL;
-	
-	if (old) fd_delete(old);
-	
-	f->type= FD_TYPE_SPECIAL;
-	f->fd= fdnum;
-	f->is_const= is_const;
-	// copy as much of path into the buffer as we can.
-	buf_free= f->size - sizeof(fd_t) - name.len - 1;
-	f->attr.file.path= append_elipses(f->buffer + name.len + 1, buf_free, description);
 	
 	ctl_notify_fd_state(NULL, f);
 	return f;
