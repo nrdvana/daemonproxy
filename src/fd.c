@@ -29,9 +29,11 @@ struct fd_s {
 // Want at least struct size, plus room for name of fd and short filesystem path
 const int min_fd_obj_size= sizeof(fd_t) + NAME_MAX * 2;
 
-fd_t *fd_pool= NULL;
+fd_t **fd_list= NULL;
+int fd_list_count= 0, fd_list_limit= 0;
 RBTree fd_by_name_index;
-fd_t *fd_free_list;
+void *fd_obj_pool= NULL;
+int fd_obj_pool_size_each= 0;
 
 void add_fd_by_name(fd_t *fd);
 void create_missing_dirs(char *path);
@@ -41,22 +43,95 @@ int fd_by_name_compare(void *data, RBTreeNode *node) {
 	return strncmp(name->data, ((fd_t *) node->Object)->buffer, name->len);
 }
 
-void fd_init(int fd_count, int size_each) {
-	int i;
-	fd_t *fd;
-	fd_pool= (fd_t*) malloc(fd_count * size_each);
-	if (!fd_pool)
-		abort();
-	memset(fd_pool, 0, fd_count*size_each);
-	fd_free_list= fd_pool;
-	for (i=0; i < fd_count; i++) {
-		fd= (fd_t*) (((char*)fd_pool) + i * size_each);
-		fd->size= size_each;
-		fd->next_free= (i+1 >= fd_count)? NULL
-			: (fd_t*) (((char*)fd_pool) + (i+1) * size_each);
-	}
-	fd_pool[fd_count-1].next_free= NULL;
+void fd_init() {
 	RBTree_Init( &fd_by_name_index, fd_by_name_compare );
+}
+
+bool fd_preallocate(int count, int size_each) {
+	assert(fd_list == NULL);
+	assert(fd_obj_pool == NULL);
+	if (!fd_list_resize(count))
+		return false;
+	
+	if (!(fd_obj_pool= malloc(count * size_each)))
+		return false;
+	fd_obj_pool_size_each= size_each;
+	for (i= 0; i < fd_count; i++)
+		fd_list[i]= ((char*) fd_pool) + size_each * i;
+	return true;
+}
+
+bool fd_list_resize(int new_limit) {
+	fd_t **new_list;
+	assert(new_limit >= fd_list_count);
+	new_list= realloc(fd_list, new_limit * sizeof(fd_t*));
+	if (!new_list)
+		return false;
+	fd_list= new_list;
+	fd_list_limit= new_limit;
+}
+
+fd_t * fd_new(int size, strseg_t name) {
+	fd_t *obj;
+	assert(size >= sizeof(fd_t) + name.len + 1);
+	// enlarge the container if needed (and not using a pool)
+	if (fd_list_count >= fd_list_limit) {
+		if (fd_obj_pool || !fd_list_resize(fd_list_limit * 2))
+			return NULL;
+	// allocate space (unless using a pool)
+	if (fd_obj_pool) {
+		size= fd_obj_pool_size_each;
+		if (size < sizeof(fd_t) + name.len + 1)
+			return NULL;
+		obj= fd_list[fd_list_count++];
+	}
+	else {
+		if (!(obj= (fd_t*) malloc(size)))
+			return false;
+		fd_list[fd_list_count++]= obj;
+	}
+	memset(obj, 0, size);
+	obj->size= size;
+	obj->type= FD_TYPE_UNDEF;
+	obj->fd= -1;
+	RBTreeNode_Init( &obj->name_index_node );
+	obj->name_index_node.Object= obj;
+	memcpy(obj->buffer, name.data, name.len);
+	obj->buffer[name.len]= '\0';
+
+	RBTree_Add( &fd_by_name_index, &obj->name_index_node, &name );
+
+	return obj;
+}
+
+// Close a named handle
+void fd_delete(fd_t *fd) {
+	// disassociate from other end of pipe, if its a pipe.
+	if (fd->type == FD_TYPE_PIPE_R || fd->type == FD_TYPE_PIPE_W) {
+		if (fd->pipe_peer)
+			fd->pipe_peer->pipe_peer= NULL;
+	}
+	// close descriptor.
+	if (fd->fd >= 0) {
+		int result= close(fd->fd);
+		log_trace("close(%d) => %d", fd->fd, result);
+	}
+	// Remove name from index
+	RBTreeNode_Prune( &fd->name_index_node );
+	// remove the pointer from fd_list (or swap, for obj pool)
+	for (i= 0; i < fd_list_count; i++) {
+		if (fd_list[i] == fd) {
+			fd_list[i]= fd_list[--fd_list_count];
+			// free the memory (unless object pool)
+			if (fd_obj_pool)
+				fd_list[fd_list_count]= fd;
+			else {
+				fd_list[fd_list_count]= NULL;
+				free(fd);
+			}
+			break;
+		}
+	}
 }
 
 const char* fd_get_name(fd_t *fd) {
@@ -91,18 +166,15 @@ bool fd_notify_state(fd_t *fd) {
 
 // Open a pipe from one named FD to another
 // returns a ref to the read end, which holds a ref to the write end.
-fd_t * fd_pipe(const char *name1, const char *name2) {
+fd_t * fd_new_pipe(int fd1, strseg_t name1, int fd2, strseg_t name2) {
 	int pair[2]= { -1, -1 };
-	fd_t *fd1= fd_by_name((strseg_t){ name1, strlen(name1) }, true);
-	fd_t *fd2= fd_by_name((strseg_t){ name2, strlen(name2) }, true);
+	fd_t *fd1, *fd2;
+	if (!(fd1= fd_by_name(name1))) fd1= fd_new(sizeof(fd_t) + name1.len + 1, name1);
+	if (!(fd2= fd_by_name(name2))) fd2= fd_new(sizeof(fd_t) + name2.len + 1, name2);
 	// If failed to allocate/find either of them, give up
 	// also fail if either of them is a constant
 	if (!fd1 || !fd2 || fd1->is_const || fd2->is_const)
 		goto fail_cleanup;
-	// Check that pipe() call succeeds
-	if (pipe(pair))
-		goto fail_cleanup;
-	log_trace("pipe => (%d, %d)", pair[0], pair[1]);
 	
 	// If fd1 is being overwritten, close it
 	if (fd1->type == FD_TYPE_UNDEF && fd1->fd >= 0) {
@@ -118,12 +190,13 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 	fd1->type= FD_TYPE_PIPE_R;
 	fd1->fd= pair[0];
 	fd1->pipe_peer= fd2;
+
 	fd2->type= FD_TYPE_PIPE_W;
 	fd2->fd= pair[1];
 	fd2->pipe_peer= fd1;
 	
-	fd_notify_state(fd1);
-	fd_notify_state(fd2);
+	ctl_notify_fd_state(NULL, fd1);
+	ctl_notify_fd_state(NULL, fd2);
 	return fd1;
 	
 	fail_cleanup:
@@ -135,54 +208,16 @@ fd_t * fd_pipe(const char *name1, const char *name2) {
 }
 
 // Open a file on the given name, possibly closing a handle by that name
-fd_t * fd_open(const char *name, char *path, char *opts) {
-	int flags, fd, n, buf_free;
-	char *start, *end;
+fd_t * fd_new_file(int fd, strseg_t name, int open_mode, int flags, strseg_t path) {
 	fd_t *fd_obj;
-	bool f_read, f_write, f_mkdir;
 	
-	fd_obj= fd_by_name((strseg_t){ name, strlen(name) }, true);
-	if (fd_obj->is_const)
+	if (!(fd_obj= fd_by_name(name)))
+		fd_obj= fd_new(sizeof(fd_t) + name.len + 1 + opts.len + 1 + path.len + 1);
+	if (!fd_obj || fd_obj->is_const)
 		return NULL;
 	
 	// Now, try to perform the open
-	#define STRMATCH(name) (strncmp(start, name, end-start) == 0)
-	flags= O_NOCTTY;
-	f_mkdir= f_read= f_write= false;
-	for (start= end= opts; *end; start= end+1) {
-		end= strchrnul(start, ',');
-		switch (*start) {
-		case 'a':
-			if (STRMATCH("append")) flags |= O_APPEND;
-			break;
-		case 'c':
-			if (STRMATCH("create")) flags |= O_CREAT;
-			break;
-		case 'm':
-			if (STRMATCH("mkdir")) f_mkdir= true;
-			break;
-		case 'r':
-			if (STRMATCH("read")) f_read= true;
-			break;
-		case 't':
-			if (STRMATCH("trunc")) flags |= O_TRUNC;
-			break;
-		case 'w':
-			if (STRMATCH("write")) f_write= true;
-			break;
-		case 'n':
-			if (STRMATCH("nonblock")) flags |= O_NONBLOCK;
-			break;
-		}
-	}
-	flags |= f_write && f_read? O_RDWR : f_write? O_WRONLY : O_RDONLY;
-	if (f_mkdir)
-		create_missing_dirs(path);
-
-	fd= open(path, flags, 0600);
-	log_trace("open => %d", fd);
-	if (fd < 0)
-		goto fail_cleanup;
+	
 	
 	// Overwrite (and possibly setup) the fd_t object
 	if (fd_obj->type != FD_TYPE_UNDEF && fd_obj->fd >= 0) {
@@ -251,46 +286,11 @@ void create_missing_dirs(char *path) {
 	}
 }
 
-// Close a named handle
-void fd_delete(fd_t *fd) {
-	// disassociate from other end of pipe, if its a pipe.
-	if (fd->type == FD_TYPE_PIPE_R || fd->type == FD_TYPE_PIPE_W) {
-		if (fd->pipe_peer)
-			fd->pipe_peer->pipe_peer= NULL;
-	}
-	// close descriptor.
-	if (fd->fd >= 0) {
-		int result= close(fd->fd);
-		log_trace("close(%d) => %d", fd->fd, result);
-	}
-	// Remove name from index
-	RBTreeNode_Prune( &fd->name_index_node );
-	// Clear the type
-	fd->type= FD_TYPE_UNDEF;
-	// and add it to the free-list.
-	fd->next_free= fd_free_list;
-	fd_free_list= fd;
-}
-
-fd_t * fd_by_name(strseg_t name, bool create) {
+fd_t * fd_by_name(strseg_t name) {
+	assert(name.len < NAME_LIMIT);
 	RBTreeSearch s= RBTree_Find( &fd_by_name_index, &name );
 	if (s.Relation == 0)
 		return (fd_t*) s.Nearest->Object;
-	if (create && fd_free_list && name.len < fd_free_list->size - sizeof(fd_t)) {
-		fd_t *ret= fd_free_list;
-		fd_free_list= fd_free_list->next_free;
-		int obj_size= ret->size;
-		memset(ret, 0, obj_size);
-		ret->size= obj_size;
-		ret->type= FD_TYPE_UNDEF;
-		ret->fd= -1;
-		memcpy(ret->buffer, name.data, name.len);
-		ret->buffer[name.len]= '\0';
-		RBTreeNode_Init( &ret->name_index_node );
-		ret->name_index_node.Object= ret;
-		RBTree_Add( &fd_by_name_index, &ret->name_index_node, &name );
-		return ret;
-	}
 	return NULL;
 }
 

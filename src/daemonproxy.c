@@ -325,3 +325,15 @@ void log_write(int level, const char *msg, ...) {
 	vfprintf(stderr, msg2, val);
 	va_end(val);
 }
+
+bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out) {
+	if (string_inout->len < 0)
+		return false;
+	tok_out->data= string_inout->data;
+	for (tok_out->len= 0; tok_out->len < string_inout->len; tok_out->len++)
+		if (tok_out->data[tok_out->len] == sep)
+			break;
+	string_inout->data+= tok_out->len + 1;
+	string_inout->len -= tok_out->len + 1;
+	return true;
+}

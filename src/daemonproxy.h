@@ -25,6 +25,8 @@ typedef struct strseg_s {
 	int len;
 } strseg_t;
 
+bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
+
 #define LOG_LEVEL_ERROR 2
 #define LOG_LEVEL_WARN 1
 #define LOG_LEVEL_INFO 0

@@ -479,6 +479,10 @@ bool ctl_state_cmd_fd_pipe(controller_t *ctl) {
 		return END_CMD( ctl_notify_error(ctl, "Expected exactly two handle names") );
 	
 	ctl->command_argv[2][-1]= '\0';
+	// Check that pipe() call succeeds
+	if (0 != pipe(pair))
+		goto fail_cleanup;
+	log_trace("pipe => (%d, %d)", pair[0], pair[1]);
 	if (!(f= fd_pipe(ctl->command_argv[1], ctl->command_argv[2])))
 		return END_CMD( ctl_notify_error(ctl, "Failed to create pipe") );
 	
@@ -489,6 +493,47 @@ bool ctl_state_cmd_fd_open(controller_t *ctl) {
 	fd_t *f;
 	if (ctl->command_argc != 4)
 		return END_CMD( ctl_notify_error(ctl, "Expected handle name, flags, filename") );
+
+	#define STRMATCH(name) (strncmp(start, name, end-start) == 0)
+	flags= O_NOCTTY;
+	f_mkdir= f_read= f_write= false;
+	strseg_t cur, remainder= opts;
+	while (strseg_next_tok(&remainder, &cur)) {
+	
+	for (start= end= opts; *end; start= end+1) {
+		end= strchrnul(start, ',');
+		switch (*start) {
+		case 'a':
+			if (STRMATCH("append")) flags |= O_APPEND;
+			break;
+		case 'c':
+			if (STRMATCH("create")) flags |= O_CREAT;
+			break;
+		case 'm':
+			if (STRMATCH("mkdir")) f_mkdir= true;
+			break;
+		case 'r':
+			if (STRMATCH("read")) f_read= true;
+			break;
+		case 't':
+			if (STRMATCH("trunc")) flags |= O_TRUNC;
+			break;
+		case 'w':
+			if (STRMATCH("write")) f_write= true;
+			break;
+		case 'n':
+			if (STRMATCH("nonblock")) flags |= O_NONBLOCK;
+			break;
+		}
+	}
+	flags |= f_write && f_read? O_RDWR : f_write? O_WRONLY : O_RDONLY;
+	if (f_mkdir)
+		create_missing_dirs(path);
+
+	fd= open(path, flags, 0600);
+	log_trace("open => %d", fd);
+	if (fd < 0)
+		goto fail_cleanup;
 
 	ctl->command_argv[2][-1]= '\0';
 	ctl->command_argv[3][-1]= '\0';
