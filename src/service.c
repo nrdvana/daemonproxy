@@ -79,9 +79,11 @@ const char * svc_get_name(service_t *svc) {
 	return svc->buffer;
 }
 
-bool svc_check_name(const char *name) {
-	const char *p= name;
-	for (; *p; p++)
+bool svc_check_name(strseg_t name) {
+	const char *p, *lim;
+	if (name.len >= NAME_LIMIT)
+		return false;
+	for (p= name.data, lim= p+name.len; p < lim; p++)
 		if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '-'))
 			return false;
 	return true;
