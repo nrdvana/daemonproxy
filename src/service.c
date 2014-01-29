@@ -34,7 +34,7 @@ struct service_s {
 
 // Define a sensible minimum for service size.
 // Want at least struct size, plus room for name, small argv list, and short names of file descriptors
-const int min_service_obj_size= sizeof(service_t) + NAME_MAX + 128;
+const int min_service_obj_size= sizeof(service_t) + NAME_LIMIT + 128;
 
 void *svc_pool= NULL;
 RBTree svc_by_name_index;
@@ -118,23 +118,22 @@ int64_t svc_get_reap_ts(service_t *svc) {
  * This string is concatenated with argv and fds in a single buffer.
  * This is slightly expensive, but typically happens only once per service.
  */
-bool svc_set_meta(service_t *svc, const char *tsv_fields) {
-	int new_meta_len= strlen(tsv_fields);
-	if (svc->name_len + 1 + new_meta_len + 1 + svc->argv_len + 1 + svc->fds_len + 1
+bool svc_set_meta(service_t *svc, strseg_t tsv_fields) {
+	if (svc->name_len + 1 + tsv_fields.len + 1 + svc->argv_len + 1 + svc->fds_len + 1
 		> svc->size - sizeof(service_t)
 	)
 		return false;
 	// memmove the argv and fds strings to the new end of this string
-	if (new_meta_len != svc->meta_len)
-		memmove(svc->buffer + svc->name_len + 1 + new_meta_len + 1,
+	if (tsv_fields.len != svc->meta_len)
+		memmove(svc->buffer + svc->name_len + 1 + tsv_fields.len + 1,
 			svc->buffer + svc->name_len + 1 + svc->meta_len + 1,
 			svc->argv_len + 1 + svc->fds_len + 1);
-	memcpy(svc->buffer + svc->name_len + 1, tsv_fields, new_meta_len+1);
-	svc->meta_len= new_meta_len;
+	memcpy(svc->buffer + svc->name_len + 1, tsv_fields.data, tsv_fields.len+1);
+	svc->meta_len= tsv_fields.len;
 	svc_reparse_meta(svc);
 	// unless NDEBUG:
 		svc_check(svc);
-		assert(strcmp(svc_get_meta(svc), tsv_fields) == 0);
+		assert(strncmp(svc_get_meta(svc), tsv_fields.data, tsv_fields.len) == 0);
 	return true;
 }
 
@@ -202,23 +201,22 @@ void svc_reparse_meta(service_t *svc) {
  * This string is concatenated with meta and fds in a single buffer.
  * This is slightly expensive, but typically happens only once per service.
  */
-bool svc_set_argv(service_t *svc, const char *tsv_fields) {
-	int new_argv_len= strlen(tsv_fields);
+bool svc_set_argv(service_t *svc, strseg_t new_argv) {
 	// Check whether new value will fit in buffer
-	if (svc->name_len + 1 + svc->meta_len + 1 + new_argv_len + 1 + svc->fds_len + 1
+	if (svc->name_len + 1 + svc->meta_len + 1 + new_argv.len + 1 + svc->fds_len + 1
 		> svc->size - sizeof(service_t)
 	)
 		return false;
 	// memmove the "fds" string to the new end of this string
-	if (new_argv_len != svc->argv_len)
-		memmove(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + new_argv_len + 1,
+	if (new_argv.len != svc->argv_len)
+		memmove(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + new_argv.len + 1,
 			svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
 			svc->fds_len + 1);
-	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1, tsv_fields, new_argv_len+1);
-	svc->argv_len= new_argv_len;
+	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1, new_argv.data, new_argv.len+1);
+	svc->argv_len= new_argv.len;
 	// unless NDEBUG:
 		svc_check(svc);
-		assert(strcmp(svc_get_argv(svc), tsv_fields) == 0);
+		assert(strncmp(svc_get_argv(svc), new_argv.data, new_argv.len) == 0);
 	return true;
 }
 
@@ -226,10 +224,9 @@ bool svc_set_argv(service_t *svc, const char *tsv_fields) {
  * This string is concatenated with meta and argv in a single buffer.
  * This is slightly expensive, but typically happens only once per service.
  */
-bool svc_set_fds(service_t *svc, const char *tsv_fields) {
-	int new_fds_len= strlen(tsv_fields);
+bool svc_set_fds(service_t *svc, strseg_t new_fds) {
 	// Check whether new value will fit in buffer
-	if (svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + new_fds_len + 1
+	if (svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + new_fds.len + 1
 		> svc->size - sizeof(service_t)
 	)
 		return false;
@@ -237,11 +234,11 @@ bool svc_set_fds(service_t *svc, const char *tsv_fields) {
 	
 	// It's the last field, so no memmove needed
 	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
-		tsv_fields, new_fds_len+1);
-	svc->fds_len= new_fds_len;
+		new_fds.data, new_fds.len+1);
+	svc->fds_len= new_fds.len;
 	// unless NDEBUG:
 		svc_check(svc);
-		assert(strcmp(svc_get_fds(svc), tsv_fields) == 0);
+		assert(strncmp(svc_get_fds(svc), new_fds.data, new_fds.len) == 0);
 	return true;
 }
 
@@ -419,7 +416,7 @@ void svc_do_exec(service_t *svc) {
 		else if (*p == '-' && p2 - p == 1)
 			fd_list[fd_count++]= -1; // dash means "closed"
 		else {
-			fd= fd_by_name((strseg_t){ p, p2-p }, false);
+			fd= fd_by_name((strseg_t){ p, p2-p });
 			if (!fd) {
 				log_error("file descriptor \"%.*s\" does not exist", p2-p, p);
 				abort();
@@ -483,28 +480,26 @@ void svc_notify_state(service_t *svc) {
 	ctl_notify_svc_state(NULL, svc->buffer, svc->start_time, svc->reap_time, svc->wait_status, svc->pid);
 }
 
-service_t *svc_by_name(const char *name, bool create) {
+service_t *svc_by_name(strseg_t name, bool create) {
 	service_t *svc;
-	int n;
 	
-	RBTreeSearch s= RBTree_Find( &svc_by_name_index, name );
+	RBTreeSearch s= RBTree_Find( &svc_by_name_index, &name );
 	if (s.Relation == 0)
 		return (service_t*) s.Nearest->Object;
 	// if create requested, create a new service by this name
 	// (if name is valid)
-	n= strlen(name);
-	if (create && svc_free_list && n > 0 && n + 4 < svc_free_list->size - sizeof(service_t)) {
+	if (create && svc_free_list && svc_check_name(name)) {
 		svc= svc_free_list;
 		svc_free_list= svc->next_free;
 		svc->state= SVC_STATE_DOWN;
-		svc->name_len= n;
-		memcpy(svc->buffer, name, n+1);
+		svc->name_len= name.len;
+		memcpy(svc->buffer, name.data, name.len);
 		svc->meta_len= 0;
-		svc->buffer[n+1]= '\0';
+		svc->buffer[name.len+1]= '\0';
 		svc->argv_len= 0;
-		svc->buffer[n+2]= '\0';
+		svc->buffer[name.len+2]= '\0';
 		svc->fds_len= 0;
-		svc->buffer[n+3]= '\0';
+		svc->buffer[name.len+3]= '\0';
 		//svc->env_count= 0;
 		svc->active_prev_ptr= NULL;
 		svc->active_next= NULL;
@@ -543,14 +538,14 @@ service_t *svc_by_pid(pid_t pid) {
 	return NULL;
 }
 
-service_t * svc_iter_next(service_t *svc, const char *from_name) {
+service_t * svc_iter_next(service_t *svc, strseg_t from_name) {
 	RBTreeNode *node;
-	log_trace("next service from %p or \"%s\"", svc, from_name? from_name : "");
+	log_trace("next service from %p or \"%.*s\"", svc, from_name.len, from_name.data);
 	if (svc) {
 		node= RBTreeNode_GetNext(&svc->name_index_node);
 	} else {
-		RBTreeSearch s= RBTree_Find( &svc_by_name_index, from_name );
-		log_trace("find(\"%s\"): { %d, %p }", from_name, s.Relation, s.Nearest);
+		RBTreeSearch s= RBTree_Find( &svc_by_name_index, &from_name );
+		log_trace("find(\"%.*s\"): { %d, %p }", from_name.len, from_name.data, s.Relation, s.Nearest);
 		if (s.Nearest == NULL)
 			node= NULL;
 		else if (s.Relation <= 0)

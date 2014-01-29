@@ -32,6 +32,9 @@ RBTree fd_by_name_index;
 void *fd_obj_pool= NULL;
 int fd_obj_pool_size_each= 0;
 
+// Set minimum FD size of struct + fd name + 31 chars for partial file name
+const int min_fd_obj_size= sizeof(fd_t) + NAME_LIMIT + 32;
+
 bool fd_list_resize(int new_limit);
 void add_fd_by_name(fd_t *fd);
 void create_missing_dirs(char *path);
@@ -191,8 +194,6 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 	f2->fd= num2;
 	f2->attr.pipe.peer= f1;
 	
-	ctl_notify_fd_state(NULL, f1);
-	ctl_notify_fd_state(NULL, f2);
 	return f1;
 }
 
@@ -219,7 +220,6 @@ fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path) {
 	buf_free= f->size - sizeof(fd_t) - name.len - 1;
 	f->attr.file.path= append_elipses(f->buffer + name.len + 1, buf_free, path);
 	
-	ctl_notify_fd_state(NULL, f);
 	return f;
 }
 

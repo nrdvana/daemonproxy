@@ -379,8 +379,7 @@ bool ctl_state_cmd_svc_args_set(controller_t *ctl) {
 	
 	if (!svc_set_argv(svc, line))
 		return END_CMD( ctl_notify_error(ctl, "unable to set argv for service \"%s\"", svc_get_name(svc)) );
-	// If reporting the result above fails, the whole function will be re-run, but we don't care
-	// since that isn't a common case and isn't too expensive.
+	ctl_notify_svc_argv(NULL, svc_get_name(svc), svc_get_argv(svc));
 	return END_CMD(true);
 }
 
@@ -409,6 +408,7 @@ bool ctl_state_cmd_svc_meta_set(controller_t *ctl) {
 	if (!svc_set_meta(svc, line))
 		return END_CMD( ctl_notify_error(ctl, "Unable to set meta for service \"%s\"", svc_get_name(svc)) );
 
+	ctl_notify_svc_meta(NULL, svc_get_name(svc), svc_get_meta(svc));
 	return END_CMD(true);
 }
 
@@ -426,6 +426,7 @@ bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
 		if (!svc_apply_meta(svc, key, item))
 			return END_CMD( ctl_notify_error(ctl, "Out of space for metadata change to service \"%s\"", svc_get_name(svc)) );
 	}
+	ctl_notify_svc_meta(NULL, svc_get_name(svc), svc_get_meta(svc));
 	return END_CMD(true);
 }
 
@@ -441,7 +442,8 @@ bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
 		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
 
 	if (!svc_set_fds(svc, line))
-		return END_CMD( ctl_notify_error(ctl, "Unable to set argv for service \"%s\"", svc_get_name(svc)) );
+		return END_CMD( ctl_notify_error(ctl, "Unable to set file descriptors for service \"%s\"", svc_get_name(svc)) );
+	ctl_notify_svc_meta(NULL, svc_get_name(svc), svc_get_fds(svc));
 	return END_CMD(true);
 }
 
@@ -498,15 +500,17 @@ bool ctl_state_cmd_fd_pipe(controller_t *ctl) {
 		close(pair[1]);
 		return END_CMD( ctl_notify_error(ctl, "Failed to create pipe") );
 	}
+	
+	ctl_notify_fd_state(NULL, fd);
+	ctl_notify_fd_state(NULL, fd_get_pipe_peer(fd));
 	return END_CMD(true);
 }
-
-
 
 bool ctl_state_cmd_fd_open(controller_t *ctl) {
 	bool notified;
 	int f, open_flags;
 	fd_flags_t flags;
+	fd_t *fd;
 	strseg_t fdname, opts, opt, path, line= ctl->command_arg_str;
 
 	if (!ctl_extract_fdname_arg(ctl, &line, &fdname, false, true, &notified))
@@ -564,11 +568,13 @@ bool ctl_state_cmd_fd_open(controller_t *ctl) {
 	if (f < 0)
 		return END_CMD( ctl_notify_error(ctl, "Open failed: %s", strerror(errno)) );
 
-	if (!fd_new_file(fdname, f, flags, path)) {
+	fd= fd_new_file(fdname, f, flags, path);
+	if (!fd) {
 		close(f);
 		return END_CMD( ctl_notify_error(ctl, "Unable to create named file descriptor") );
 	}
 
+	ctl_notify_fd_state(NULL, fd);
 	return END_CMD(true);
 }
 

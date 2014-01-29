@@ -7,7 +7,7 @@ const char *main_exec_on_exit= NULL;
 bool main_use_stdin= false;
 bool main_mlockall= false;
 int  main_fd_pool_count= -1;
-int  main_fd_pool_obj_size= -1;
+int  main_fd_pool_size_each= -1;
 bool main_failsafe= false;
 int main_loglevel= LOG_LEVEL_INFO;
 wake_t main_wake;
@@ -17,6 +17,7 @@ wake_t *wake= &main_wake;
 // Parse options and apply to global vars; return false if fails
 void parse_opts(char **argv);
 void parse_option(char shortname, char* longname, char ***argv);
+int parse_size(const char *str, char **endp);
 
 int main(int argc, char** argv) {
 	int wstat, f;
@@ -26,6 +27,7 @@ int main(int argc, char** argv) {
 	service_t *svc;
 	controller_t *ctl;
 	wake_t wake_instance;
+	fd_flags_t fdflags;
 	
 	memset(&wake_instance, 0, sizeof(wake_instance));
 	wake= &wake_instance;
@@ -46,11 +48,6 @@ int main(int argc, char** argv) {
 	if (main_fd_pool_count > 0 && main_fd_pool_size_each > 0)
 		if (!fd_preallocate(main_fd_pool_count, main_fd_pool_size_each))
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
-	// Initialize service object pool and indexes
-	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
-	// Initialize controller object pool
-	ctl_init();
-	
 	// A handle to dev/null is mandatory...
 	f= open("/dev/null", O_RDWR);
 	log_trace("open(/dev/null) => %d", f);
@@ -60,9 +57,15 @@ int main(int argc, char** argv) {
 		log_error("Will use stderr instead of /dev/null!");
 		f= 2;
 	}
-	
-	fd_assign("null", f, true, "/dev/null");
+	fdflags= (fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true };
+	if (!fd_new_file((strseg_t){"null",4}, f, fdflags, (strseg_t){"/dev/null",9}))
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't create 'null' file descriptor");
 
+	// Initialize service object pool and indexes
+	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
+	// Initialize controller object pool
+	ctl_init();
+	
 	if (main_cfgfile) {
 		if (0 == strcmp(main_cfgfile, "-"))
 			config_on_stdin= true;
@@ -211,7 +214,7 @@ void set_opt_exec_on_exit(char **argv) {
 	main_exec_on_exit= argv[0];
 }
 void set_opt_fd_prealloc(char **argv) {
-	int n, m;
+	int n, m= FD_OBJ_SIZE;
 	char *end= NULL;
 	n= strtol(argv[0], &end, 10);
 	
@@ -221,11 +224,16 @@ void set_opt_fd_prealloc(char **argv) {
 		fatal(EXIT_BAD_OPTIONS, "Expected 'N' or 'NxM' where N and M are integers");
 	
 	if (n < FD_POOL_SIZE_MIN) {
-		fatal(EXIT_BAD_OPTIONS, "At least 6 fd objects required");
+		log_warn("At least %d fd objects required; using minimum", FD_POOL_SIZE_MIN);
 		n= FD_POOL_SIZE_MIN;
 	} else if (n > FD_POOL_SIZE_MAX) {
-		fatal(EXIT_BAD_OPTIONS, "N exceeds max number of allowed file descriptors");
+		log_warn("fd pool size exceeds max number of allowed file descriptors; limiting to %d", FD_POOL_SIZE_MAX);
 		n= FD_POOL_SIZE_MAX;
+	}
+	
+	if (m < min_fd_obj_size) {
+		log_warn("fd obj size increased to minimum of %d", min_fd_obj_size);
+		m= min_fd_obj_size;
 	}
 	
 	main_fd_pool_count= n;
@@ -278,7 +286,7 @@ void parse_option(char shortname, char* longname, char ***argv) {
  *
  */
 int parse_size(const char *str, char **endp) {
-	int i, mul= 1, factor= 1024;
+	long i, mul= 1, factor= 1024;
 	i= strtol(str, endp, 10);
 	if ((*endp)[0] && (*endp)[1] == 'B')
 		factor= 1000;
@@ -289,20 +297,21 @@ int parse_size(const char *str, char **endp) {
 		break;
 	case 'b': case 'B': (*endp)++; break;
 	case 't': case 'T': mul= LONG_MAX;
-	default:
+	default: break;
 	}
 	if (mul > 1) {
 		// consume /i?B/ at the end of the suffix
-		if ((*endp)[0] == 'i' && (*endp)[1] == 'B') (*endp) += 2;
-		else if (*endp)[0] == 'B') (*endp)++;
-		// make sure multiplied value fits in 'int'
-		if (i < 0 || i * mul / mul != i) {
-			errno= ERANGE;
-			return i > 0? LONG_MAX : 0;
-		}
-		i *= mul;
+		if ((*endp)[0] == 'i' && (*endp)[1] == 'B')
+			(*endp) += 2;
+		else if ((*endp)[0] == 'B')
+			(*endp)++;
 	}
-	return i;
+	// make sure multiplied value fits in 'int'
+	if (i < 0 || i * mul > INT_MAX || i * mul / mul != i) {
+		errno= ERANGE;
+		return i > 0? INT_MAX : 0;
+	}
+	return (int) i;
 }
 
 void show_help(char **argv) {
