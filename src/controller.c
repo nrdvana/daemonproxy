@@ -19,13 +19,12 @@ struct controller_s {
 	bool send_overflow;
 	int64_t send_abort_ts;
 	
-	const char* filename;
+	int line_len;             // length of current TSV line in recv_buf
+	strseg_t command_name;    // strseg of command name (within recv_buf)
+	strseg_t command_arg_str; // TSV string for command to process (within recv_buf)
+	int command_substate;     // set to 0 at start of each command
 	
-	int command_len;
-	int command_argc;
-	char * command_argv[8];
-	
-	char statedump_current[NAME_MAX+1];
+	char statedump_current[NAME_LIMIT];
 	int  statedump_part;
 };
 
@@ -40,8 +39,6 @@ STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
 STATE(ctl_state_cmd_statedump,         "statedump");
-STATE(ctl_state_cmd_statedump_fd);
-STATE(ctl_state_cmd_statedump_svc);
 STATE(ctl_state_cmd_svc_args_set,      "service.args");
 STATE(ctl_state_cmd_svc_meta,          "service.meta");
 STATE(ctl_state_cmd_svc_meta_set,      "service.meta.set");
@@ -138,14 +135,14 @@ static inline bool end_cmd_(controller_t *ctl, bool final_cond) {
 // handling for long lines (and EOF, when reading the config file)
 bool ctl_state_read_command(controller_t *ctl) {
 	int prev;
-	char *eol, *p;
+	char *eol, *p, *p2;
 	const ctl_command_table_entry_t *cmd;
 
 	// clean up old command, if any.
-	if (ctl->command_len > 0) {
-		ctl->recv_buf_pos -= ctl->command_len;
-		memmove(ctl->recv_buf, ctl->recv_buf + ctl->command_len, ctl->recv_buf_pos);
-		ctl->command_len= 0;
+	if (ctl->line_len > 0) {
+		ctl->recv_buf_pos -= ctl->line_len;
+		memmove(ctl->recv_buf, ctl->recv_buf + ctl->line_len, ctl->recv_buf_pos);
+		ctl->line_len= 0;
 	}
 	
 	// see if we have a full line in the input.  else read some more.
@@ -195,7 +192,7 @@ bool ctl_state_read_command(controller_t *ctl) {
 	}
 
 	// We now have a complete line
-	ctl->command_len= eol - ctl->recv_buf + 1;
+	ctl->line_len= eol - ctl->recv_buf + 1;
 	*eol= '\0';
 	log_debug("controller got line: \"%s\"", ctl->recv_buf);
 	// Ignore overflow lines, empty lines, lines starting with #, and lines that start with whitespace
@@ -214,20 +211,19 @@ bool ctl_state_read_command(controller_t *ctl) {
 		ctl->state_fn= ctl_state_cmd_overflow;
 	// else try to parse and dispatch it
 	else {
-		// as a convenience to the command, parse out its first 8 arguments (tab delimited)
-		p= ctl->recv_buf;
-		ctl->command_argv[0]= p;
-		for (ctl->command_argc= 1; ctl->command_argc < sizeof(ctl->command_argv)/sizeof(*ctl->command_argv); ctl->command_argc++) {
-			p= strchr(p, '\t');
-			if (!p) break;
-			ctl->command_argv[ctl->command_argc]= ++p;
-		}
+		// break off the first N tsv fields into an argv[] array
+		p= p2= ctl->recv_buf;
+		while (*p2 != '\t' && p2 < eol) p2++;
+		*p2= '\0';
+		ctl->command_name= (strseg_t){ p, p2-p };
+		if (p2 < eol) p2++;
+		ctl->command_arg_str= (strseg_t){ p2, eol - p2 };
 		// Now see if we can find the command
-		if ((cmd= ctl_find_command(ctl->recv_buf))) {
+		if ((cmd= ctl_find_command(p)))
 			ctl->state_fn= cmd->state_fn;
-		}
 		else
 			ctl->state_fn= ctl_state_cmd_unknown;
+		ctl->command_substate= 0;
 	}
 	return true;
 }
@@ -241,12 +237,8 @@ bool ctl_state_cmd_overflow(controller_t *ctl) {
 
 bool ctl_state_cmd_unknown(controller_t *ctl) {
 	// find command string
-	const char *p= strchr(ctl->recv_buf, '\t');
-	int n= p? p - ctl->recv_buf : strlen(ctl->recv_buf);
-	if (!ctl_notify_error(ctl, "Unknown command: %.*s", n, ctl->recv_buf))
-		return false;
-	ctl->state_fn= ctl_state_read_command;
-	return true;
+	return END_CMD( ctl_notify_error(ctl, "Unknown command: %.*s",
+		ctl->command_name.len, ctl->command_name.data) );
 }
 
 bool ctl_state_cmd_exit(controller_t *ctl) {
@@ -266,67 +258,63 @@ bool ctl_state_cmd_terminate(controller_t *ctl) {
 /** Statedump command, part 1: Initialize vars and pass to part 2.
  */
 bool ctl_state_cmd_statedump(controller_t *ctl) {
-	ctl->statedump_current[0]= '\0';
-	ctl->statedump_part= 0;
-	// Dump FDs first
-	ctl->state_fn= ctl_state_cmd_statedump_fd;
-	return true;
-}
-
-/** Statedump command, part 2: iterate fd objects and dump each one.
- * Uses an iterator of fd_t's name so that if fds are creeated or destroyed during our
- * iteration, we can safely resume.  (and this iteration could be idle for a while if
- * the controller script doesn't read its pipe)
- */
-bool ctl_state_cmd_statedump_fd(controller_t *ctl) {
 	fd_t *fd= NULL;
-	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
-		if (!fd_notify_state(fd)) {
-			// if state dump couldn't complete (output buffer full)
-			//  save our position to resume later
-			strcpy(ctl->statedump_current, fd_get_name(fd)); // length of name has already been checked
-			return false;
-		}
+	service_t *svc= NULL;
+	if (ctl->command_substate > 2) {
+		// resume the while loop where we left off, if service still exists
+		svc= svc_by_name((strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }, false);
+		if (!svc) ctl->command_substate= 2;
 	}
-	ctl->state_fn= ctl_state_cmd_statedump_svc;
-	ctl->statedump_current[0]= '\0';
-	ctl->statedump_part= 0;
-	return true;
-}
-
-/** Statedump command, part 3: iterate services and dump each one.
- * Like part 2 above, except a service has 4 lines of output, and we need to be able to resume
- * if a full buffer interrupts us half way through one service.
- */
-bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
-	service_t *svc= svc_by_name(ctl->statedump_current, false);
-	if (!svc) ctl->statedump_part= 0;
-	switch (ctl->statedump_part) {
+	
+	switch (ctl->command_substate) {
 	case 0:
-		while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
+		ctl->statedump_current[0]= '\0';
+		ctl->command_substate= 1;
+	case 1:
+		/* Statedump command, part 1: iterate fd objects and dump each one.
+		 * Uses an iterator of fd_t's name so that if fds are creeated or destroyed during our
+		 * iteration, we can safely resume.  (and this iteration could be idle for a while if
+		 * the controller script doesn't read its pipe)
+		 */
+		while ((fd= fd_iter_next(fd, (strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }))) {
+			if (!ctl_notify_fd_state(ctl, fd)) {
+				// if state dump couldn't complete (output buffer full)
+				//  save our position to resume later
+				strcpy(ctl->statedump_current, fd_get_name(fd)); // length of name has already been checked
+				return false;
+			}
+		}
+		ctl->statedump_current[0]= '\0';
+		ctl->command_substate= 2;
+	case 2:
+		/* Statedump command, part 2: iterate services and dump each one.
+		 * Like part 2 above, except a service has 4 lines of output, and we need to be able to resume
+		 * if a full buffer interrupts us half way through one service.
+		 */
+		while ((svc= svc_iter_next(svc, (strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }))) {
 			log_debug("service iter = %s", svc_get_name(svc));
 			svc_check(svc);
 			strcpy(ctl->statedump_current, svc_get_name(svc)); // length of name has already been checked
-	case 1:
+	case 3:
 			if (!ctl_notify_svc_state(ctl, svc_get_name(svc), svc_get_up_ts(svc),
 					svc_get_reap_ts(svc), svc_get_pid(svc), svc_get_wstat(svc))
 			) {
-				ctl->statedump_part= 1;
-				return false;
-			}
-	case 2:
-			if (!ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc))) {
-				ctl->statedump_part= 2;
-				return false;
-			}
-	case 3:
-			if (!ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc))) {
-				ctl->statedump_part= 3;
+				ctl->command_substate= 3;
 				return false;
 			}
 	case 4:
+			if (!ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc))) {
+				ctl->command_substate= 4;
+				return false;
+			}
+	case 5:
+			if (!ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc))) {
+				ctl->command_substate= 5;
+				return false;
+			}
+	case 6:
 			if (!ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc))) {
-				ctl->statedump_part= 4;
+				ctl->command_substate= 6;
 				return false;
 			}
 		}
@@ -334,107 +322,127 @@ bool ctl_state_cmd_statedump_svc(controller_t *ctl) {
 	return END_CMD(true);
 }
 
+bool ctl_extract_svc_arg(controller_t *ctl, strseg_t *line, service_t **svc, bool create, bool *notified) {
+	strseg_t name;
+	if (!strseg_tok_next(line, '\t', &name)) {
+		*notified= ctl_notify_error(ctl, "Missing service name");
+		return false;
+	}
+	if (!svc_check_name(name)) {
+		*notified= ctl_notify_error(ctl, "Invalid service name: \"%.*s\"", name.len, name.data);
+		return false;
+	}
+	if (!( *svc= svc_by_name(name, create) )) {
+		*notified= create? ctl_notify_error(ctl, "Unable to create new service")
+				: ctl_notify_error(ctl, "No such service");
+		return false;
+	}
+	return true;
+}
+
+bool ctl_extract_fdname_arg(controller_t *ctl, strseg_t *line, strseg_t *name, bool existing, bool assignable, bool *notified) {
+	fd_t *fd;
+	if (!strseg_tok_next(line, '\t', name)) {
+		*notified= ctl_notify_error(ctl, "Missing file descriptor name");
+		return false;
+	}
+	if (!fd_check_name(*name)) {
+		*notified= ctl_notify_error(ctl, "Invalid file descriptor name: \"%.*s\"", name->len, name->data);
+		return false;
+	}
+	fd= fd_by_name(*name);
+	if (assignable && fd && fd_get_flags(fd).is_const) {
+		*notified= ctl_notify_error(ctl, "File descriptor \"%s\" cannot be altered", fd_get_name(fd));
+		return false;
+	}
+	if (existing && !fd) {
+		*notified= ctl_notify_error(ctl, "No such file descriptor: \"%s\"", fd_get_name(fd));
+		return false;
+	}
+	return true;
+}
+
 /** service.args command
  * Set the argv for a service object
  * Also report the state change when done.
  */
 bool ctl_state_cmd_svc_args_set(controller_t *ctl) {
-	if (ctl->command_argc < 2)
-		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
+	service_t *svc;
+	bool notified;
+	strseg_t line= ctl->command_arg_str;
 	
-	if (ctl->command_argc < 3)
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
+		return END_CMD(notified);
+	
+	if (line.len < 0)
 		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
 	
-	ctl->command_argv[2][-1]= '\0'; // terminate service name
-	if (!svc_check_name(ctl->command_argv[1]))
-		return END_CMD( ctl_notify_error(ctl, "Invalid service name: \"%s\"", ctl->command_argv[1]) );
-	
-	service_t *svc= svc_by_name(ctl->command_argv[1], true);
-	if (svc_set_argv(svc, ctl->command_argv[2]))
-		return END_CMD( ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc)) );
-	else
-		return END_CMD( ctl_notify_error(ctl, "unable to set argv for service \"%s\"", ctl->command_argv[1]) );
+	if (!svc_set_argv(svc, line))
+		return END_CMD( ctl_notify_error(ctl, "unable to set argv for service \"%s\"", svc_get_name(svc)) );
 	// If reporting the result above fails, the whole function will be re-run, but we don't care
 	// since that isn't a common case and isn't too expensive.
+	return END_CMD(true);
 }
 
 bool ctl_state_cmd_svc_meta(controller_t *ctl) {
-	if (ctl->command_argc < 2)
-		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
-	if (ctl->command_argc > 2)
-		return END_CMD( ctl_notify_error(ctl, "Unexpected additional arguments") );
-	service_t *svc= svc_by_name(ctl->command_argv[1], false);
-	if (!svc)
-		return END_CMD( ctl_notify_error(ctl, "No such service") );
+	service_t *svc;
+	bool notified;
+	strseg_t line= ctl->command_arg_str;
+	
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
+		return END_CMD(notified);
+	
 	return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
 }
 
 bool ctl_state_cmd_svc_meta_set(controller_t *ctl) {
-	if (ctl->command_argc < 2)
-		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
+	service_t *svc;
+	bool notified;
+	strseg_t line= ctl->command_arg_str;
 	
-	if (ctl->command_argc < 3)
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
+		return END_CMD(notified);
+	
+	if (line.len < 0)
 		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
-	
-	ctl->command_argv[2][-1]= '\0'; // terminate service name
-	if (!svc_check_name(ctl->command_argv[1]))
-		return END_CMD( ctl_notify_error(ctl, "Invalid service name: \"%s\"", ctl->command_argv[1]) );
-	
-	service_t *svc= svc_by_name(ctl->command_argv[1], true);
-	if (svc_set_meta(svc, ctl->command_argv[2]))
-		return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
-	else
-		return END_CMD( ctl_notify_error(ctl, "unable to set meta for service \"%s\"", ctl->command_argv[1]) );
-	// If reporting the result above fails, the whole function will be re-run, but we don't care
-	// since that isn't a common case and isn't too expensive.
+
+	if (!svc_set_meta(svc, line))
+		return END_CMD( ctl_notify_error(ctl, "Unable to set meta for service \"%s\"", svc_get_name(svc)) );
+
+	return END_CMD(true);
 }
 
 bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
-	char *p, *p2, *v;
-	
-	if (ctl->command_argc < 2)
-		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
-	if (ctl->command_argc == 2)
-		return true; // no changes? no status change.
-	ctl->command_argv[2][-1]= '\0'; // terminate service name
-	if (!svc_check_name(ctl->command_argv[1]))
-		return END_CMD( ctl_notify_error(ctl, "Invalid service name: \"%s\"", ctl->command_argv[1]) );
-	service_t *svc= svc_by_name(ctl->command_argv[1], true);
-	// Apply each item in the TSV list
-	p= p2= ctl->command_argv[2];
-	while (*p2) {
-		while (*p2 && *p2 != '\t') p2++;
-		v= p;
-		while (v < p2 && *v != '=') v++;
-		if (*v != '=')
-			return END_CMD( ctl_notify_error(ctl, "Invalid metadata token (missing '=')") );
-		v++;
-		if (!svc_apply_meta(svc, (strseg_t){ p, v-p-1 }, (strseg_t){ v, p2-v }))
-			return END_CMD( ctl_notify_error(ctl, "Out of space for metadata change to service \"%s\"", ctl->command_argv[1]) );
-		if (*p2)
-			p= ++p2;
+	service_t *svc;
+	bool notified;
+	strseg_t item, key, line= ctl->command_arg_str;
+
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
+		return END_CMD(notified);
+
+	while (strseg_tok_next(&line, '\t', &item)) {
+		if (!strseg_tok_next(&item, '=', &key))
+			return END_CMD( ctl_notify_error(ctl, "Invalid metadata token \"%.*s\" (missing '=')", item.len, item.data) );
+		if (!svc_apply_meta(svc, key, item))
+			return END_CMD( ctl_notify_error(ctl, "Out of space for metadata change to service \"%s\"", svc_get_name(svc)) );
 	}
-	return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
+	return END_CMD(true);
 }
 
 bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
-	if (ctl->command_argc < 2)
-		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
+	service_t *svc;
+	bool notified;
+	strseg_t line= ctl->command_arg_str;
 	
-	if (ctl->command_argc < 3)
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
+		return END_CMD(notified);
+	
+	if (line.len < 0)
 		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
-	
-	ctl->command_argv[2][-1]= '\0'; // terminate service name
-	if (!svc_check_name(ctl->command_argv[1]))
-		return END_CMD( ctl_notify_error(ctl, "Invalid service name: \"%s\"", ctl->command_argv[1]) );
-	
-	service_t *svc= svc_by_name(ctl->command_argv[1], true);
-	if (svc_set_fds(svc, ctl->command_argv[2]))
-		return END_CMD( ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc)) );
-	else
-		return END_CMD( ctl_notify_error(ctl, "unable to set argv for service \"%s\"", ctl->command_argv[1]) );
-	// If reporting the result above fails, the whole function will be re-run, but we don't care
-	// since that isn't a common case and isn't too expensive.
+
+	if (!svc_set_fds(svc, line))
+		return END_CMD( ctl_notify_error(ctl, "Unable to set argv for service \"%s\"", svc_get_name(svc)) );
+	return END_CMD(true);
 }
 
 /** service.exec command
@@ -445,100 +453,121 @@ bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
 bool ctl_state_cmd_svc_start(controller_t *ctl) {
 	const char *argv;
 	char *endp;
-	int64_t wake_timestamp;
-	if (ctl->command_argc < 2)
-		return END_CMD( ctl_notify_error(ctl, "Missing service name") );
+	int64_t starttime_ts;
+	service_t *svc;
+	bool notified;
+	strseg_t starttime, line= ctl->command_arg_str;
 	
-	if (ctl->command_argc > 2) {
-		if (ctl->command_argc > 3)
-			return END_CMD( ctl_notify_error(ctl, "Too many arguments") );
-		ctl->command_argv[2][-1]= '\0'; // terminate service name
-		
-		wake_timestamp= strtoll(ctl->command_argv[2], &endp, 10) << 32;
-		if (*endp)
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
+		return END_CMD(notified);
+	
+	// Optional timestamp for service start
+	if (strseg_tok_next(&line, '\t', &starttime)) {
+		starttime_ts= strtol( starttime.data, &endp, 10);
+		if (endp - starttime.data != starttime.len)
 			return END_CMD( ctl_notify_error(ctl, "Invalid timestamp") );
 	}
-	else
-		wake_timestamp= wake->now;
-	
-	service_t *svc= svc_by_name(ctl->command_argv[1], false);
-	if (!svc)
-		return END_CMD( ctl_notify_error(ctl, "No such service \"%s\"", ctl->command_argv[1]) );
+	else starttime_ts= wake->now;
 	
 	argv= svc_get_argv(svc);
-	if (!argv[0] || argv[0] == '\t')
-		return END_CMD( ctl_notify_error(ctl, "Missing/invalid argument list for \"%s\"", ctl->command_argv[1]) );
+	if (!argv[0] || argv[0] == '\t' || argv[0] == '\0')
+		return END_CMD( ctl_notify_error(ctl, "Missing/invalid argument list for \"%s\"", svc_get_name(svc)) );
 	
-	svc_handle_start(svc, wake_timestamp);
+	svc_handle_start(svc, starttime_ts);
 	return END_CMD(true);
 }
 
 bool ctl_state_cmd_fd_pipe(controller_t *ctl) {
-	fd_t *f;
-	if (ctl->command_argc != 3)
-		return END_CMD( ctl_notify_error(ctl, "Expected exactly two handle names") );
+	fd_t *fd;
+	bool notified;
+	int pair[2];
+	strseg_t read_side, write_side, line= ctl->command_arg_str;
 	
-	ctl->command_argv[2][-1]= '\0';
-	// Check that pipe() call succeeds
+	if (!ctl_extract_fdname_arg(ctl, &line, &write_side, false, true, &notified))
+		return END_CMD(notified);
+	
+	if (!ctl_extract_fdname_arg(ctl, &line, &read_side, false, true, &notified))
+		return END_CMD(notified);
+	
 	if (0 != pipe(pair))
-		goto fail_cleanup;
-	log_trace("pipe => (%d, %d)", pair[0], pair[1]);
-	if (!(f= fd_pipe(ctl->command_argv[1], ctl->command_argv[2])))
-		return END_CMD( ctl_notify_error(ctl, "Failed to create pipe") );
+		return END_CMD( ctl_notify_error(ctl, "pipe() failed: %s", strerror(errno)) );
 	
+	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1]);
+	if (!fd) {
+		close(pair[0]);
+		close(pair[1]);
+		return END_CMD( ctl_notify_error(ctl, "Failed to create pipe") );
+	}
 	return END_CMD(true);
 }
 
-bool ctl_state_cmd_fd_open(controller_t *ctl) {
-	fd_t *f;
-	if (ctl->command_argc != 4)
-		return END_CMD( ctl_notify_error(ctl, "Expected handle name, flags, filename") );
 
-	#define STRMATCH(name) (strncmp(start, name, end-start) == 0)
-	flags= O_NOCTTY;
-	f_mkdir= f_read= f_write= false;
-	strseg_t cur, remainder= opts;
-	while (strseg_next_tok(&remainder, &cur)) {
+
+bool ctl_state_cmd_fd_open(controller_t *ctl) {
+	bool notified;
+	int f, open_flags;
+	fd_flags_t flags;
+	strseg_t fdname, opts, opt, path, line= ctl->command_arg_str;
+
+	if (!ctl_extract_fdname_arg(ctl, &line, &fdname, false, true, &notified))
+		return END_CMD(notified);
 	
-	for (start= end= opts; *end; start= end+1) {
-		end= strchrnul(start, ',');
-		switch (*start) {
+	if (!strseg_tok_next(&line, '\t', &opts))
+		return END_CMD( ctl_notify_error(ctl, "Missing flags argument") );
+	
+	if (!strseg_tok_next(&line, '\t', &path))
+		return END_CMD( ctl_notify_error(ctl, "Missing path argument") );
+	
+	if (line.len >= 0)
+		return END_CMD( ctl_notify_error(ctl, "Unexpected argument after path") );
+	assert(path.data[path.len] == '\0');
+	
+	memset(&flags, 0, sizeof(flags));
+	#define STRMATCH(flag) (opt.len == strlen(flag) && 0 == memcmp(opt.data, flag, opt.len))
+	while (strseg_tok_next(&opts, ',', &opt)) {
+		switch (opt.data[0]) {
 		case 'a':
-			if (STRMATCH("append")) flags |= O_APPEND;
+			if (STRMATCH("append")) { flags.append= true; continue; }
 			break;
 		case 'c':
-			if (STRMATCH("create")) flags |= O_CREAT;
+			if (STRMATCH("create")) { flags.create= true; continue; }
 			break;
 		case 'm':
-			if (STRMATCH("mkdir")) f_mkdir= true;
+			if (STRMATCH("mkdir")) { flags.mkdir= true; continue; }
 			break;
 		case 'r':
-			if (STRMATCH("read")) f_read= true;
+			if (STRMATCH("read")) { flags.read= true; continue; }
 			break;
 		case 't':
-			if (STRMATCH("trunc")) flags |= O_TRUNC;
+			if (STRMATCH("trunc")) { flags.trunc= true; continue; }
 			break;
 		case 'w':
-			if (STRMATCH("write")) f_write= true;
+			if (STRMATCH("write")) { flags.write= true; continue; }
 			break;
 		case 'n':
-			if (STRMATCH("nonblock")) flags |= O_NONBLOCK;
+			if (STRMATCH("nonblock")) { flags.nonblock= true; continue; }
 			break;
 		}
+		ctl_notify_error(ctl, "Unknown flag \"%.*s\"", opt.len, opt.data);
 	}
-	flags |= f_write && f_read? O_RDWR : f_write? O_WRONLY : O_RDONLY;
-	if (f_mkdir)
-		create_missing_dirs(path);
+	#undef STRMATCH
+	
+	if (flags.mkdir)
+		create_missing_dirs((char*)path.data);
 
-	fd= open(path, flags, 0600);
-	log_trace("open => %d", fd);
-	if (fd < 0)
-		goto fail_cleanup;
+	open_flags= (flags.write? (flags.read? O_RDWR : O_WRONLY) : O_RDONLY)
+		| (flags.append? O_APPEND : 0) | (flags.create? O_CREAT : 0)
+		| (flags.trunc?  O_TRUNC  : 0) | (flags.nonblock? O_NONBLOCK : 0)
+		| O_NOCTTY;
 
-	ctl->command_argv[2][-1]= '\0';
-	ctl->command_argv[3][-1]= '\0';
-	if (!(f= fd_open(ctl->command_argv[1], ctl->command_argv[3], ctl->command_argv[2])))
-		return END_CMD( ctl_notify_error(ctl, "Unable to open file: errno = %s (%d)", strerror(errno), errno) );
+	f= open(path.data, open_flags, 0600);
+	if (f < 0)
+		return END_CMD( ctl_notify_error(ctl, "Open failed: %s", strerror(errno)) );
+
+	if (!fd_new_file(fdname, f, flags, path)) {
+		close(f);
+		return END_CMD( ctl_notify_error(ctl, "Unable to create named file descriptor") );
+	}
 
 	return END_CMD(true);
 }
@@ -713,6 +742,15 @@ bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 	return !single_dest || msg_data;
 }
 
+void create_missing_dirs(char *path) {
+	char *end;
+	for (end= strchr(path, '/'); end; end= strchr(end+1, '/')) {
+		*end= '\0';
+		mkdir(path, 0700); // would probably take longer to stat than to just let mkdir fail
+		*end= '/';
+	}
+}
+
 // Try to flush the output buffer (nonblocking)
 // Return true if flushed completely.  false otherwise.
 static bool ctl_flush_outbuf(controller_t *ctl) {
@@ -783,13 +821,23 @@ bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fie
 	return ctl_write(ctl, "service.fds	%s	%s\n", name, tsv_fields);
 }
 
-bool ctl_notify_fd_state(controller_t *ctl, const char *name, const char *file_path, const char *pipe_read, const char *pipe_write) {
-	if (file_path)
-		return ctl_write(ctl, "fd.state	%s	file	%s\n", name, file_path);
-	else if (pipe_read)
-		return ctl_write(ctl, "fd.state	%s	pipe_from	%s\n", name, pipe_read);
-	else if (pipe_write)
-		return ctl_write(ctl, "fd.state	%s	pipe_to	%s\n", name, pipe_write);
-	else
-		return ctl_write(ctl, "fd.state	%s	unknown\n", name);
+bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
+	fd_t *peer;
+	const char *name= fd_get_name(fd);
+	fd_flags_t flags= fd_get_flags(fd);
+	
+	if (flags.pipe) {
+		peer= fd_get_pipe_peer(fd);
+		return ctl_write(ctl, "fd.state	%s	pipe_%s	%s\n",
+			name, flags.write? "to":"from", peer? fd_get_name(peer) : "?");
+	}
+	else if (flags.special)
+		return ctl_write(ctl, "fd.state	%s	special	%s\n", name, fd_get_file_path(fd));
+	else {
+		return ctl_write(ctl, "fd.state	%s	file	%s%s%s%s%s%s	%s",
+			(flags.write? (flags.read? "read,write":"write"):"read"),
+			(flags.append? ",append":""), (flags.create? ",create":""),
+			(flags.trunc? ",trunc":""), (flags.nonblock? ",nonblock":""),
+			(flags.mkdir? ",mkdir":""), fd_get_file_path(fd));
+	}
 }

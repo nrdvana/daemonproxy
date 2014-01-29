@@ -57,6 +57,8 @@ typedef struct fd_s fd_t;
 struct service_s;
 typedef struct service_s service_t;
 
+void create_missing_dirs(char *path);
+
 //----------------------------------------------------------------------------
 // controller.c interface
 
@@ -93,7 +95,7 @@ extern const int min_service_obj_size;
 void svc_init(int service_count, int size_each);
 
 const char * svc_get_name(service_t *svc);
-bool svc_check_name(const char *name);
+bool svc_check_name(strseg_t name);
 
 pid_t   svc_get_pid(service_t *svc);
 int     svc_get_wstat(service_t *svc);
@@ -102,13 +104,13 @@ int64_t svc_get_reap_ts(service_t *svc);
 
 // Set metadata for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_meta(service_t *svc, const char *tsv_fields);
+bool svc_set_meta(service_t *svc, strseg_t tsv_fields);
 bool svc_apply_meta(service_t *svc, strseg_t name, strseg_t value);
 const char * svc_get_meta(service_t *svc);
 
 // Set args for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_argv(service_t *svc, const char *tsv_fields);
+bool svc_set_argv(service_t *svc, strseg_t tsv_fields);
 const char * svc_get_argv(service_t *svc);
 
 // Set env for a service.  Created the service if it doesn't exist.
@@ -117,7 +119,7 @@ const char * svc_get_argv(service_t *svc);
 
 // Set file descriptors for a service.  Create the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_fds(service_t *svc, const char *tsv_fields);
+bool svc_set_fds(service_t *svc, strseg_t tsv_fields);
 const char * svc_get_fds(service_t *svc);
 
 // update service state machine when requested to start
@@ -131,9 +133,9 @@ void svc_run(service_t *svc, wake_t *wake);
 void svc_run_active(wake_t *wake);
 
 // Lookup services by attributes
-service_t * svc_by_name(const char *name, bool create);
+service_t * svc_by_name(strseg_t name, bool create);
 service_t * svc_by_pid(pid_t pid);
-service_t * svc_iter_next(service_t *current, const char *from_name);
+service_t * svc_iter_next(service_t *current, strseg_t from_name);
 
 // Deallocate service struct
 void svc_delete(service_t *svc);
@@ -158,6 +160,8 @@ extern const int min_fd_obj_size;
 // Initialize the fd pool from a static chunk of memory
 void fd_init();
 bool fd_preallocate(int count, int size_each);
+
+#define fd_check_name svc_check_name
 
 const char* fd_get_name(fd_t *fd);
 int         fd_get_fdnum(fd_t *fd);

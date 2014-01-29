@@ -239,15 +239,6 @@ const char* append_elipses(char *buffer, int bufsize, strseg_t source) {
 	else return "...";
 }
 
-void create_missing_dirs(char *path) {
-	char *end;
-	for (end= strchr(path, '/'); end; end= strchr(end+1, '/')) {
-		*end= '\0';
-		mkdir(path, 0700); // would probably take longer to stat than to just let mkdir fail
-		*end= '/';
-	}
-}
-
 fd_t * fd_by_name(strseg_t name) {
 	assert(name.len < NAME_LIMIT);
 	RBTreeSearch s= RBTree_Find( &fd_by_name_index, &name );
