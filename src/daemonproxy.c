@@ -258,7 +258,7 @@ const struct option_table_entry_s {
 	{ 'M', "mlockall",     0, set_opt_mlockall,     "call mlockall after allocating memory", "" },
 	{ 'F', "failsafe",     0, set_opt_failsafe,     "try not to exit, even on fatal errors", "" },
 	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit, "if program exits for any reason, call exec(PROG) instead", "PROG" },
-	{ 0, NULL, 0, NULL, NULL }
+	{  0 , NULL, 0, NULL, NULL }
 };
 
 void parse_option(char shortname, char* longname, char ***argv) {
