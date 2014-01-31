@@ -15,7 +15,7 @@ while (<STDIN>) {
 }
 
 # table size is 1.5 x number of entries rounded up to power of 2.
-my $mask= int(1.7 * keys %commands);
+my $mask= int(1.5 * keys %commands);
 $mask |= $mask >> 1;
 $mask |= $mask >> 2;
 $mask |= $mask >> 4;
@@ -24,35 +24,33 @@ $mask |= $mask >> 16;
 my $table_size= $mask+1;
 
 sub hash_fn {
-	my ($string, $shift, $mul)= @_;
+	my ($string, $mul)= @_;
 	use integer;
 	my $result= 0;
-	$result= ($result << $shift) ^ (($result >> 24)&0xFF) ^ $_
+	$result= ($result * $mul + $_) & $mask
 		for unpack( 'C' x length($string), $string );
 	#printf STDERR "%16X\n", $result*$mul;
-	return ($result * $mul) & $mask;
+	return $result;
 }
 
 sub find_collisionless_hash_params {
 	# pick factors for the hash function until each command has a unique bucket
 	mul_loop: for (my $mul= 1; $mul < 100000; $mul += 2) {
-		shift_loop: for (my $shift= 1; $shift < 14; $shift++) {
-			my @table= (undef) x $table_size;
-			for (values %commands) {
-				my $bucket= hash_fn($_->{cmd}, $shift, $mul);
-				if (defined $table[$bucket]) {
-					#print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
-					next shift_loop;
-				}
-				$table[$bucket]= $_;
+		my @table= (undef) x $table_size;
+		for (values %commands) {
+			my $bucket= hash_fn($_->{cmd}, $mul);
+			if (defined $table[$bucket]) {
+				#print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
+				next mul_loop;
 			}
-			return ( \@table, $shift, $mul );
+			$table[$bucket]= $_;
 		}
+		return ( \@table, $mul );
 	}
 	die "No value of \$shift / \$mul results in unique codes for each command\n";
 }
 
-my ($table, $shift, $mul)= find_collisionless_hash_params();
+my ($table, $mul)= find_collisionless_hash_params();
 
 my $state_cases= join("\n", map {
 	qq|	if (fn == $_->{fn}) return "$_->{fn}";|
@@ -72,16 +70,15 @@ $state_cases
 
 // table size is $table_size
 // $n_cmd commands
-// shift is $shift
 // mul is $mul
 
 int ctl_command_hash_func(const char* buffer) {
 	int x= 0;
 	const char *p= buffer;
 	while (*p && *p != '\\t') {
-		x= (x << $shift) ^ ((x >> 24) & 0xFF) ^ (*p++ & 0xFF);
+		x= x * $mul + (*p++ & 0xFF);
 	}
-	return ($mul == 1? x : x * $mul) & $mask;
+	return x & $mask;
 }
 
 const ctl_command_table_entry_t ctl_command_table[]= {

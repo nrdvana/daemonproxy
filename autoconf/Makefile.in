@@ -40,7 +40,7 @@ daemonproxy: $(daemonproxy_src:.c=.o)
 
 controller.o: $(srcdir)/controller_data.autogen.c
 
-$(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c
+$(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c $(srcdir)/generate_controller_data.pl
 	perl $(srcdir)/generate_controller_data.pl < $< > $@ || rm $@
 
 install:
