@@ -38,6 +38,7 @@ STATE(ctl_state_close);
 STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
+STATE(ctl_state_cmd_echo,              "echo");
 STATE(ctl_state_cmd_statedump,         "statedump");
 STATE(ctl_state_cmd_svc_args_set,      "service.args");
 STATE(ctl_state_cmd_svc_meta,          "service.meta");
@@ -239,6 +240,11 @@ bool ctl_state_cmd_unknown(controller_t *ctl) {
 	// find command string
 	return END_CMD( ctl_notify_error(ctl, "Unknown command: %.*s",
 		ctl->command_name.len, ctl->command_name.data) );
+}
+
+bool ctl_state_cmd_echo(controller_t *ctl) {
+	// find command string
+	return END_CMD( ctl_write(ctl, "%.*s", ctl->command_arg_str.len, ctl->command_arg_str.data) );
 }
 
 bool ctl_state_cmd_exit(controller_t *ctl) {
