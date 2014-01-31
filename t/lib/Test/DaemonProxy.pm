@@ -7,6 +7,11 @@ use IO::Handle;
 use POSIX ':sys_wait_h';
 use Data::Dumper 'Dumper';
 
+BEGIN {
+	# make sure cleanup code runs
+	$SIG{INT}= $SIG{TERM}= $SIG{QUIT}= sub { print STDERR "# killed\n"; exit(2) };
+}
+
 sub binary_path {
 	my $self= shift;
 	$self->{binary_path} ||= do {
@@ -45,15 +50,17 @@ sub run {
 		# make a sharp exit, without running cleanup code that could interfere with the parent process
 		exec('/bin/false') || 	POSIX::_exit(2);
 	}
+	
 	$self->{send_handle}= $script_to_dp_w;
 	$self->{recv_handle}= $dp_to_script_r;
 	$self->{recv_handle}->blocking(0);
+	$self->{send_handle}->autoflush(1);
 	1;
 }
 
 sub send {
 	my ($self, $msg)= @_;
-	Test::More::diag "send \"$msg\"\n";
+	print "send: \"$msg\"\n";
 	$self->send_handle->print($msg."\n");
 }
 
@@ -75,14 +82,14 @@ sub _collect_exit_status {
 	my ($self)= @_;
 	return $self->{dp_wstat} if defined $self->{dp_wstat};
 	my $deadline= time + $self->timeout;
-	do {
+	while (1) {
 		if (waitpid($self->dp_pid, WNOHANG) == $self->dp_pid) {
 			delete $self->{dp_pid};
 			return $self->{dp_wstat}= $?;
 		}
 		last if time > $deadline;
 		select(undef, undef, undef, $deadline - time);
-	} while (1);
+	}
 	return undef;
 }
 
@@ -101,7 +108,7 @@ sub response_like {
 		}
 		if (!$self->_read_more) {
 			Test::More::fail($description);
-			Test::More::diag("buffer contains: ".dumper($self->{buffer}));
+			Test::More::diag("buffer contains: ".Dumper($self->{buffer}));
 			return 0;
 		}
 	}
@@ -131,8 +138,10 @@ sub cleanup {
 	
 	$self->dp_pid and kill SIGQUIT => $self->dp_pid;
 	delete $self->{dp_pid};
-	close $self->{send_handle};
-	close $self->{recv_handle};
+	close delete $self->{send_handle}
+		if defined $self->{send_handle};
+	close delete $self->{recv_handle}
+		if defined $self->{recv_handle};
 }
 
 sub DESTROY { $_[0]->cleanup(); }
