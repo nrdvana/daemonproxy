@@ -6,6 +6,7 @@ require IO::Select;
 use IO::Handle;
 use POSIX ':sys_wait_h';
 use Data::Dumper 'Dumper';
+use Carp;
 
 BEGIN {
 	# make sure cleanup code runs
