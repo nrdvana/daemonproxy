@@ -20,7 +20,7 @@ void parse_option(char shortname, char* longname, char ***argv);
 int parse_size(const char *str, char **endp);
 
 int main(int argc, char** argv) {
-	int wstat, f;
+	int wstat, f, ret;
 	pid_t pid;
 	struct timeval tv;
 	bool config_on_stdin= false;
@@ -146,8 +146,10 @@ int main(int argc, char** argv) {
 		if (wake->next - wake->now > 0) {
 			tv.tv_sec= (long)((wake->next - wake->now) >> 32);
 			tv.tv_usec= (long)((((wake->next - wake->now)&0xFFFFFFFFLL) * 1000000) >> 32);
+			log_trace("wait up to %d.%d sec", tv.tv_sec, tv.tv_usec);
 			
-			if (select(wake->max_fd, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv) < 0) {
+			ret= select(wake->max_fd, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv);
+			if (ret < 0) {
 				// shouldn't ever fail, but if not EINTR, at least log it and prevent
 				// looping too fast
 				if (errno != EINTR) {
@@ -158,6 +160,7 @@ int main(int argc, char** argv) {
 				}
 			}
 		}
+		else log_trace("no wait at main loop");
 	}
 	
 	if (main_exec_on_exit)

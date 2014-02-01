@@ -17,7 +17,7 @@ struct controller_s {
 	char send_buf[CONTROLLER_SEND_BUF_SIZE];
 	int  send_buf_pos;
 	bool send_overflow;
-	int64_t send_abort_ts;
+	int64_t send_blocked_ts;
 	
 	int line_len;             // length of current TSV line in recv_buf
 	strseg_t command_name;    // strseg of command name (within recv_buf)
@@ -165,6 +165,7 @@ bool ctl_state_read_command(controller_t *ctl) {
 		else {
 			log_trace("controller unable to read more yet");
 			// done for now, until more data available on pipe
+			
 			return false;
 		}
 	}
@@ -205,6 +206,7 @@ bool ctl_state_read_command(controller_t *ctl) {
 	)
 	{
 		log_trace("Ignoring comment line");
+		ctl->recv_overflow= false;
 		// continue back to this state by doing nothing
 	}
 	// check for command overflow
@@ -230,10 +232,8 @@ bool ctl_state_read_command(controller_t *ctl) {
 }
 
 bool ctl_state_cmd_overflow(controller_t *ctl) {
-	if (!ctl_write(ctl, "overflow\n"))
-		return false;
-	ctl->state_fn= ctl_state_read_command;
-	return true;
+	ctl->recv_overflow= false;
+	return END_CMD( ctl_notify_error(ctl, "line too long") );
 }
 
 bool ctl_state_cmd_unknown(controller_t *ctl) {
@@ -597,6 +597,9 @@ void ctl_run(wake_t *wake) {
 			// if anything in output buffer, try writing it
 			if (ctl->send_buf_pos)
 				ctl_flush_outbuf(ctl);
+			// if input buffer not full, try reading more (in case script is blocking on output)
+			if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
+				ctl_read_more(ctl);
 			// Run iterations of state machine while state returns true
 			log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
 			while (ctl->state_fn(ctl)) {
@@ -614,6 +617,7 @@ void ctl_run(wake_t *wake) {
  */
 void ctl_flush(wake_t *wake) {
 	int i;
+	int64_t next_check_ts, lateness;
 	// list is very small, so "allocated" is any client with non-null state
 	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++) {
 		if (client[i].state_fn) {
@@ -622,27 +626,30 @@ void ctl_flush(wake_t *wake) {
 			// Also, set/check timeout for writes
 			if (ctl->send_fd >= 0 && ctl->send_buf_pos > 0) {
 				if (!ctl_flush_outbuf(ctl)) {
-					// If this is the first write which has not succeeded, then we set the
-					// timestamp for the write timeout.
-					if (!ctl->send_abort_ts) {
-						ctl->send_abort_ts= wake->now + CONTROLLER_WRITE_TIMEOUT;
-						// we use 0 as a "not stalled" flag, so if the actual timestamp is 0 fudge it to 1
-						if (!ctl->send_abort_ts) ctl->send_abort_ts++;
-					}
-					else if (wake->now - ctl->send_abort_ts > 0) {
+					lateness= wake->now - ctl->send_blocked_ts;
+					if (lateness >= CONTROLLER_WRITE_TIMEOUT) {
+						log_error("controller %d blocked pipe for %d seconds, closing connection", i, (int)(lateness>>32));
 						ctl_dtor(ctl); // destroy client
 						continue;      // next client
 					}
+					if (lateness >= (CONTROLLER_WRITE_TIMEOUT>>1))
+						log_warn("controller %d blocked pipe for %d seconds", i, (int)(lateness>>32));
+
+					next_check_ts= ctl->send_blocked_ts + CONTROLLER_WRITE_TIMEOUT;
+					if (wake->next - next_check_ts > 0) {
+						log_trace("wake in %d ms to check timeout", (next_check_ts - wake->now) * 1000 >> 32 );
+						wake->next= next_check_ts;
+					}
 					
+					log_trace("wake on controller[%d] send_fd", i);
 					FD_SET(ctl->send_fd, &wake->fd_write);
 					FD_SET(ctl->send_fd, &wake->fd_err);
 					if (ctl->send_fd > wake->max_fd)
 						wake->max_fd= ctl->send_fd;
-					if (wake->next - ctl->send_abort_ts > 0)
-						wake->next= ctl->send_abort_ts;
 				}
 			}
-			// If incoming fd, wake on data available, unless input buffer full
+			// If incoming fd, wake on data available, unless input buffer full or current state
+			//  is a command
 			// (this could also be the config file, initially)
 			if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE) {
 				log_trace("wake on controller[%d] recv_fd", i);
@@ -657,18 +664,21 @@ void ctl_flush(wake_t *wake) {
 
 // Read more controller input from recv_fd
 bool ctl_read_more(controller_t *ctl) {
-	int n;
+	int n, e;
 	if (ctl->recv_fd < 0 || ctl->recv_buf_pos >= CONTROLLER_RECV_BUF_SIZE)
 		return false;
 	n= read(ctl->recv_fd, ctl->recv_buf + ctl->recv_buf_pos, CONTROLLER_RECV_BUF_SIZE - ctl->recv_buf_pos);
 	if (n <= 0) {
+		e= errno;
+		log_trace("controller input read failed: %d %s", n, strerror(e));
 		if (n == 0) {
 			// EOF.  Close file descriptor
 			close(ctl->recv_fd);
 			ctl->recv_fd= -1;
 		}
 		else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			log_error("read(controller pipe): %s (%d)", strerror(errno), errno);
+			log_error("read(controller pipe): %s", strerror(e));
+		errno= e;
 		return false;
 	}
 	ctl->recv_buf_pos += n;
@@ -688,7 +698,7 @@ bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 	// Either send one message, or iterate all clients
 	if (single_dest) {
 		if (!single_dest->state_fn || single_dest->send_fd < 0 || single_dest->send_overflow)
-			return false;
+			return true;
 		dest[0]= single_dest;
 		dest_n= 1;
 	}
@@ -721,7 +731,7 @@ bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 			
 			log_debug("can't write msg, %d > buffer free %d", msg_len, buf_free);
 			// if it is a broadcast, we mark the client outbuf as having overflowed
-			if (!single_dest)
+			//if (!single_dest)
 				dest[i]->send_overflow= true;
 		}
 		else {
@@ -751,7 +761,7 @@ bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 	}
 	
 	// return true if was a broadcast, or if succeeded
-	return !single_dest || msg_data;
+	return true;//!single_dest || msg_data;
 }
 
 void create_missing_dirs(char *path) {
@@ -779,12 +789,15 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 			if (n > 0) {
 				log_trace("controller flushed %d bytes", n);
 				ctl->send_buf_pos -= n;
-				ctl->send_abort_ts= 0;
+				ctl->send_blocked_ts= 0;
 				memmove(ctl->send_buf, ctl->send_buf + n, ctl->send_buf_pos);
 			}
 			else {
-				log_debug("controller outbuf write failed: %s (%d)", strerror(errno), errno);
+				log_debug("controller outbuf write failed: %s", strerror(errno));
 				// we have an error, or the write would block.
+				// mark the time when this happened.  We clear this next time a write succeeds
+				if (!ctl->send_blocked_ts)
+					ctl->send_blocked_ts= wake->now? wake->now : 1;
 				return false;
 			}
 		}

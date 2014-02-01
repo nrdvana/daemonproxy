@@ -366,8 +366,8 @@ void svc_run(service_t *svc, wake_t *wake) {
 		if (svc->auto_restart) {
 			// if restarting too fast, delay til future
 			svc_handle_start(svc, 
-				(svc->reap_time - svc->start_time < SERVICE_RESTART_DELAY)?
-				wake->now + SERVICE_RESTART_DELAY : wake->now);
+				(svc->reap_time - svc->start_time < SERVICE_RESTART_INTERVAL)?
+				wake->now + SERVICE_RESTART_INTERVAL : wake->now);
 			svc_notify_state(svc);
 		}
 		goto re_switch_state;

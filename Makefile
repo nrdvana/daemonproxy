@@ -18,7 +18,7 @@ distclean:
 
 test:
 	$(MAKE) -C build daemonproxy test
-	$(PROVE)
+	$(PROVE) -j4
 
 install:
 	$(MAKE) -C build install
