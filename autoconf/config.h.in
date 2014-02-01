@@ -19,6 +19,8 @@
 #include <stdarg.h>
 #include <time.h>
 #include <assert.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define SERVICE_POOL_SIZE           256
 #define SERVICE_OBJ_SIZE            512
@@ -33,4 +35,5 @@
 #define CONTROLLER_RECV_BUF_SIZE   1024
 #define CONTROLLER_SEND_BUF_SIZE   2048
 #define CONTROLLER_MAX_CLIENTS        3
+#define CONTROLLER_SOCKET_NAME	"controller.sock"
 #define CONFIG_FILE_DEFAULT_PATH   "/etc/init-frame.conf"
