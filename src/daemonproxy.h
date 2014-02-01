@@ -46,7 +46,7 @@ void log_write(int level, const char * msg, ...);
 #endif
 
 extern bool main_terminate;
-extern int main_loglevel;
+extern int  main_log_filter;
 extern wake_t *wake;
 
 extern const char *  version_git_tag;

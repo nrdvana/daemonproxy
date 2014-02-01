@@ -15,7 +15,7 @@ while (<STDIN>) {
 }
 
 # table size is 1.5 x number of entries rounded up to power of 2.
-my $mask= int(1.5 * keys %commands);
+my $mask= int(1.75 * keys %commands);
 $mask |= $mask >> 1;
 $mask |= $mask >> 2;
 $mask |= $mask >> 4;
@@ -24,33 +24,41 @@ $mask |= $mask >> 16;
 my $table_size= $mask+1;
 
 sub hash_fn {
-	my ($string, $mul)= @_;
+	my ($string, $mul, $shift)= @_;
 	use integer;
 	my $result= 0;
-	$result= ($result * $mul + $_) & $mask
+	$result= ((($result * $mul) >> $shift) + $_) & 0xFFFF # don't let perl overflow an int
 		for unpack( 'C' x length($string), $string );
-	#printf STDERR "%16X\n", $result*$mul;
-	return $result;
+	return $result & $mask;
+}
+
+sub build_table {
+	my ($mul, $shift)= @_;
+	my @table= (undef) x $table_size;
+	for (values %commands) {
+		my $bucket= hash_fn($_->{cmd}, $mul, $shift);
+		if (defined $table[$bucket]) {
+			#print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
+			return undef;
+		}
+		$table[$bucket]= $_;
+	}
+	return \@table;
 }
 
 sub find_collisionless_hash_params {
 	# pick factors for the hash function until each command has a unique bucket
-	mul_loop: for (my $mul= 1; $mul < 100000; $mul += 2) {
-		my @table= (undef) x $table_size;
-		for (values %commands) {
-			my $bucket= hash_fn($_->{cmd}, $mul);
-			if (defined $table[$bucket]) {
-				#print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
-				next mul_loop;
-			}
-			$table[$bucket]= $_;
+	for (my $mul= 1; $mul < $mask; $mul++) {
+		for (my $shift= 0; $shift < 5; $shift++) {
+			my $table= build_table($mul, $shift);
+			return ( $table, $mul, $shift )
+				if $table;
 		}
-		return ( \@table, $mul );
 	}
 	die "No value of \$shift / \$mul results in unique codes for each command\n";
 }
 
-my ($table, $mul)= find_collisionless_hash_params();
+my ($table, $mul, $shift)= find_collisionless_hash_params();
 
 my $state_cases= join("\n", map {
 	qq|	if (fn == $_->{fn}) return "$_->{fn}";|
@@ -76,7 +84,7 @@ int ctl_command_hash_func(const char* buffer) {
 	int x= 0;
 	const char *p= buffer;
 	while (*p && *p != '\\t') {
-		x= x * $mul + (*p++ & 0xFF);
+		x= ((x * $mul) >> $shift) + (*p++ & 0xFF);
 	}
 	return x & $mask;
 }

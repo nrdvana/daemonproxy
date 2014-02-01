@@ -9,7 +9,7 @@ bool main_mlockall= false;
 int  main_fd_pool_count= -1;
 int  main_fd_pool_size_each= -1;
 bool main_failsafe= false;
-int main_loglevel= LOG_LEVEL_INFO;
+int  main_log_filter= LOG_LEVEL_INFO;
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
@@ -193,8 +193,8 @@ void parse_opts(char **argv) {
 
 void show_help(char **argv);
 void show_version(char **argv);
-void set_opt_verbose(char** argv)     { main_loglevel--;      }
-void set_opt_quiet(char** argv)       { main_loglevel++;      }
+void set_opt_verbose(char** argv)     { main_log_filter--;    }
+void set_opt_quiet(char** argv)       { main_log_filter++;    }
 void set_opt_stdin(char **argv)       { main_use_stdin= true; }
 void set_opt_mlockall(char **argv)    { main_mlockall= true;  }
 void set_opt_failsafe(char **argv)    { main_failsafe= true;  }
@@ -375,7 +375,7 @@ void fatal(int exitcode, const char *msg, ...) {
 }
 
 void log_write(int level, const char *msg, ...) {
-	if (main_loglevel > level)
+	if (main_log_filter > level)
 		return;
 	
 	const char *prefix= level > LOG_LEVEL_INFO? (level > LOG_LEVEL_WARN? "error":"warning")

@@ -51,7 +51,7 @@ STATE(ctl_state_cmd_fd_pipe,           "fd.pipe");
 STATE(ctl_state_cmd_fd_open,           "fd.open");
 STATE(ctl_state_cmd_exit,              "exit");
 STATE(ctl_state_cmd_terminate,         "terminate");
-STATE(ctl_state_cmd_log,               "loglevel");
+STATE(ctl_state_cmd_log_filter,        "log.filter");
 
 static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
 static void ctl_dtor(controller_t *ctl);
@@ -260,14 +260,14 @@ bool ctl_state_cmd_echo(controller_t *ctl) {
 	return END_CMD( ctl_write(ctl, "%.*s\n", ctl->command_arg_str.len, ctl->command_arg_str.data) );
 }
 
-bool ctl_state_cmd_log(controller_t *ctl) {
+bool ctl_state_cmd_log_filter(controller_t *ctl) {
 	strseg_t arg, line= ctl->command_arg_str;
 	if (!strseg_tok_next(&line, '\t', &arg))
-		return END_CMD( ctl_write(ctl, "%d\n", main_loglevel) );
+		return END_CMD( ctl_write(ctl, "%d\n", main_log_filter) );
 	else if (arg.len == 1 && arg.data[0] == '+')
-		main_loglevel++;
+		main_log_filter++;
 	else if (arg.len == 1 && arg.data[0] == '-')
-		main_loglevel--;
+		main_log_filter--;
 	else
 		return END_CMD( ctl_notify_error(ctl, "invalid loglevel argument") );
 	return END_CMD(true);
