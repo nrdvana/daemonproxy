@@ -3,7 +3,6 @@
 
 struct controller_s;
 typedef bool ctl_state_fn_t(struct controller_s *);
-int server_socket;
 
 typedef struct controller_s {
 	ctl_state_fn_t *state_fn;
@@ -71,28 +70,9 @@ void ctl_set_auto_final_newline(controller_t *ctl, bool enable) {
 
 void ctl_init() {
 	int i;
-	struct sockaddr_un sa;
-	sa.sun_family= AF_UNIX;
-	
 	assert(CONTROLLER_MAX_CLIENTS >= 2);
 	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++)
 		client[i].state_fn= NULL;
-
-	// unlink existing socket
-	unlink(CONTROLLER_SOCKET_NAME);
-	// bind the unix socket
-	if ((server_socket= socket(PF_UNIX, SOCK_STREAM, 0)) < 0)
-		log_error("socket: errno = %d", errno);
-	else if (strlen(CONTROLLER_SOCKET_NAME) > sizeof(sa.sun_path))
-		log_error("socket path too long for sockaddr");
-	else {
-		strcpy(sa.sun_path, CONTROLLER_SOCKET_NAME);
-		umask(077);
-		if (bind(server_socket, (struct sockaddr*) &sa, (socklen_t)sizeof(sa)) < 0) {
-			close(server_socket);
-			log_error("bind: errno = %d", errno);
-		}
-	}
 }
 
 controller_t *ctl_new(int recv_fd, int send_fd) {
