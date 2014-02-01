@@ -107,12 +107,8 @@ int main(int argc, char** argv) {
 		FD_ZERO(&wake->fd_write);
 		FD_ZERO(&wake->fd_err);
 		
-		// signals off
-		sigset_t maskall, old;
-		sigfillset(&maskall);
-		if (!sigprocmask(SIG_SETMASK, &maskall, &old) == 0)
-			perror("sigprocmask(all)");
-	
+		sig_enable(false);
+		
 		// report signals and set read-wake on signal fd
 		sig_run(wake);
 		
@@ -135,9 +131,7 @@ int main(int argc, char** argv) {
 		
 		ctl_flush(wake);
 		
-		// resume normal signal mask
-		if (!sigprocmask(SIG_SETMASK, &old, NULL) == 0)
-			log_error("sigprocmask(reset): %s", strerror(errno));
+		sig_enable(true);
 
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)

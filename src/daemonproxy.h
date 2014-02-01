@@ -46,6 +46,7 @@ void log_write(int level, const char * msg, ...);
 #endif
 
 extern bool main_terminate;
+extern int main_loglevel;
 extern wake_t *wake;
 
 extern const char *  version_git_tag;
@@ -74,7 +75,7 @@ void ctl_set_auto_final_newline(controller_t *ctl, bool enable);
 // and requiring a state reset event.
 // If no controller is running, a sighup message will cause the config file to be re-loaded.
 bool ctl_write(controller_t *ctl, const char *msg, ... );
-bool ctl_notify_signal(controller_t *ctl, int sig_num);
+bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count);
 bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat);
 bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
@@ -188,9 +189,17 @@ fd_t * fd_iter_next(fd_t *current, strseg_t from_name);
 // Initialize signal-related things
 void sig_init();
 
-// Deliver any caught signals as messages to the controller,
-// and set a wake for reads on the signal fd
-void sig_run(wake_t *wake);
+// Enable or disable receipt of signals
+void sig_enable(bool enable);
+
+// Get next event based on previous timestamp
+bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *count_out);
+
+// Record that a signal has been dealt with by subtracting from its count
+void sig_mark_seen(int signal, int count);
+
+// Main loop processing for signals.
+void sig_run();
 
 const char * sig_name(int sig_num);
 

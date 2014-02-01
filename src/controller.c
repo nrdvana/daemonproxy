@@ -18,6 +18,7 @@ struct controller_s {
 	int  send_buf_pos;
 	bool send_overflow;
 	int64_t send_blocked_ts;
+	int64_t last_signal_ts;
 	
 	int line_len;             // length of current TSV line in recv_buf
 	strseg_t command_name;    // strseg of command name (within recv_buf)
@@ -139,12 +140,23 @@ bool ctl_state_read_command(controller_t *ctl) {
 	int prev;
 	char *eol, *p, *p2;
 	const ctl_command_table_entry_t *cmd;
+	int signum, sig_count;
+	int64_t sig_ts;
 
 	// clean up old command, if any.
 	if (ctl->line_len > 0) {
 		ctl->recv_buf_pos -= ctl->line_len;
 		memmove(ctl->recv_buf, ctl->recv_buf + ctl->line_len, ctl->recv_buf_pos);
 		ctl->line_len= 0;
+	}
+	
+	// First, see if there is a signal to report
+	if (sig_get_new_events(ctl->last_signal_ts, &signum, &sig_ts, &sig_count)) {
+		// deliver next signal that this controller hasn't seen
+		ctl_notify_signal(ctl, signum, sig_ts, sig_count);
+		if (!ctl->send_overflow)
+			ctl->last_signal_ts= sig_ts;
+		return true;
 	}
 	
 	// see if we have a full line in the input.  else read some more.
@@ -608,19 +620,29 @@ void ctl_run(wake_t *wake) {
 	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++) {
 		if (client[i].state_fn) {
 			controller_t *ctl= &client[i];
-			// if anything in output buffer, try writing it
-			if (ctl->send_buf_pos)
-				ctl_flush_outbuf(ctl);
 			// if input buffer not full, try reading more (in case script is blocking on output)
 			if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
 				ctl_read_more(ctl);
-			// Run iterations of state machine while state returns true
-			log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
-			while (ctl->state_fn(ctl)) {
+			// Run iterations of state machine while state returns true,
+			do {
+				// To help prevent overflows on the output pipe (which can happen if there are many
+				//  asynchronous events) we stop processing commands when the pipe is full and buffer
+				//  is half-full.
+				// But wait! if the recv buffer is also full, then the client is still
+				//  trying to write to us.  So only stop processing commands if the recv buffer
+				//  isn't full.
+				if (ctl->send_buf_pos > CONTROLLER_SEND_BUF_SIZE/2
+					&& !ctl_flush_outbuf(ctl)
+					&& ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
+				{
+					log_debug("delaying further command processing until outbuf is less full");
+					break;
+				}
 				log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
-			}
+			} while (ctl->state_fn(ctl));
 			// Note: it is possible for ctl to have been destroyed (null state_fn), here.
-			log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
+			if (ctl->state_fn)
+				log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
 		}
 	}
 }
@@ -654,13 +676,17 @@ void ctl_flush(wake_t *wake) {
 						log_trace("wake in %d ms to check timeout", (next_check_ts - wake->now) * 1000 >> 32 );
 						wake->next= next_check_ts;
 					}
-					
 					log_trace("wake on controller[%d] send_fd", i);
 					FD_SET(ctl->send_fd, &wake->fd_write);
 					FD_SET(ctl->send_fd, &wake->fd_err);
 					if (ctl->send_fd > wake->max_fd)
 						wake->max_fd= ctl->send_fd;
 				}
+				else if (ctl->recv_buf_pos)
+					// immediately return to processing controllers if we managed to flush
+					// the data that might have been blocking us from processing additional
+					// commands
+					wake->next= wake->now;
 			}
 			// If incoming fd, wake on data available, unless input buffer full or current state
 			//  is a command
@@ -827,8 +853,8 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 	return true;
 }
 
-bool ctl_notify_signal(controller_t *ctl, int sig_num) {
-	return ctl_write(NULL, "signal %d %s\n", sig_num, sig_name(sig_num));
+bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
+	return ctl_write(NULL, "signal	%d	%s	%lld	%d\n", sig_num, sig_name(sig_num), sig_ts>>32, count);
 }
 
 bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, int wstat, pid_t pid) {
