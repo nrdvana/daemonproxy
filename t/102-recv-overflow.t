@@ -7,7 +7,7 @@ use lib 't/lib';
 use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
-
+$dp->timeout(0.1);
 $dp->run('--stdin');
 # Send a bunch of service.args commands, and don't read the responses, causing a pileup
 # on the return pipe.
@@ -18,7 +18,8 @@ for (my $i= 0; $i < 1000; $i++) {
 }
 
 $dp->response_like(qr/^overflow$/m, 'overflow flag received');
-while ($dp->_read_more) {}
+
+$dp->flush_response;
 
 $dp->send("echo\t-marker-");
 $dp->response_like( qr/^-marker-/, 'can still send/receive' );

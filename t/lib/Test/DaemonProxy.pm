@@ -28,6 +28,7 @@ sub new {
 }
 
 sub dp_pid      { $_[0]{dp_pid} }
+*pid= *dp_pid;
 sub send_handle { $_[0]{send_handle} }
 sub recv_handle { $_[0]{recv_handle} }
 sub timeout     { @_ > 1? ($_[0]{timeout}= $_[1]) : $_[0]{timeout}; }
@@ -92,6 +93,12 @@ sub _collect_exit_status {
 		select(undef, undef, undef, $deadline - time);
 	}
 	return undef;
+}
+
+sub flush_response {
+	my $self= shift;
+	while ($self->_read_more) {}
+	$self->{buffer}= '';
 }
 
 sub response_like {
