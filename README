@@ -22,13 +22,16 @@ also give it an identical environment each time it is started.
 (this is a thing that is hard to do when you run init scripts
  from cron jobs or other sloppy methods like that)
 
-The point at which daemonproxy diverges from the rest is in
-configuration, and the actions taken to restart the service.
+The point at which daemonproxy diverges from the rest is that
+it generates a stream of events which can be piped to an
+external script that does the actual service-management logic,
+and is in turn controlled by this script.  Thus, it is a proxy
+for daemon management.
 
 configuration
 =============
 
-While the file-based configuration of daemontools and friends
+While the filesystem-based configuration of daemontools and friends
 is a nice simple and unix-friendly way to configure services,
 there are times when setting up a tree of special scripts,
 directories, and control files with special filesystem flags
@@ -76,15 +79,16 @@ init replacement
 ================
 
 daemonproxy is designed to be a suitable replacement for process 1.
-It uses a minimal pool of RAM, it allocates all its dynamic memory
-on startup (the table sizes can be controlled with commandline
-switches) and it has options to attempt recovery on lesser errors,
-or to exec() to a cleanup script in case of fatal error.
+It uses a minimal amount of RAM, it can allocate all its dynamic
+memory on startup (the table sizes can be controlled with command
+line switches) and it has options to attempt recovery on lesser
+errors, or to exec() to a cleanup script in case of fatal error.
 
 It is a single-thread process written in non-blocking style as a
-state machine, and it has no external library dependencies, so is
-a natural fit for static compilation.  It is also very few lines
-of code!  Memory footprint numbers are not yet available.
+collection of state machines, and it has no external library
+dependencies, so it is a natural fit for static compilation.
+It also has very few lines of code!  Memory footprint numbers are
+not yet available.
 
 other uses
 ==========
