@@ -725,12 +725,10 @@ bool ctl_read_more(controller_t *ctl) {
 	return true;
 }
 
-// Try to write data to the controller script, nonblocking (or possibly stdout)
+// Try to write data to a controller, nonblocking.
 // Return true if the message was queued, or false if it can't be written.
-// If the caller can't queue the event that generated the message, they need to call
-//  ctl_write_overflow().
 // If ctl is NULL, then all controllers with send_fd will be notified, assuming
-//  they aren't in an overflow condition.  In this case, it always returns true.
+//  they aren't in an overflow condition.  Return value is always true when broadcasting.
 bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 	controller_t * dest[CONTROLLER_MAX_CLIENTS];
 	int dest_n, i;

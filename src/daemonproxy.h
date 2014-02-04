@@ -20,12 +20,14 @@ typedef struct wake_s {
 	int64_t next; // time when we next need to process something
 } wake_t;
 
+#define STRSEG(s) ((strseg_t){ s, strlen(s) })
 typedef struct strseg_s {
 	const char *data;
 	int len;
 } strseg_t;
 
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
+int  strseg_cmp(strseg_t a, strseg_t b);
 
 #define LOG_LEVEL_ERROR 2
 #define LOG_LEVEL_WARN 1

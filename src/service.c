@@ -48,9 +48,12 @@ void svc_do_exec(service_t *svc);
 void svc_set_active(service_t *svc, bool activate);
 static void svc_reparse_meta(service_t *svc);
 
-int  svc_by_name_compare(void *key, RBTreeNode *node) {
-	return strcmp((char*) key, ((service_t*) node->Object)->buffer);
+int  svc_by_name_compare(void *data, RBTreeNode *node) {
+	strseg_t *name= (strseg_t*) data;
+	service_t *obj= (service_t*) node->Object;
+	return strseg_cmp(*name, (strseg_t){ obj->buffer, obj->name_len });
 }
+
 int  svc_by_pid_compare(void *key, RBTreeNode *node) {
 	pid_t a= * (pid_t*) key;
 	pid_t b= ((service_t*) node->Object)->pid;
@@ -510,7 +513,7 @@ service_t *svc_by_name(strseg_t name, bool create) {
 		RBTreeNode_Init( &svc->name_index_node );
 		svc->name_index_node.Object= svc;
 		RBTreeNode_Init( &svc->pid_index_node );
-		RBTree_Add( &svc_by_name_index, &svc->name_index_node, svc->buffer);
+		RBTree_Add( &svc_by_name_index, &svc->name_index_node, &name );
 		// unless NDEBUG:
 			svc_check(svc);
 		return svc;
@@ -525,7 +528,7 @@ void svc_change_pid(service_t *svc, pid_t pid) {
 	if (svc->pid) {
 		RBTreeNode_Init( &svc->pid_index_node );
 		svc->pid_index_node.Object= svc;
-		RBTree_Add( &svc_by_pid_index, &svc->pid_index_node, &svc->pid);
+		RBTree_Add( &svc_by_pid_index, &svc->pid_index_node, &svc->pid );
 	}
 	// unless NDEBUG:
 		svc_check(svc);
@@ -548,9 +551,9 @@ service_t * svc_iter_next(service_t *svc, strseg_t from_name) {
 		log_trace("find(\"%.*s\"): { %d, %p }", from_name.len, from_name.data, s.Relation, s.Nearest);
 		if (s.Nearest == NULL)
 			node= NULL;
-		else if (s.Relation <= 0)
-			node= s.Nearest;
-		else
+		else if (s.Relation < 0) // If key is less than returned node,
+			node= s.Nearest;     // then we've got the "next node"
+		else                    // else we got the "prev node" and need the next one
 			node= RBTreeNode_GetNext(s.Nearest);
 	}
 	return node? (service_t *) node->Object : NULL;

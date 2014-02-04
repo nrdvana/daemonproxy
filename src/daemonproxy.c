@@ -18,6 +18,7 @@ wake_t *wake= &main_wake;
 void parse_opts(char **argv);
 void parse_option(char shortname, char* longname, char ***argv);
 int parse_size(const char *str, char **endp);
+bool create_standard_handles(int dev_null);
 
 int main(int argc, char** argv) {
 	int wstat, f, ret;
@@ -27,7 +28,6 @@ int main(int argc, char** argv) {
 	service_t *svc;
 	controller_t *ctl;
 	wake_t wake_instance;
-	fd_flags_t fdflags;
 	
 	memset(&wake_instance, 0, sizeof(wake_instance));
 	wake= &wake_instance;
@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
 	if (main_fd_pool_count > 0 && main_fd_pool_size_each > 0)
 		if (!fd_preallocate(main_fd_pool_count, main_fd_pool_size_each))
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
+
 	// A handle to dev/null is mandatory...
 	f= open("/dev/null", O_RDWR);
 	log_trace("open(/dev/null) => %d", f);
@@ -57,9 +58,8 @@ int main(int argc, char** argv) {
 		log_error("Will use stderr instead of /dev/null!");
 		f= 2;
 	}
-	fdflags= (fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true };
-	if (!fd_new_file((strseg_t){"null",4}, f, fdflags, (strseg_t){"/dev/null",9}))
-		fatal(EXIT_INVALID_ENVIRONMENT, "Can't create 'null' file descriptor");
+	if (!create_standard_handles(f))
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't allocate standard handle objects");
 
 	// Initialize service object pool and indexes
 	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
@@ -160,6 +160,33 @@ int main(int argc, char** argv) {
 	if (main_exec_on_exit)
 		fatal(0, "terminated normally");
 	return 0;
+}
+
+bool create_standard_handles(int dev_null) {
+	return fd_new_file(STRSEG("null"), dev_null,
+				(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true },
+				STRSEG("/dev/null"))
+
+		&& fd_new_file(STRSEG("stdin"), 0,
+				(fd_flags_t){ .special= true, .read= true, .write= false, .is_const= true },
+				STRSEG("standard-in of daemonproxy"))
+		
+		&& fd_new_file(STRSEG("stdout"), 1,
+				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
+				STRSEG("standard-out of daemonproxy"))
+		
+		&& fd_new_file(STRSEG("stderr"), 2,
+				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
+				STRSEG("standard-err of daemonproxy"))
+		
+		&& fd_new_file(STRSEG("control.event"), -2,
+				(fd_flags_t){ .special= true, .read= true, .write= false, .is_const= true },
+				STRSEG("daemonproxy event stream"))
+
+		&& fd_new_file(STRSEG("control.cmd"), -3,
+				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
+				STRSEG("daemonproxy commanbd pipe"))
+	;
 }
 
 // returns monotonic time as a 32.32 fixed-point number 
@@ -389,6 +416,17 @@ void log_write(int level, const char *msg, ...) {
 	va_start(val, msg);
 	vfprintf(stderr, msg2, val);
 	va_end(val);
+}
+
+int strseg_cmp(strseg_t a, strseg_t b) {
+	int i;
+	for (i= 0; i < a.len && i < b.len; i++) {
+		if (a.data[i] != b.data[i])
+			return a.data[i] < b.data[i]? -1 : 1;
+	}
+	if (a.len != b.len)
+		return a.len < b.len? -1 : 1;
+	return 0;
 }
 
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out) {

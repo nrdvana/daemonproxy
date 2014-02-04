@@ -23,6 +23,7 @@ struct fd_s {
 			struct fd_s *peer;
 		} pipe;
 	} attr;
+	int name_len;
 	char buffer[];
 };
 
@@ -42,7 +43,8 @@ static const char * append_elipses(char *buffer, int bufsize, strseg_t source);
 
 int fd_by_name_compare(void *data, RBTreeNode *node) {
 	strseg_t *name= (strseg_t*) data;
-	return strncmp(name->data, ((fd_t *) node->Object)->buffer, name->len);
+	fd_t *obj= (fd_t*) node->Object;
+	return strseg_cmp(*name, (strseg_t){ obj->buffer, obj->name_len });
 }
 
 void fd_init() {
@@ -81,7 +83,7 @@ fd_t * fd_new(int size, strseg_t name) {
 	assert(size >= sizeof(fd_t) + name.len + 1);
 	// enlarge the container if needed (and not using a pool)
 	if (fd_list_count >= fd_list_limit)
-		if (fd_obj_pool || !fd_list_resize(fd_list_limit * 2))
+		if (fd_obj_pool || !fd_list_resize(fd_list_limit + 32))
 			return NULL;
 	// allocate space (unless using a pool)
 	if (fd_obj_pool) {
@@ -102,6 +104,7 @@ fd_t * fd_new(int size, strseg_t name) {
 	obj->name_index_node.Object= obj;
 	memcpy(obj->buffer, name.data, name.len);
 	obj->buffer[name.len]= '\0';
+	obj->name_len= name.len;
 
 	RBTree_Add( &fd_by_name_index, &obj->name_index_node, &name );
 
@@ -248,6 +251,7 @@ fd_t * fd_by_name(strseg_t name) {
 }
 
 fd_t * fd_iter_next(fd_t *current, strseg_t from_name) {
+	log_trace("fd_iter_next(%p, %.*s)", current, from_name.len, from_name.data);
 	RBTreeNode *node;
 	if (current) {
 		node= RBTreeNode_GetNext(&current->name_index_node);
@@ -255,9 +259,9 @@ fd_t * fd_iter_next(fd_t *current, strseg_t from_name) {
 		RBTreeSearch s= RBTree_Find( &fd_by_name_index, (void*) &from_name );
 		if (s.Nearest == NULL)
 			node= NULL;
-		else if (s.Relation > 0)
-			node= s.Nearest;
-		else
+		else if (s.Relation < 0) // If key is less than returned node,
+			node= s.Nearest;     // then we've got the "next node"
+		else                    // else we got the "prev node" and need the next one
 			node= RBTreeNode_GetNext(s.Nearest);
 	}
 	return node? (fd_t *) node->Object : NULL;
