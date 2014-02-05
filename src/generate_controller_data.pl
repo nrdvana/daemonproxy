@@ -7,6 +7,10 @@ my @states;
 my %commands;
 
 while (<STDIN>) {
+	# Look for STATE macros with a command name, like
+	# STATE(state_fn, "command")
+	# We use this both for a mapping from fn pointer to fn name,
+	#  and to build a hash table of command strings
 	if ($_ =~ m|^\s*STATE\s*\(\s*(\S+)\s*(?:,\s*"(\S+)"\s*)?\)|) {
 		push @states, { fn => $1, cmd => $2 };
 		$commands{$2}= $states[-1]
@@ -38,7 +42,7 @@ sub build_table {
 	for (values %commands) {
 		my $bucket= hash_fn($_->{cmd}, $mul, $shift);
 		if (defined $table[$bucket]) {
-			print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
+#			print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
 			return undef;
 		}
 		$table[$bucket]= $_;
