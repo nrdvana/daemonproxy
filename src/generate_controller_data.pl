@@ -27,7 +27,7 @@ sub hash_fn {
 	my ($string, $mul, $shift)= @_;
 	use integer;
 	my $result= 0;
-	$result= ((($result * $mul) >> $shift) + $_) & 0xFFFF # don't let perl overflow an int
+	$result= ((($result * $mul) >> $shift) + $_) & 0xFFFFFF # don't let perl overflow an int
 		for unpack( 'C' x length($string), $string );
 	return $result & $mask;
 }
@@ -38,7 +38,7 @@ sub build_table {
 	for (values %commands) {
 		my $bucket= hash_fn($_->{cmd}, $mul, $shift);
 		if (defined $table[$bucket]) {
-			#print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
+			print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
 			return undef;
 		}
 		$table[$bucket]= $_;
@@ -48,8 +48,8 @@ sub build_table {
 
 sub find_collisionless_hash_params {
 	# pick factors for the hash function until each command has a unique bucket
-	for (my $mul= 1; $mul < $mask; $mul++) {
-		for (my $shift= 0; $shift < 5; $shift++) {
+	for (my $mul= 1; $mul < $table_size*$table_size; $mul++) {
+		for (my $shift= 0; $shift < 11; $shift++) {
 			my $table= build_table($mul, $shift);
 			return ( $table, $mul, $shift )
 				if $table;
@@ -78,7 +78,7 @@ $state_cases
 
 // table size is $table_size
 // $n_cmd commands
-// mul is $mul
+// mul is $mul, shift is $shift
 
 int ctl_command_hash_func(const char* buffer) {
 	int x= 0;

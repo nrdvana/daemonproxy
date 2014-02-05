@@ -14,7 +14,7 @@ $dp->run('--stdin');
 # Daemonproxy should set the overflow flag after about 6K and then queue an 'overflow' message.
 # When we finally read our pipe, it should end with "overflow" after about 6K of data.
 for (my $i= 0; $i < 1000; $i++) {
-	$dp->send("service.args\tfoo\t/nonexistent/path/$i".(' yada' x 60));
+	$dp->send("service.args.set\tfoo\t/nonexistent/path/$i".(' yada' x 60));
 }
 
 $dp->response_like(qr/^overflow$/m, 'overflow flag received');

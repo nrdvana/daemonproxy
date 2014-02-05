@@ -41,7 +41,8 @@ STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
 STATE(ctl_state_cmd_echo,              "echo");
 STATE(ctl_state_cmd_statedump,         "statedump");
-STATE(ctl_state_cmd_svc_args_set,      "service.args");
+STATE(ctl_state_cmd_svc_args,          "service.args");
+STATE(ctl_state_cmd_svc_args_set,      "service.args.set");
 STATE(ctl_state_cmd_svc_meta,          "service.meta");
 STATE(ctl_state_cmd_svc_meta_set,      "service.meta.set");
 STATE(ctl_state_cmd_svc_meta_apply,    "service.meta.apply");
@@ -395,6 +396,21 @@ bool ctl_extract_fdname_arg(controller_t *ctl, strseg_t *line, strseg_t *name, b
 }
 
 /** service.args command
+ * request a dump of the args for the named service.
+ */
+bool ctl_state_cmd_svc_args(controller_t *ctl) {
+	service_t *svc;
+	bool notified;
+	strseg_t line= ctl->command_arg_str;
+	
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
+		return END_CMD(notified);
+	
+	ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc));
+	return END_CMD(true);
+}
+
+/** service.args.set
  * Set the argv for a service object
  * Also report the state change when done.
  */
