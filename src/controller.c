@@ -46,7 +46,8 @@ STATE(ctl_state_cmd_svc_args_set,      "service.args.set");
 STATE(ctl_state_cmd_svc_meta,          "service.meta");
 STATE(ctl_state_cmd_svc_meta_set,      "service.meta.set");
 STATE(ctl_state_cmd_svc_meta_apply,    "service.meta.apply");
-STATE(ctl_state_cmd_svc_fds_set,       "service.fds");
+STATE(ctl_state_cmd_svc_fds,           "service.fds");
+STATE(ctl_state_cmd_svc_fds_set,       "service.fds.set");
 STATE(ctl_state_cmd_svc_start,         "service.start");
 STATE(ctl_state_cmd_fd_pipe,           "fd.pipe");
 STATE(ctl_state_cmd_fd_open,           "fd.open");
@@ -478,6 +479,18 @@ bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
 	return END_CMD(true);
 }
 
+bool ctl_state_cmd_svc_fds(controller_t *ctl) {
+	service_t *svc;
+	bool notified;
+	strseg_t line= ctl->command_arg_str;
+	
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
+		return END_CMD(notified);
+	
+	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
+	return END_CMD(true);
+}
+
 bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
 	service_t *svc;
 	bool notified;
@@ -491,7 +504,7 @@ bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
 
 	if (!svc_set_fds(svc, line))
 		return END_CMD( ctl_notify_error(ctl, "Unable to set file descriptors for service \"%s\"", svc_get_name(svc)) );
-	ctl_notify_svc_meta(NULL, svc_get_name(svc), svc_get_fds(svc));
+	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
 	return END_CMD(true);
 }
 
