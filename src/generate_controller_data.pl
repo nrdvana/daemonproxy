@@ -31,7 +31,7 @@ sub hash_fn {
 	my ($string, $mul, $shift)= @_;
 	use integer;
 	my $result= 0;
-	$result= ((($result * $mul) >> $shift) + $_) & 0xFFFFFF # don't let perl overflow an int
+	$result= ((($result * $mul) >> $shift) + $_)
 		for unpack( 'C' x length($string), $string );
 	return $result & $mask;
 }
