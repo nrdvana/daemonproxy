@@ -49,6 +49,7 @@ STATE(ctl_state_cmd_svc_meta_apply,    "service.meta.apply");
 STATE(ctl_state_cmd_svc_fds,           "service.fds");
 STATE(ctl_state_cmd_svc_fds_set,       "service.fds.set");
 STATE(ctl_state_cmd_svc_start,         "service.start");
+STATE(ctl_state_cmd_svc_signal,        "service.signal");
 STATE(ctl_state_cmd_fd_pipe,           "fd.pipe");
 STATE(ctl_state_cmd_fd_open,           "fd.open");
 STATE(ctl_state_cmd_exit,              "exit");
@@ -396,6 +397,34 @@ bool ctl_extract_fdname_arg(controller_t *ctl, strseg_t *line, strseg_t *name, b
 	return true;
 }
 
+bool ctl_extract_sig_arg(controller_t *ctl, strseg_t *line, int *sig_out) {
+	strseg_t signame;
+	char *endp;
+	long signum;
+	
+	if (!strseg_tok_next(line, '\t', &signame)) {
+		ctl_notify_error(ctl, "Missing signal argument");
+		return false;
+	}
+	
+	if (signame.len > 0 && signame.data[0] >= '0' && signame.data[0] <= '9') {
+		signum= strtol(signame.data, &endp, 10);
+		if (endp != signame.data + signame.len)
+			signum= 0;
+	}
+	else {
+		signum= sig_num_by_name(signame);
+	}
+	
+	if (signum <= 0) {
+		ctl_notify_error(ctl, "Invalid signal argument");
+		return false;
+	}
+
+	if (sig_out) *sig_out= signum;
+	return true;
+}
+
 /** service.args command
  * request a dump of the args for the named service.
  */
@@ -537,6 +566,34 @@ bool ctl_state_cmd_svc_start(controller_t *ctl) {
 		return END_CMD( ctl_notify_error(ctl, "Missing/invalid argument list for \"%s\"", svc_get_name(svc)) );
 	
 	svc_handle_start(svc, starttime_ts);
+	return END_CMD(true);
+}
+
+bool ctl_state_cmd_svc_signal(controller_t *ctl) {
+	service_t *svc;
+	bool notified, group= false;
+	strseg_t line= ctl->command_arg_str, flags;
+	int sig;
+	
+	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
+		return END_CMD(notified);
+	
+	if (!ctl_extract_sig_arg(ctl, &line, &sig))
+		return END_CMD(true);
+	
+	if (strseg_tok_next(&line, '\t', &flags)) {
+		if (strseg_cmp(flags, STRSEG("group")) == 0)
+			group= true;
+		else {
+			ctl_notify_error(ctl, "Unknown flag: %.*s", flags.len, flags.data);
+			return END_CMD(true);
+		}
+	}
+	
+	if (svc_get_pid(svc) <= 0 || svc_get_wstat(svc) >= 0)
+		ctl_notify_error(ctl, "Service is not running");
+	else if (!svc_send_signal(svc, sig, group))
+		ctl_notify_error(ctl, "kill(%d): %s", (int)svc_get_pid(svc), strerror(errno));
 	return END_CMD(true);
 }
 

@@ -285,6 +285,17 @@ void svc_handle_reaped(service_t *svc, int wstat) {
 	else log_trace("Service \"%s\" pid %d reaped, but service is not up", svc_get_name(svc), svc->pid);
 }
 
+/** Send a signal to a service iff it is running.
+ */
+bool svc_send_signal(service_t *svc, int signum, bool group) {
+	pid_t p= svc->pid;
+	if (p < 0) return false;
+	if (group) p= -p;
+		
+	log_debug("Sending signal %d to service \"%s\" pid %d", signum, svc_get_name(svc), (int)p);
+	return 0 == kill(p, signum);
+}
+
 /** Activate or deactivate a service.
  * This simply inserts or removes the service from a linked list.
  * Each service in the "active" list get processed each time the main loop wakes up.

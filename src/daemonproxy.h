@@ -140,6 +140,8 @@ service_t * svc_by_name(strseg_t name, bool create);
 service_t * svc_by_pid(pid_t pid);
 service_t * svc_iter_next(service_t *current, strseg_t from_name);
 
+bool svc_send_signal(service_t *svc, int sig, bool group);
+
 // Deallocate service struct
 void svc_delete(service_t *svc);
 
