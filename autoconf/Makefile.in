@@ -41,7 +41,15 @@ daemonproxy: $(daemonproxy_src:.c=.o)
 controller.o: $(srcdir)/controller_data.autogen.c
 
 $(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c $(srcdir)/generate_controller_data.pl
-	perl $(srcdir)/generate_controller_data.pl < $< > $@ || rm $@
+	perl $(srcdir)/generate_controller_data.pl < $< > $@.tmp && mv $@.tmp $@
+
+signal.o: $(srcdir)/signal_data.autogen.c
+
+$(srcdir)/sig_list.txt:
+	perl $(srcdir)/generate_signal_list.pl < $< > $@.tmp && mv $@.tmp $@
+
+$(srcdir)/signal_data.autogen.c: $(srcdir)/sig_list.txt $(srcdir)/signal.c $(srcdir)/generate_signal_data.pl
+	$(CPP) - - < $< | perl $(srcdir)/generate_signal_data.pl > $@.tmp && mv $@.tmp $@
 
 install:
 	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)

@@ -50,7 +50,8 @@ void sig_handler(int sig) {
 }
 
 void fatal_sig_handler(int sig) {
-	fatal(EXIT_BROKEN_PROGRAM_STATE, "Received signal %s (%d)", sig_name(sig), sig);
+	const char* signame= sig_name_by_num(sig);
+	fatal(EXIT_BROKEN_PROGRAM_STATE, "Received signal %s%s (%d)", signame? "SIG":"???", signame? signame : "", sig);
 	// No fallback available.  Probably can't actually recover from fatal signal...
 	// TODO: consider some sort of longjmp + state recovery
 	exit(EXIT_BROKEN_PROGRAM_STATE);
@@ -60,19 +61,19 @@ struct signal_spec_s {
 	int signum;
 	void (*handler)(int);
 } signal_spec[]= {
-	{ SIGINT,   sig_handler },
-	{ SIGHUP,   sig_handler },
-	{ SIGTERM,  sig_handler },
-	{ SIGUSR1,  sig_handler },
-	{ SIGUSR2,  sig_handler },
-	{ SIGCHLD,  sig_handler },
-	{ SIGPIPE,  SIG_IGN },
-	{ SIGABRT,  fatal_sig_handler },
-	{ SIGFPE,   fatal_sig_handler },
-	{ SIGILL,   fatal_sig_handler },
-	{ SIGSEGV,  fatal_sig_handler },
-	{ SIGBUS,   fatal_sig_handler },
-	{ SIGTRAP,  fatal_sig_handler },
+	{ SIGINT,  sig_handler },
+	{ SIGHUP,  sig_handler },
+	{ SIGTERM, sig_handler },
+	{ SIGUSR1, sig_handler },
+	{ SIGUSR2, sig_handler },
+	{ SIGCHLD, sig_handler },
+	{ SIGPIPE, SIG_IGN },
+	{ SIGABRT, fatal_sig_handler },
+	{ SIGFPE,  fatal_sig_handler },
+	{ SIGILL,  fatal_sig_handler },
+	{ SIGSEGV, fatal_sig_handler },
+	{ SIGBUS,  fatal_sig_handler },
+	{ SIGTRAP, fatal_sig_handler },
 	{ 0, NULL }
 };
 
@@ -181,25 +182,4 @@ void sig_mark_seen(int signum, int count) {
 	}
 }
 
-#define CASE_SIG(sig) case sig: return #sig;
-const char* sig_name(int sig_num) {
-	switch (sig_num) {
-	CASE_SIG(SIGCHLD)
-	CASE_SIG(SIGHUP)
-	CASE_SIG(SIGINT)
-	CASE_SIG(SIGQUIT)
-	CASE_SIG(SIGILL)
-	CASE_SIG(SIGTRAP)
-	CASE_SIG(SIGABRT)
-	CASE_SIG(SIGBUS)
-	CASE_SIG(SIGFPE)
-	CASE_SIG(SIGKILL)
-	CASE_SIG(SIGUSR1)
-	CASE_SIG(SIGUSR2)
-	CASE_SIG(SIGSEGV)
-	CASE_SIG(SIGPIPE)
-	CASE_SIG(SIGALRM)
-	CASE_SIG(SIGTERM)
-	default: return "unknown";
-	}
-}
+#include "signal_data.autogen.c"

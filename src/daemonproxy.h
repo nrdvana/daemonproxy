@@ -203,7 +203,9 @@ void sig_mark_seen(int signal, int count);
 // Main loop processing for signals.
 void sig_run();
 
-const char * sig_name(int sig_num);
+const char * sig_name_by_num(int sig_num);
+int sig_num_by_name(strseg_t name);
+
 
 #ifdef NDEBUG
 #define svc_check(svc)
