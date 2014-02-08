@@ -182,4 +182,40 @@ void sig_mark_seen(int signum, int count) {
 	}
 }
 
+struct sig_list_item {
+	int signum;
+	union { char chars[8]; int64_t val; } signame;
+};
+
 #include "signal_data.autogen.c"
+
+int sig_num_by_name(strseg_t name) {
+	union { char chars[8]; int64_t val; } search;
+	int i;
+	
+	if (name.len > 3 && name.data[0] == 'S' && name.data[1] == 'I' && name.data[2] == 'G') {
+		name.data += 3;
+		name.len -= 3;
+	}
+	if (name.len > 8)
+		return 0;
+	
+	search.val= 0;
+	for (i= name.len-1; i >= 0; i--)
+		search.chars[i]= name.data[i];
+	
+	for (i= 0; sig_list[i].signum; i++) {
+		if (sig_list[i].signame.val == search.val)
+			return sig_list[i].signum;
+	}
+	return 0;
+}
+
+const char* sig_name_by_num(int signum) {
+	int i;
+	for (i= 0; sig_list[i].signum; i++) {
+		if (sig_list[i].signum == signum)
+			return sig_list[i].signame.chars;
+	}
+	return NULL;
+}

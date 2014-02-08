@@ -881,10 +881,12 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 }
 
 bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
-	return ctl_write(NULL, "signal	%d	%s	%lld	%d\n", sig_num, sig_name(sig_num), sig_ts>>32, count);
+	const char *signame= sig_name_by_num(sig_num);
+	return ctl_write(NULL, "signal	%d	%s%s	%lld	%d\n", sig_num, signame? "SIG":"???", signame? signame : "", sig_ts>>32, count);
 }
 
 bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, int wstat, pid_t pid) {
+	const char *signame;
 	log_trace("ctl_notify_svc_state(%s, %lld, %lld, %d, %d)", name, up_ts, reap_ts, pid, wstat);
 	if (!up_ts)
 		return ctl_write(ctl, "service.state	%s	down\n", name);
@@ -895,10 +897,12 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 	else if (WIFEXITED(wstat))
 		return ctl_write(ctl, "service.state	%s	down	%d	exit	%d	uptime %d	pid	%d\n",
 			name, (int)(reap_ts>>32), WEXITSTATUS(wstat), (int)((reap_ts-up_ts)>>32), (int) pid);
-	else
-		return ctl_write(ctl, "service.state	%s	down	%d	signal	%d=%s	uptime %d	pid	%d\n",
-			name, (int)(reap_ts>>32), WTERMSIG(wstat), sig_name(WTERMSIG(wstat)),
+	else {
+		signame= sig_name_by_num(WTERMSIG(wstat));
+		return ctl_write(ctl, "service.state	%s	down	%d	signal	%d=%s%s	uptime %d	pid	%d\n",
+			name, (int)(reap_ts>>32), WTERMSIG(wstat), signame? "SIG":"???", signame? signame : "",
 			(int)((reap_ts-up_ts)>>32), (int) pid);
+	}
 }
 
 bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields) {
