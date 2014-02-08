@@ -395,6 +395,9 @@ void svc_do_exec(service_t *svc) {
 	int *fd_list;
 	fd_t *fd;
 	char **argv, *fd_spec, *arg_spec, *p, *p2;
+
+	// clear signal mask
+	sig_reset_for_exec();
 	
 	// Make mutable copies (which we don't need to free because we're calling exec)
 	fd_spec= strdup(svc_get_fds(svc));
@@ -405,29 +408,37 @@ void svc_do_exec(service_t *svc) {
 	}
 
 	// count our file descriptors, to allocate buffer
-	for (fd_count= 1, p= fd_spec; *p; p++)
-		if (*p == '\t')
-			fd_count++;
-	fd_list= alloca(fd_count);
-	// now iterate again to resolve them from name to number
-	fd_count= 0;
-	p= p2= fd_spec;
-	while (1) {
-		while (*p2 && *p2 != '\t') p2++;
-		if (p == p2)
-			log_warn("ignoring zero-length file descriptor name");
-		else if (*p == '-' && p2 - p == 1)
-			fd_list[fd_count++]= -1; // dash means "closed"
-		else {
-			fd= fd_by_name((strseg_t){ p, p2-p });
-			if (!fd) {
-				log_error("file descriptor \"%.*s\" does not exist", p2-p, p);
-				abort();
+	if (fd_spec[0]) {
+		for (fd_count= 1, p= fd_spec; *p; p++)
+			if (*p == '\t')
+				fd_count++;
+		fd_list= alloca(fd_count);
+		// now iterate again to resolve them from name to number
+		fd_count= 0;
+		p= p2= fd_spec;
+		while (1) {
+			while (*p2 && *p2 != '\t') p2++;
+			if (p == p2)
+				log_warn("ignoring zero-length file descriptor name");
+			else if (*p == '-' && p2 - p == 1)
+				fd_list[fd_count++]= -1; // dash means "closed"
+			else {
+				fd= fd_by_name((strseg_t){ p, p2-p });
+				if (!fd) {
+					log_error("file descriptor \"%.*s\" does not exist", p2-p, p);
+					abort();
+				}
+				fd_list[fd_count++]= fd_get_fdnum(fd);
 			}
-			fd_list[fd_count++]= fd_get_fdnum(fd);
+			if (!*p2) break;
+			p= ++p2;
 		}
-		if (!*p2) break;
-		p= ++p2;
+	} else {
+		// default file descriptors are to put '/dev/null' on stdin,stdout,stderr
+		fd_count= 3;
+		fd_list= alloca(fd_count);
+		fd= fd_by_name(STRSEG("null"));
+		fd_list[0]= fd_list[1]= fd_list[2]= (fd? fd_get_fdnum(fd) : -1);
 	}
 	
 	// Now move them into correct places

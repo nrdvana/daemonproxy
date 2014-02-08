@@ -194,6 +194,9 @@ void sig_init();
 // Enable or disable receipt of signals
 void sig_enable(bool enable);
 
+// Reset signal handling after fork() before exec()
+void sig_reset_for_exec();
+
 // Get next event based on previous timestamp
 bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *count_out);
 

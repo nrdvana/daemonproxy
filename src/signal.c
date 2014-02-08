@@ -119,8 +119,31 @@ void sig_enable(bool enable) {
 	else
 		sigfillset(&mask);
 	
-	if (!sigprocmask(SIG_SETMASK, &mask, NULL) == 0)
+	if (sigprocmask(SIG_SETMASK, &mask, NULL) != 0)
 		perror("sigprocmask(all)");
+}
+
+/** Prepare a forked child for exec()
+ *
+ * This un-sets all signal handlers, and then unmasks all signals.
+ * Don't do any "fatal error" checks, since we're doing things that have to succeed anyway.
+ */
+void sig_reset_for_exec() {
+	sigset_t mask;
+	struct sigaction act;
+	struct signal_spec_s *ss;
+	
+	// unset signal handlers
+	memset(&act, 0, sizeof(act));
+	act.sa_handler= SIG_DFL;
+	for (ss= signal_spec; ss->signum != 0; ss++)
+		if (sigaction(ss->signum, &act, NULL) != 0)
+			perror("sigaction(DFL)");
+
+	// unmask all signals
+	sigemptyset(&mask);
+	if (sigprocmask(SIG_SETMASK, &mask, NULL) != 0)
+		perror("sigprocmask(none)");
 }
 
 void sig_run() {
