@@ -31,7 +31,7 @@ sub hash_fn {
 	my ($string, $mul, $shift)= @_;
 	use integer;
 	my $result= 0;
-	$result= ((($result * $mul) >> $shift) + $_)
+	$result= (((($result * $mul) >> $shift)&((1<<(32-$shift))-1)) + $_)
 		for unpack( 'C' x length($string), $string );
 	return $result & $mask;
 }
@@ -85,7 +85,7 @@ $state_cases
 // mul is $mul, shift is $shift
 
 int ctl_command_hash_func(const char* buffer) {
-	int x= 0;
+	uint32_t x= 0;
 	const char *p= buffer;
 	while (*p && *p != '\\t') {
 		x= ((x * $mul) >> $shift) + (*p++ & 0xFF);
