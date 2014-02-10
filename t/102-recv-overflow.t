@@ -19,7 +19,7 @@ for (my $i= 0; $i < 1000; $i++) {
 
 $dp->response_like(qr/^overflow$/m, 'overflow flag received');
 
-$dp->flush_response;
+$dp->discard_response;
 
 $dp->send("echo\t-marker-");
 $dp->response_like( qr/^-marker-/, 'can still send/receive' );

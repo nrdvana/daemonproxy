@@ -73,16 +73,20 @@ sub send {
 }
 
 sub _read_more {
-	my ($self)= @_;
+	my ($self, $inputs)= @_;
+	my %ready= map { $_ => 1 }
+		IO::Select->new( grep { defined } map { ${$_->[0]} } @$inputs )
+			->can_read($self->timeout);
 	my $result= 0;
-	for (IO::Select->new( grep { defined } @{$self}{'dp_stdout','dp_stderr'} )->can_read($self->timeout)) {
-		my $is_stdout= (defined $self->{dp_stdout} && $_ eq $self->{dp_stdout});
-		my $buf= $is_stdout? \$self->{dp_stdout_buf} : \$self->{dp_stderr_buf};
-		my $got= sysread($_, $$buf, 1024, length($$buf));
+	for (@$inputs) {
+		my ($fd_ref, $buf_ref)= @$_;
+		next unless $ready{$$fd_ref};
+		my $got= sysread($$fd_ref, $$buf_ref, 1024, length($$buf_ref));
 		if (!$got) {
-			close(delete $self->{$is_stdout? 'dp_stdout' : 'dp_stderr'});
+			close($$fd_ref);
+			$$fd_ref= undef;
 		}
-		print map { chomp; "# recv: $_\n" } (substr($$buf, -$got) =~ /^.*$/mg);
+		print map { chomp; "# recv: $$buf_ref\n" } (substr($$buf_ref, -$got) =~ /^.*$/mg);
 		$result= 1;
 	}
 	return $result;
@@ -103,69 +107,151 @@ sub _collect_exit_status {
 	return undef;
 }
 
-sub flush_response {
+sub _recv_pattern {
+	my ($self, $inputs, $patterns)= @_;
+	for my $pattern (@$patterns) {
+		$pattern= qr/(?:$pattern)/pm # make pattern be multi-line and preserve position info
+			unless "$pattern" =~ /^\(\?\^?[a-ln-oq-z]*p[a-ln-oq-z]*m/;
+	}
+	while (1) {
+		for (@$inputs) {
+			my ($io_ref, $buf_ref)= @$_;
+			for (my $p= 0; $p < @$patterns; $p++) {
+				# Check each pattern against the buffer
+				if ($$buf_ref =~ $patterns->[$p]) {
+					my $match= ${^MATCH};
+					my $line_end= -1;
+					# Make sure we have the whole line it matched on
+					if (length($match) && rindex($match, "\n") == length($match)-1) {
+						$line_end= length(${^PREMATCH}) + length($match);
+					} elsif (index(${^POSTMATCH}, "\n") >= 0) {
+						$line_end= length(${^PREMATCH}) + length($match) + index(${^POSTMATCH}, "\n") + 1;
+					} elsif (!defined $$io_ref) {
+						$line_end= length($$buf_ref);
+					} else {
+						next;
+					}
+					# Now remove all buffer up to and including the line the match occurred on.
+					my $removed= $line_end > 0? substr($$buf_ref, 0, $line_end) : '';
+					substr($$buf_ref, 0, $line_end)= '';
+					$self->{last_match}= $match;
+					$self->{last_pattern_idx}= $p;
+					$self->{last_input_removed}= $removed;
+					return 1;
+				}
+			}
+		}
+		$self->_read_more($inputs)
+			or return 0;
+	}
+}
+
+sub discard_response {
 	my $self= shift;
-	while ($self->_read_more) {}
+	while ($self->_read_more([
+		[ \$self->{dp_stdout}, \$self->{dp_stdout_buf} ],
+		[ \$self->{dp_stderr}, \$self->{dp_stderr_buf} ]
+		])) {}
 	$self->{dp_stdout_buf}= '';
 	$self->{dp_stderr_buf}= '';
 }
 
-sub response_like {
+sub discard_stdout {
+	my $self= shift;
+	while ($self->_read_more([
+		[ \$self->{dp_stdout}, \$self->{dp_stdout_buf} ],
+		])) {}
+	$self->{dp_stdout_buf}= '';
+}
+
+sub discard_stderr {
+	my $self= shift;
+	while ($self->_read_more([
+		[ \$self->{dp_stderr}, \$self->{dp_stderr_buf} ]
+		])) {}
+	$self->{dp_stderr_buf}= '';
+}
+
+sub recv {
+	my ($self, @patterns)= @_;
+	my $inputs= [
+		[ \$self->{dp_stdout}, \$self->{dp_stdout_buf} ],
+		[ \$self->{dp_stderr}, \$self->{dp_stderr_buf} ]
+		];
+	$self->_recv_pattern($inputs, \@patterns);
+}
+
+sub recv_stdout {
+	my ($self, @patterns)= @_;
+	my $inputs= [
+		[ \$self->{dp_stdout}, \$self->{dp_stdout_buf} ],
+		];
+	$self->_recv_pattern($inputs, \@patterns);
+}
+
+sub recv_stderr {
+	my ($self, @patterns)= @_;
+	my $inputs= [
+		[ \$self->{dp_stderr}, \$self->{dp_stderr_buf} ]
+		];
+	$self->_recv_pattern($inputs, \@patterns);
+}
+
+sub recv_ok {
 	my $self= shift;
 	my $pattern= shift;
-	$pattern= qr/(?:$pattern)/pm # make pattern be multi-line and preserve position info
-		unless "$pattern" =~ /^\(\?\^?[a-ln-oq-z]*p[a-ln-oq-z]*m/;
 	$_[0] ||= "response contains $pattern";
-	while (1) {
-		if ($self->{dp_stdout_buf} =~ $pattern) {
-			# remove all of buffer up til matched line
-			my $next_lf= index(${^POSTMATCH}, "\n");
-			$self->{dp_stdout_buf}= $next_lf >= 0? substr(${^POSTMATCH}, $next_lf+1) : ${^POSTMATCH};
-			goto &Test::More::pass;
-		}
-		if (!$self->_read_more) {
-			Test::More::diag("buffer contains: ".Dumper($self->{dp_stdout_buf}));
-			goto &Test::More::fail;
-		}
+	if ($self->recv($pattern)) {
+		goto &Test::More::pass;
+	} else {
+		Test::More::diag("stdout buffer: ".Data::Dumper->new([ $self->{dp_stdout_buf} ])->Terse(1)->Dump);
+		Test::More::diag("stderr buffer: ".Data::Dumper->new([ $self->{dp_stderr_buf} ])->Terse(1)->Dump);
+		goto &Test::More::fail;
+	}
+}
+*response_like= *recv_ok;
+
+sub recv_stdout_ok {
+	my $self= shift;
+	my $pattern= shift;
+	$_[0] ||= "response contains $pattern";
+	if ($self->recv_stdout($pattern)) {
+		goto &Test::More::pass;
+	} else {
+		Test::More::diag("stdout buffer: ".Data::Dumper->new([ $self->{dp_stdout_buf} ])->Terse(1)->Dump);
+		goto &Test::More::fail;
 	}
 }
 
-sub stderr_like {
+sub recv_stderr_ok {
 	my $self= shift;
 	my $pattern= shift;
-	$pattern= qr/(?:$pattern)/pm # make pattern be multi-line and preserve position info
-		unless "$pattern" =~ /^\(\?\^?[a-ln-oq-z]*p[a-ln-oq-z]*m/;
 	$_[0] ||= "response contains $pattern";
-	while (1) {
-		if ($self->{dp_stderr_buf} =~ $pattern) {
-			# remove all of buffer up til matched line
-			my $next_lf= index(${^POSTMATCH}, "\n");
-			$self->{dp_stderr_buf}= $next_lf >= 0? substr(${^POSTMATCH}, $next_lf+1) : ${^POSTMATCH};
-			goto &Test::More::pass;
-		}
-		if (!$self->_read_more) {
-			Test::More::diag("buffer contains: ".Dumper($self->{dp_stderr_buf}));
-			goto &Test::More::fail;
-		}
+	if ($self->recv_stderr($pattern)) {
+		goto &Test::More::pass;
+	} else {
+		Test::More::diag("stderr buffer: ".Data::Dumper->new([ $self->{dp_stderr_buf} ])->Terse(1)->Dump);
+		goto &Test::More::fail;
 	}
 }
+
 
 sub exit_is {
-	my ($self, $exitcode, $description)= @_;
-	$description ||= "exited with code $exitcode";
+	my $self= shift;
+	my $exitcode= shift;
+	$_[0] ||= "exit with code $exitcode";
 	my $wstat= $self->_collect_exit_status;
 	if (!defined $wstat) {
-		Test::More::fail($description);
 		Test::More::diag("wait() timed out");
-		return 0;
+		goto &Test::More::fail;
 	}
 	elsif ($wstat & 127) {
-		Test::More::fail($description);
 		Test::More::diag("died on signal ".($? & 127));
-		return 0;
+		goto &Test::More::fail;
 	}
 	else {
-		return Test::More::is($wstat>>8, $exitcode, $description);
+		unshift @_, $wstat>>8, $exitcode;
+		goto &Test::More::is;
 	}
 }
 
