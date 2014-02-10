@@ -24,13 +24,14 @@ sub binary_path {
 
 sub new {
 	my $class= shift;
-	return bless { timeout => 0.5, buffer => '' }, $class;
+	return bless { timeout => 0.5, dp_stdout_buf => '', dp_stderr_buf => '' }, $class;
 }
 
 sub dp_pid      { $_[0]{dp_pid} }
 *pid= *dp_pid;
-sub send_handle { $_[0]{send_handle} }
-sub recv_handle { $_[0]{recv_handle} }
+sub dp_stdin    { $_[0]{dp_stdin} }
+sub dp_stdout   { $_[0]{dp_stdout} }
+sub dp_stderr   { $_[0]{dp_stderr} }
 sub timeout     { @_ > 1? ($_[0]{timeout}= $_[1]) : $_[0]{timeout}; }
 
 sub run {
@@ -38,46 +39,53 @@ sub run {
 	die "Run was already called on this object"
 		if defined $self->{dp_pid};
 	
-	my ($dp_to_script_w, $dp_to_script_r, $script_to_dp_w, $script_to_dp_r);
-	pipe($dp_to_script_r, $dp_to_script_w) or die "pipe: $!";
-	pipe($script_to_dp_r, $script_to_dp_w) or die "pipe: $!";
+	pipe(my ($dp_stdin_r,  $dp_stdin_w))  or die "pipe: $!";
+	pipe(my ($dp_stdout_r, $dp_stdout_w)) or die "pipe: $!";
+	pipe(my ($dp_stderr_r, $dp_stderr_w)) or die "pipe: $!";
 	
 	# Launch DaemonProxy instance
 	defined ($self->{dp_pid}= fork()) or die "fork: $!";
 	if ($self->dp_pid == 0) {
-		open STDIN, ">&", $script_to_dp_r or die "dup pipe to stdin: $!";
-		open STDOUT, ">&", $dp_to_script_w or die "dup pipe to stdout: $!";
+		open STDIN,  ">&", $dp_stdin_r  or die "dup pipe to stdin: $!";
+		open STDOUT, ">&", $dp_stdout_w or die "dup pipe to stdout: $!";
+		open STDERR, ">&", $dp_stderr_w or die "dup pipe to stderr: $!";
 		exec($self->binary_path, @argv)
 			or warn "exec(daemonproxy): $!";
 		# make a sharp exit, without running cleanup code that could interfere with the parent process
 		exec('/bin/false') || 	POSIX::_exit(2);
 	}
 	
-	$self->{send_handle}= $script_to_dp_w;
-	$self->{recv_handle}= $dp_to_script_r;
-	$self->{recv_handle}->blocking(0);
-	$self->{send_handle}->autoflush(1);
+	$self->{dp_stdin}= $dp_stdin_w;
+	$self->{dp_stdin}->autoflush(1);
+	
+	$self->{dp_stdout}= $dp_stdout_r;
+	$self->{dp_stdout}->blocking(0);
+	
+	$self->{dp_stderr}= $dp_stderr_r;
+	$self->{dp_stderr}->blocking(0);
 	1;
 }
 
 sub send {
 	my ($self, $msg)= @_;
-	print "send: \"$msg\"\n";
-	$self->send_handle->print($msg."\n");
+	print "# send: \"$msg\"\n";
+	$self->dp_stdin->print($msg."\n");
 }
 
 sub _read_more {
 	my ($self)= @_;
-	if (IO::Select->new( $self->recv_handle )->can_read($self->timeout)) {
-		my $got= sysread($self->recv_handle, $self->{buffer}, 1024, length($self->{buffer}));
+	my $result= 0;
+	for (IO::Select->new( grep { defined } @{$self}{'dp_stdout','dp_stderr'} )->can_read($self->timeout)) {
+		my $is_stdout= (defined $self->{dp_stdout} && $_ eq $self->{dp_stdout});
+		my $buf= $is_stdout? \$self->{dp_stdout_buf} : \$self->{dp_stderr_buf};
+		my $got= sysread($_, $$buf, 1024, length($$buf));
 		if (!$got) {
-			close($self->recv_handle);
-			delete $self->{recv_handle};
-			return 0;
+			close(delete $self->{$is_stdout? 'dp_stdout' : 'dp_stderr'});
 		}
-		return 1;
+		print map { chomp; "# recv: $_\n" } (substr($$buf, -$got) =~ /^.*$/mg);
+		$result= 1;
 	}
-	return 0;
+	return $result;
 }
 
 sub _collect_exit_status {
@@ -98,26 +106,46 @@ sub _collect_exit_status {
 sub flush_response {
 	my $self= shift;
 	while ($self->_read_more) {}
-	$self->{buffer}= '';
+	$self->{dp_stdout_buf}= '';
+	$self->{dp_stderr_buf}= '';
 }
 
 sub response_like {
-	my ($self, $pattern, $description)= @_;
+	my $self= shift;
+	my $pattern= shift;
 	$pattern= qr/(?:$pattern)/pm # make pattern be multi-line and preserve position info
 		unless "$pattern" =~ /^\(\?\^?[a-ln-oq-z]*p[a-ln-oq-z]*m/;
-	$description ||= "response contains $pattern";
+	$_[0] ||= "response contains $pattern";
 	while (1) {
-		if ($self->{buffer} =~ $pattern) {
-			Test::More::pass($description);
+		if ($self->{dp_stdout_buf} =~ $pattern) {
 			# remove all of buffer up til matched line
 			my $next_lf= index(${^POSTMATCH}, "\n");
-			$self->{buffer}= $next_lf >= 0? substr(${^POSTMATCH}, $next_lf+1) : ${^POSTMATCH};
-			return 1;
+			$self->{dp_stdout_buf}= $next_lf >= 0? substr(${^POSTMATCH}, $next_lf+1) : ${^POSTMATCH};
+			goto &Test::More::pass;
 		}
 		if (!$self->_read_more) {
-			Test::More::fail($description);
-			Test::More::diag("buffer contains: ".Dumper($self->{buffer}));
-			return 0;
+			Test::More::diag("buffer contains: ".Dumper($self->{dp_stdout_buf}));
+			goto &Test::More::fail;
+		}
+	}
+}
+
+sub stderr_like {
+	my $self= shift;
+	my $pattern= shift;
+	$pattern= qr/(?:$pattern)/pm # make pattern be multi-line and preserve position info
+		unless "$pattern" =~ /^\(\?\^?[a-ln-oq-z]*p[a-ln-oq-z]*m/;
+	$_[0] ||= "response contains $pattern";
+	while (1) {
+		if ($self->{dp_stderr_buf} =~ $pattern) {
+			# remove all of buffer up til matched line
+			my $next_lf= index(${^POSTMATCH}, "\n");
+			$self->{dp_stderr_buf}= $next_lf >= 0? substr(${^POSTMATCH}, $next_lf+1) : ${^POSTMATCH};
+			goto &Test::More::pass;
+		}
+		if (!$self->_read_more) {
+			Test::More::diag("buffer contains: ".Dumper($self->{dp_stderr_buf}));
+			goto &Test::More::fail;
 		}
 	}
 }

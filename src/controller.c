@@ -593,7 +593,7 @@ bool ctl_state_cmd_svc_signal(controller_t *ctl) {
 	if (svc_get_pid(svc) <= 0 || svc_get_wstat(svc) >= 0)
 		ctl_notify_error(ctl, "Service is not running");
 	else if (!svc_send_signal(svc, sig, group))
-		ctl_notify_error(ctl, "kill(%d): %s", (int)svc_get_pid(svc), strerror(errno));
+		ctl_notify_error(ctl, "Can't kill %s (%s %d): %s", svc_get_name(svc), group? "pgid":"pid", (int)svc_get_pid(svc), strerror(errno));
 	return END_CMD(true);
 }
 
