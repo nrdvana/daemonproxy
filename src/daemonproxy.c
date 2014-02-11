@@ -153,6 +153,7 @@ int main(int argc, char** argv) {
 					select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
 				}
 			}
+			wake->now= gettime_mon_frac();
 		}
 		else log_trace("no wait at main loop");
 	}

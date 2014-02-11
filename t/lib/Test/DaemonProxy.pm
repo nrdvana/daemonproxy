@@ -6,11 +6,12 @@ require IO::Select;
 use IO::Handle;
 use POSIX ':sys_wait_h';
 use Data::Dumper 'Dumper';
+use Time::HiRes 'sleep';
 use Carp;
 
 BEGIN {
 	# make sure cleanup code runs
-	$SIG{INT}= $SIG{TERM}= $SIG{QUIT}= sub { print STDERR "# killed\n"; exit(2) };
+	$SIG{INT}= $SIG{TERM}= $SIG{QUIT}= $SIG{HUP}= sub { print STDERR "# killed\n"; exit(2) };
 }
 
 sub binary_path {
@@ -32,6 +33,7 @@ sub dp_pid      { $_[0]{dp_pid} }
 sub dp_stdin    { $_[0]{dp_stdin} }
 sub dp_stdout   { $_[0]{dp_stdout} }
 sub dp_stderr   { $_[0]{dp_stderr} }
+sub last_captures { $_[0]{last_captures} }
 sub timeout     { @_ > 1? ($_[0]{timeout}= $_[1]) : $_[0]{timeout}; }
 
 sub run {
@@ -68,7 +70,7 @@ sub run {
 
 sub send {
 	my ($self, $msg)= @_;
-	print "# send: \"$msg\"\n";
+	Test::More::note("send: \"$msg\"");
 	$self->dp_stdin->print($msg."\n");
 }
 
@@ -86,7 +88,7 @@ sub _read_more {
 			close($$fd_ref);
 			$$fd_ref= undef;
 		}
-		print map { chomp; "# recv: $$buf_ref\n" } (substr($$buf_ref, -$got) =~ /^.*$/mg);
+		Test::More::note("recv: $_") for (substr($$buf_ref, -$got) =~ /^.*$/mg);
 		$result= 1;
 	}
 	return $result;
@@ -102,7 +104,7 @@ sub _collect_exit_status {
 			return $self->{dp_wstat}= $?;
 		}
 		last if time > $deadline;
-		select(undef, undef, undef, $deadline - time);
+		sleep(0.1);
 	}
 	return undef;
 }
@@ -118,7 +120,8 @@ sub _recv_pattern {
 			my ($io_ref, $buf_ref)= @$_;
 			for (my $p= 0; $p < @$patterns; $p++) {
 				# Check each pattern against the buffer
-				if ($$buf_ref =~ $patterns->[$p]) {
+				my @captures;
+				if (@captures= ($$buf_ref =~ $patterns->[$p])) {
 					my $match= ${^MATCH};
 					my $line_end= -1;
 					# Make sure we have the whole line it matched on
@@ -137,6 +140,7 @@ sub _recv_pattern {
 					$self->{last_match}= $match;
 					$self->{last_pattern_idx}= $p;
 					$self->{last_input_removed}= $removed;
+					$self->{last_captures}= \@captures;
 					return 1;
 				}
 			}
@@ -242,11 +246,11 @@ sub exit_is {
 	$_[0] ||= "exit with code $exitcode";
 	my $wstat= $self->_collect_exit_status;
 	if (!defined $wstat) {
-		Test::More::diag("wait() timed out");
+		Test::More::note("wait() timed out");
 		goto &Test::More::fail;
 	}
 	elsif ($wstat & 127) {
-		Test::More::diag("died on signal ".($? & 127));
+		Test::More::note("died on signal ".($? & 127));
 		goto &Test::More::fail;
 	}
 	else {
@@ -260,10 +264,10 @@ sub cleanup {
 	
 	$self->dp_pid and kill SIGQUIT => $self->dp_pid;
 	delete $self->{dp_pid};
-	close delete $self->{send_handle}
-		if defined $self->{send_handle};
-	close delete $self->{recv_handle}
-		if defined $self->{recv_handle};
+	for (qw: dp_stdin dp_stdout dp_stderr :) {
+		close delete $self->{$_}
+			if defined $self->{$_};
+	}
 }
 
 sub DESTROY { $_[0]->cleanup(); }
