@@ -13,6 +13,7 @@
 #define SVC_STATE_START         3
 #define SVC_STATE_UP            4
 #define SVC_STATE_REAPED        5
+#define SVC_STATE_ALLOC_CTL     6
 
 struct service_s {
 	int size, state;
@@ -25,7 +26,9 @@ struct service_s {
 		struct service_s *next_free;
 	};
 	pid_t pid;
-	bool auto_restart: 1;
+	bool auto_restart: 1,
+		pipe_control_event: 1,
+		pipe_control_cmd: 1;
 	int wait_status;
 	int64_t start_time;
 	int64_t reap_time;
@@ -334,8 +337,11 @@ void svc_run_active(wake_t *wake) {
  */
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
-	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
+	int pipes[4], i;
+	controller_t *ctl;
+
 	re_switch_state:
+	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
 	switch (svc->state) {
 	case SVC_STATE_START_PENDING:
 		// if not wake time yet,
@@ -351,23 +357,52 @@ void svc_run(service_t *svc, wake_t *wake) {
 		svc->state= SVC_STATE_START;
 		svc_notify_state(svc);
 	case SVC_STATE_START:
+		// Check file descriptors for the controller pipe special cases
+		if (0) {
+	case SVC_STATE_ALLOC_CTL:
+			// We need a controller object, of which there are a fixed number
+			// Do we have one?
+			for (i=0; i<4; i++) pipes[i]= -1;
+			if (!(ctl= ctl_alloc())
+				|| 0 != pipe(pipes)
+				|| 0 != pipe(pipes+2)
+				|| !ctl_ctor(ctl, pipes[0], pipes[3])
+			) {
+				for (i=0; i<4; i++) close(pipes[i]);
+				if (ctl) ctl_free(ctl);
+				if (svc->state != SVC_STATE_ALLOC_CTL) {
+					svc->state= SVC_STATE_ALLOC_CTL;
+					svc_notify_state(svc);
+				}
+				break;
+			}
+		}
 		pid= fork();
 		if (pid > 0) {
 			svc_change_pid(svc, pid);
 			svc->start_time= wake->now;
 			if (!svc->start_time) svc->start_time= 1;
+			if (0) {
+				close(pipes[1]);
+				close(pipes[2]);
+			}
+			svc->state= SVC_STATE_UP;
 		} else if (pid == 0) {
 			svc_do_exec(svc);
 			assert(0);
 			// never returns
 		} else {
 			// else fork failed, and we need to wait 3 sec and try again
+			if (0) {
+				close(pipes[1]);
+				close(pipes[2]);
+				ctl_dtor(ctl);
+				ctl_free(ctl);
+			}
 			svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
-			svc_notify_state(svc);
-			goto re_switch_state;
 		}
-		svc->state= SVC_STATE_UP;
 		svc_notify_state(svc);
+		goto re_switch_state;
 	case SVC_STATE_UP:
 		svc_set_active(svc, false);
 		// waitpid in main loop will re-activate us and set state to REAPED
@@ -403,8 +438,8 @@ void svc_do_exec(service_t *svc) {
 	int fd_count, arg_count, i;
 	int *fd_list;
 	fd_t *fd;
-	char **argv, *arg_spec, *p, *p2;
-	strseg_t fd_spec, fd_name;
+	char **argv, *arg_spec, *p;
+	strseg_t fd_spec, tmp, fd_name;
 
 	// clear signal mask
 	sig_reset_for_exec();
@@ -420,13 +455,15 @@ void svc_do_exec(service_t *svc) {
 	fd_spec.len= strlen(fd_spec.data);
 	if (fd_spec.len) {
 		// count our file descriptors, to allocate buffer
-		for (fd_count= 1, p= fd_spec.data; *p; p++)
-			if (*p == '\t')
-				fd_count++;
+		fd_count= 0;
+		tmp= fd_spec;
+		while (strseg_tok_next(&tmp, '\t', &fd_name))
+			fd_count++;
 		fd_list= alloca(fd_count);
 		// now iterate again to resolve them from name to number
 		fd_count= 0;
-		while (strseg_next_tok(&fd_spec, '\t', &fd_name)) {
+		tmp= fd_spec;
+		while (strseg_tok_next(&tmp, '\t', &fd_name)) {
 			if (fd_name.len <= 0)
 				log_warn("ignoring zero-length file descriptor name");
 			else if (fd_name.len == 1 && fd_name.data[0] == '-')

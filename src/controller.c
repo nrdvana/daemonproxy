@@ -39,6 +39,7 @@ STATE(ctl_state_close);
 STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
+STATE(ctl_state_free);
 STATE(ctl_state_cmd_echo,              "echo");
 STATE(ctl_state_cmd_statedump,         "statedump");
 STATE(ctl_state_cmd_svc_args,          "service.args");
@@ -56,8 +57,6 @@ STATE(ctl_state_cmd_exit,              "exit");
 STATE(ctl_state_cmd_terminate,         "terminate");
 STATE(ctl_state_cmd_log_filter,        "log.filter");
 
-static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
-static void ctl_dtor(controller_t *ctl);
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
 
@@ -85,14 +84,27 @@ void ctl_init() {
 }
 
 controller_t *ctl_new(int recv_fd, int send_fd) {
-	int i;
-	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++)
-		if (!client[i].state_fn)
-			return ctl_ctor(&client[i], recv_fd, send_fd)? &client[i] : NULL;
+	controller_t *ctl= ctl_alloc();
+	if (!ctl) return NULL;
+	if (ctl_ctor(ctl, recv_fd, send_fd))
+		return ctl;
+	ctl_state_free(ctl);
 	return NULL;
 }
 
-static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
+controller_t *ctl_alloc() {
+	controller_t *ctl;
+	for (ctl= client; ctl < client + CONTROLLER_MAX_CLIENTS; ctl++)
+		if (!ctl->state_fn) {
+			// non-null state marks it as allocated
+			memset(ctl, 0, sizeof(controller_t));
+			ctl->state_fn= &ctl_state_free;
+			return ctl;
+		}
+	return NULL;
+}
+
+bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	log_debug("creating client %d with handles %d,%d", ctl - client, recv_fd, send_fd);
 	// file descriptors must be nonblocking
 	if (recv_fd != -1)
@@ -105,19 +117,18 @@ static bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 			log_error("fcntl(O_NONBLOCK): errno = %s (%d)", strerror(errno), errno);
 			return false;
 		}
-	// initialize object.  non-null state marks it as allocated
-	memset(ctl, 0, sizeof(controller_t));
+	// initialize object
 	ctl->state_fn= &ctl_state_read_command;
 	ctl->recv_fd= recv_fd;
 	ctl->send_fd= send_fd;
 	return true;
 }
 
-static void ctl_dtor(controller_t *ctl) {
+void ctl_dtor(controller_t *ctl) {
 	log_debug("destroying client %d", ctl - client);
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
 	if (ctl->send_fd >= 0) close(ctl->send_fd);
-	ctl->state_fn= NULL;
+	ctl->state_fn= ctl_state_free;
 }
 
 bool ctl_state_close(controller_t *ctl) {
@@ -125,6 +136,15 @@ bool ctl_state_close(controller_t *ctl) {
 		if (!ctl_flush_outbuf(ctl))
 			return false; // remain in this state and try again later
 	ctl_dtor(ctl);
+	return true; // final state is 'free'.
+}
+
+void ctl_free(controller_t *ctl) {
+	ctl->state_fn= NULL;
+}
+
+bool ctl_state_free(controller_t *ctl) {
+	ctl_free(ctl);
 	return false; // don't run any more state iterations, because there aren't any
 }
 

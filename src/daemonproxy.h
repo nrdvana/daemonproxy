@@ -71,6 +71,11 @@ typedef struct controller_s controller_t;
 // Initialize controller state machine.
 void ctl_init();
 controller_t * ctl_new(int recv_fd, int send_fd);
+controller_t * ctl_alloc();
+void ctl_free(controller_t *ctl);
+bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd);
+void ctl_dtor(controller_t *ctl);
+
 void ctl_set_auto_final_newline(controller_t *ctl, bool enable);
 
 // Queue a message to the controller, possibly overflowing the output buffer
