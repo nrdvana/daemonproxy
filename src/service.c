@@ -403,47 +403,44 @@ void svc_do_exec(service_t *svc) {
 	int fd_count, arg_count, i;
 	int *fd_list;
 	fd_t *fd;
-	char **argv, *fd_spec, *arg_spec, *p, *p2;
+	char **argv, *arg_spec, *p, *p2;
+	strseg_t fd_spec, fd_name;
 
 	// clear signal mask
 	sig_reset_for_exec();
 	
 	// Make mutable copies (which we don't need to free because we're calling exec)
-	fd_spec= strdup(svc_get_fds(svc));
 	arg_spec= strdup(svc_get_argv(svc));
-	if (!fd_spec || !arg_spec) {
+	if (!arg_spec) {
 		log_error("out of memory");
 		abort();
 	}
 
-	// count our file descriptors, to allocate buffer
-	if (fd_spec[0]) {
-		for (fd_count= 1, p= fd_spec; *p; p++)
+	fd_spec.data= svc_get_fds(svc);
+	fd_spec.len= strlen(fd_spec.data);
+	if (fd_spec.len) {
+		// count our file descriptors, to allocate buffer
+		for (fd_count= 1, p= fd_spec.data; *p; p++)
 			if (*p == '\t')
 				fd_count++;
 		fd_list= alloca(fd_count);
 		// now iterate again to resolve them from name to number
 		fd_count= 0;
-		p= p2= fd_spec;
-		while (1) {
-			while (*p2 && *p2 != '\t') p2++;
-			if (p == p2)
+		while (strseg_next_tok(&fd_spec, '\t', &fd_name)) {
+			if (fd_name.len <= 0)
 				log_warn("ignoring zero-length file descriptor name");
-			else if (*p == '-' && p2 - p == 1)
+			else if (fd_name.len == 1 && fd_name.data[0] == '-')
 				fd_list[fd_count++]= -1; // dash means "closed"
-			else {
-				fd= fd_by_name((strseg_t){ p, p2-p });
-				if (!fd) {
-					log_error("file descriptor \"%.*s\" does not exist", p2-p, p);
-					abort();
-				}
+			else if ((fd= fd_by_name(fd_name)))
 				fd_list[fd_count++]= fd_get_fdnum(fd);
+			else {
+				log_error("file descriptor \"%.*s\" does not exist", fd_name.len, fd_name.data);
+				abort();
 			}
-			if (!*p2) break;
-			p= ++p2;
 		}
 	} else {
-		// default file descriptors are to put '/dev/null' on stdin,stdout,stderr
+		// if spec is zero length, default to '/dev/null' on stdin,stdout,stderr
+		// rather than defaulting to having them closed
 		fd_count= 3;
 		fd_list= alloca(fd_count);
 		fd= fd_by_name(STRSEG("null"));
