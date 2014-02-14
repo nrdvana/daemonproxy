@@ -1,194 +1,234 @@
 ### Overview ###
 
-init-frame is a replacement for init which couples a tiny bare-bones C program that
-implementa basic init functionality with a controller script which provides custom
-behavior.  The idea is that if the controller script dies or is killed, process 1 will
-remain running and performing its fundamental duties until the controller script can
-be re-spawned to resume normal operation.
+daemonproxy's API consists of events, which it sends to listeners (the primary
+listener being your controller script), and methods (commands) that it receives
+from configuration files or your controller script that configure services or
+file descriptors.  There are also commands to make daemonproxy perform simple
+operations like kill(), or change logging behavior, or etc.
+
+The simplest mode of operation is for daemonproxy to read commands from a config
+file, which define services and request that several be started and auto-restart.
+However, the intended mode of operation is for the config file to define a special
+service that acts as a controller for daemonproxy, and reads a stream of events
+while writing a stream of commands.
+
+As such, the events and commands are designed with a degree of flexibility that
+they can be run with or without client/server interaction, and are fully
+asynchronous.
 
 === Design principles ===
 
-  * init-frame only makes one dynamic allocation at startup, and calls 'mlockall' to
-    keep itself from swapping out.
+--- Fundamental ---
 
-  * init-frame holds a pool of file descriptors which can be passed to new child
-    processes.  This way a pipe between a daemon and logger can be preserved if
-    one of the two dies.
+  * Events should be easy to parse with common scripting languages, yet still
+    human readable.  Likewise for commands.
 
-  * init-frame starts a special daemon called a "controller" which is in charge of
-    monitoring the events of init-frame and instructing init-frame what to do in
-	response to the events.
+  * To keep daemonproxy small and simple, the commands and events should also be
+    easy to parse with C code.
+
+  * The controller might miss events (full pipe, kill/restart) and so the events
+    and way in which they are delivered must be designed to allow the controller
+	to get back in sync with the state of the system.
+
+  * In order to make config files possible, commands should not depend on
+    daemonproxy's current state.
+
+  * In order to be cross-platform, commands should not require host-specific
+    details (like signal numbers)
+
+  * Daemonproxy should be able to perform basic process management all by itself,
+    but only if asked to do so.  The controller should do all the "business logic"
+    by default.
+
+  * Daemonproxy should be able to act as a watchdog for the controller script.
+
+  * Daemonproxy should be a suitable replacement for init.
 	
-  * init-frame only restarts a daemon if configured to do so.  Other daemons must be
-    restarted by the controller.  The restart process is kept as simple as possible,
-    by exec'ing the same arguments as last time after a fixed delay.
-    (one environment variable is provided to indicate that it is a restart)
+--- Derived ---
 
-  * init-frame maintains a state of all monitored jobs, file descriptors, and signals.
-    It dumps this state to the controller upon controller start, and sends the
-    controller updates on any state change.
+  * Each command or event is a single line of tab-separated values. No escaping
+    is permitted.  User data values may not contain any ASCII character less
+	than 32. (escape sequences might be added in future versions)
+  
+  * Daemonproxy maintains a buffer for each input/output stream.  Any command
+    or event must be able to fit within this buffer, to keep the state machines
+    simple. (currently 2048 bytes, but configurable at compile-time)  
 
-  * init-frame checks only one configfile on startup, which can be specified as an
-    argument.  This configfile is simply a series of controller commands. (which
-    should also configure the controller to execute)  The controller is responsible
-    for interfacing to the rest of userland.  (unix sockets, runscript directories, etc)
+  * Daemonproxy must inform a controller any time the controller missed an
+    event regarding a state change.  It is up to the controller to request a
+    state-dump to get back in sync.
 
-=== Example Use Case ===
+  * In order to allow controllers to preserve state accross restarts,
+    daemonproxy must allow arbitrary metadata to be attached to various objects.
 
-The kernel launches init-frame, and the default config file tells init-frame to allocate
-space for 50 services, run service /sbin/dropbear with auto restart, run /bin/agetty with
-auto restart, and run /sbin/init-control.sh as the controller.  It starts those services,
-and runs init-control with a pipe back to itself.
-init-control.sh then sets up networking, and starts a few more services to watch things.
-When init-control.sh sees a SIGINT message from init-frame, it tells init-frame to stop
-respawning the jobs, and then kills them, and performs other last steps before rebooting.
+  * Daemonproxy will allow an option to pre-allocate all data structures, and
+    treat that as a hard limit so that it can't fail from allocation errors or
+    grow out of control if the controller accidentally floods it with commands
+    that would allocate memory.  Commands may fail if they exceed these limits.
 
-=== Example Use Case 2 ===
+  * Daemonproxy should perform all I/O asynchronously. (non-blocking reads and writes)
 
-The kernel launches the script /sbin/init which execs into init-frame passing it a custom
-config file of /etc/fubar/init.conf, which tells init-frame to just run a controller of
-/etc/fubar/init-control.pl   The perl script reads several config files and directives to
-determine that init-frame needs to allocate space for 150 jobs, which init-frame then
-allocates, and locks.  The perl script sets up some loggers, telling init-frame to allocate
-pipes for their STDIN, and then creates services that use those pipes as STDOUT/STDERR.
-The perl script sets up the /run directory and then creates unix sockets with various
-ownership and permissions, then initializes other things and tells init-frame to start the
-services.  It then monitors its sockets and messages from init-frame, responding to
-start/stop/restart requests and service deaths and init's signals and its own signals.
+=== Use Cases ===
 
-In the middle of heavy system load, the Linux kernel decides to kill init-control.pl
-init-frame sees this and starts a new one, passing it the current state on STDIN.  The
-init-control script sees that it has been restarted, and takes steps to verify the most
-critical daemons first, send out an alert to a monitoring system, and then attempt to
-verify the rest of the services the system is supposed to support.  During this event,
-any newly started daemons will be cleanly re-attached to their loggers, and init-control.pl
-will know exactly which daemons need restarted because init-frame kept track of the PIDs.
+-- Process Management for Embedded System --
+
+User writes script named /sbin/init which sets up mount points, and then exec's
+to /bin/daemonproxy with arguments that tell it to load "/etc/services.conf",
+pre-allocate 50 service slots of 300 bytes eaach, and 50 file descriptor slots of
+96 bytes each.
+
+Daemonproxy is then running as process 1.  It reads lines from the config file
+(non-blocking, as if it were a controller) which define a service for a /bin/getty
+and a /sbin/dropbear, and to auto-restart each of them, and to start them now.
+It defines a 3rd service "/bin/startup.sh" with an auto-restart flag and connected
+to the command pipe, and starts that service too.  It then defines a service
+"/bin/init-signal.sh" and flags that this service should be started any time
+SIGINT is received (i.e. CTRL-ALT-DEL which generates a SIGINT for PID 1)
+
+startup.sh then goes on to initialize more things and set up networking and etc.
+Meanwhile, dropbear and getty are available the entire time.  Before startup.sh ends,
+it writes a command to the command pipe that disables its own auto-restart flag.
+
+In the event that startup.sh dies unexpectedly, it will be restarted.  So at the
+start of the script, it checks whether it had been run before, and if so,
+performs rescue operations to make the system available for emergency
+administration instead of the startup actions of the previous run.
+
+When CTRL-ALT-DEL is pressed, init-signal.sh starts (if it wasn't already running)
+and begins an orderly restart of the system.  Its service definition also includes
+the command pipe as one of its FDs, and so it is able to issue commands to
+daemonproxy.
+
+-- Process Management for Desktop Systems --
+
+Distro has a /sbin/init script which calls daemonproxy with a configuration which
+defines one controller service of /sbin/init-control.py
+
+This Python script performs initialization of the system, instructing daemonproxy
+to set up many more services and run them, and handling the cases where they die.
+This script connects to DBus and links in all sorts of other libraries.
+
+Along the way, a bug in a linked library causes init-control.py to fatally exit.
+daemonproxy restarts it.  init-control.py first requests the state of daemonproxy,
+and sees that it has been re-started.  It then performs cleanup steps to pull the
+system back into proper order, and then resumes normal operation.
+
+A different bug in init-control.py causes it to block the entire script trying
+to read from a dead NFS mountpoint.  After a while, the event pipe fills up, and
+daemonproxy flags the service as unresponsive.  When the script doesn't read from
+the pipe for several seconds, daemonproxy closes the pipe, kills the old one, and
+starts a new one.
 
 ### Protocol ###
 
 All messages are "tab separated values", sometimes making use of name=value pairs.
-There is no escape sequence for a tab character.  You shouldn't need tabs in any of
-the data anyway, except possibly exec() arguments.  In that case you should use a
-script and exec the script, or eval it with a shell that does support escapes.
+There are no escape chracters or quoting mechanisms.  You shouldn't need tabs or
+newlines in any of the data anyway, except possibly exec() arguments.
+In that case you should use a script and exec the script, or eval an escaped string
+with a shell or other interpreter.
+
+All ASCII characters less than 32 are reserved, in case we do add an escape
+character some day.
+
+Any line beginning with whitespace or a '#' is ignored.
 
 === Reset ===
 
-When the controller is first started, the first event delivered to it is "reset".
-Immediately following reset is a series of events that represent the complete state
-dump of init-frame.
+When the controller is first started, it doesn't know any of the state of
+daemonproxy.
+
+It should issue a "statedump" command.  Daemonproxy will reply by emitting events
+for every state variable.  Some state variables might be emitted more than once,
+if they change during the dump.  (remember, all events are asynchronous).
+
+The state dump ends with the event 'statedump complete'.
 
 === Service State ===
 
-The controller can specify metadata, argument list, environment, and file descriptors
-for each service.  The service comes into existence the first time it is referenced.
+The controller can specify argument list, flags, and file descriptors for each
+service.  The service comes into existence the first time it is referenced by
+any command that attempts to set these values.
 
--- Set Metadata --
+-- Set Option --
 
-  service.meta SERVICE_NAME META1 META2 META3 ... META_N
-  
-No meta tags are required for a service, and are mainly used for the controller to
-keep track of extra information about a service.  There is one exception: if the meta
-tag "auto-restart" appears in the list, init-frame will automatically restart the
-service if it terminates.
+  service.opts SERVICE_NAME OPT1=VALUE1 OPT2=VALUE2 ...
 
-The total name + metadata + arguments + environment for a service cannot exceed a
-compile-time constant, currently defaulting to 256 bytes.  This might eventually
-be configurable.
+Set one or more options for a service.  Option values might be coerced or converted
+For instance, fork-retry-delay is a fractional value in seconds, but is stored
+internally as a fixed-point integer.  When it is printed again you might get
+a different value.  Invalid option names or invalid values will emit an error
+message, but will not prevent the rest of the options from being processed.
+
+You can return an option to its default value with "NAME@" (and no equal sign).
 
 Example:
 
-  service.meta sshd respawn
-
-Success:
-
-  service.meta sshd respawn
-
-Failure:
-
-  error service.meta sshd ERROR_MESSAGE
+  service.opts sshd respawn respawn-delay=3
 
 -- Set Arguments --
 
-  service.args SERVICE_NAME EXEC_PATH ARGV0 ARGV1 ... ARGV_N
+  service.args SERVICE_NAME EXEC_PATH ARGV1 ... ARGV_N
 
-These are identical to the arguments to exec(), with the first being the actual binary
-to execute, and the rest being the values passed to the program as its argv[].
+These are like the arguments to exec(), but the first argument is doubled
+as the path to execute, and the argv[0] to the program, with the rest being
+the values passed to the program as its argv[1..n].
 
-Example:
-
-  service.args sshd /sbin/sshd sshd -D -e
-
-Success:
-
-  service.args sshd /sbin/sshd sshd -D -e
-
-Failure:
-
-  error service.args sshd ERROR_MESSAGE
-
--- Set Environment --
-
-  service.env SERVICE_NAME [ ( ENV1=VAL1 | ENV1- ) ... ]
-
-These are a list of environment overrides for the service.  If a variable name is not
-followed by an equal sign and instead ends with a minus character, the variable is removed
-from the environment.
-
-Changes to a service's environment will not take place until the service is (re)started.
+This command overwrites any previous setting.  If called with no arguments at
+all, (i.e. no tab character following the service name) then it will print the
+value of the setting.  (as if dumping the state)
 
 Example:
 
-  service.env sshd LD_LIBRARY_PATH=/opt/tsocks/lib INIT_PREV_PID-
+  service.args sshd /sbin/sshd -D -e
 
 -- Set file descriptors --
 
-  service.fd SERVICE_NAME [ FD_NUMBER=FD_NAME ... ]
+  service.fds SERVICE_NAME
+  service.fds SERVICE_NAME NAME_FD1 NAME_FD2 ...
 
-FD_NUMBER is an integer in decimal form, saying which FD number in the service
-is being set.  FD_NAME is the symbolic name of a file descriptor in init-frame's
-set of open file descriptors.  FD_NAME must have been initialized before it can be
-assigned to a service.
+This command overwrites any previous FD setting.  If the named file descriptrs do
+not (yet) exist, it prints a warning, but still changes the setting.
 
-This command overwrites any previous FD setting.  If the command fails, the original
-setting is preserved.  All processes default to receiving the same FD 0 1 and 2 of
-init-frame itself, which by default goes to the Linux console.
+If the list of names is empty then it will default to /dev/null for the first 3
+file descriptors (STDIN, STDOUT, STDERR) rather than starting the service with
+no open file descriptors.  You can request a closed file descriptor with the value
+"-".
 
-Changes to a service's file descriptors will not take place until the service is (re)started.
+Changes to a service's file descriptors will of course not take place until the
+service is (re)started.
 
-Example:
+Examples:
 
-  service.fd sshd 0=null 1=sshd.log.w 2=sshd.log.w
+  pipe sshd.log.r sshd.log.w
+  service.fds sshd-logger sshd.log.r stdout stdout
+  service.fds sshd null sshd.log.w sshd.log.w
 
-Success:
+  # start a service with /dev/null on STDIN,STDOUT,STDERR (the default)
+  service.fds sshd
+  
+  # start a service with no open file descriptors
+  service.fds - - -
 
-  service.fd sshd 0=null 1=sshd.log.w 2=sshd.log.w
+-- Start --
 
-Failure:
-
-  error service.fd sshd ERROR_MESSAGE
-
--- Execute --
-
-  service.exec
+  service.start
 
 This runs the named service with its currently configured environment, file descriptors,
-and arguments.
+and arguments (it it wasn't started already)
+
+If this causes a state change in the process, that will be reported as an
+event of the form "service.state SERVICE STATE TIMESTAMP NAME1=VAL1 NAME2=VAL2 ..."
+and STATE is one of "new", "starting", "up", "down"
 
 Example:
 
-  service.exec sshd
-
-Success:
-
-  service.state sshd up
-
-Failure:
-
-  error service.exec sshd ERROR_MESSAGE
+  service.start sshd
+  # reply event is:
+  service.state sshd up 12345 pid=1000 uptime=0 ...
 
 === Named File Descriptors ===
 
-init-frame maintains a set of open file descriptors which can be assigned to services.
+Daemonproxy maintains a set of open file descriptors which can be assigned to services.
 These are primarily intended to hold pipes from service to logger such that if either
 the logger or service are killed, the pipe will still be open, and allows seamless
 reconnection of either end to the restarted service or logger.
@@ -196,25 +236,31 @@ However, these named descriptors can be used for many other purposes.  They can 
 be used to make sure you have access to device nodes like /dev/null even if the /dev
 directory were accidentally deleted from the filesystem.
 
+Some file descriptors are constants, and always available.  These are "null"
+(always a handle to /dev/null) "stdin","stdout","stderr" which refer to the handles
+daemonproxy was given on startup, "control.event" which creates a pipe that delivers
+daemonproxy events, and "control.cmd" which is a pipe daemonproxy reads commands from.
+
+File descriptor names must be ASCII words, composed from alphanumeric, hyphen, dot
+or underscore.  Future versions might allow UTF-8, assuming I can find a nice tiny
+algorithm for identifying "word characters" for higher codepoints.
+
 -- Open Pipe --
 
-  fd.pipe BASE_NAME
+  fd.pipe READ_NAME WRITE_NAME
 
-Creates two new file descriptors named $BASE_NAME.r and $BASE_NAME.w which are the read
-and write ends of a pipe, respectively.  If either name already exists, it will be closed
-first.
+Creates two new file descriptors of the given names which are the read and write ends
+of a pipe, respectively.  If either name already exists, it will be closed first,
+unless it was a system constant, which cannot be altered.
+
+If successful, the new file descriptors will generate state events.
 
 Example:
 
-  pipe sshd.log
-
-Success:
-
-  pipe sshd.log
-
-Failure:
-
-  error pipe sshd.log ERROR_MESSAGE
+  fd.pipe sshd.log.r sshd.log.w
+  # returns two events:
+  fd.state sshd.log.r pipe< sshd.log.w
+  fd.state sshd.log.w pipe> sshd.log.r
 
 -- Open File --
 
@@ -240,13 +286,99 @@ not be able to start.
 
 Example:
 
-  file null write,read /dev/null
+  fd.open rand read /dev/urandom
+  # returns an event
+  fd.state rand read /dev/urandom
 
-Success:
+=== Maintaining Controller State ===
 
-  file null read,write /dev/null
+It might happen that you want to store metadata somewhere such that a restarted
+controller could pick up where anothe rleft off.  While I almost added a
+general-purpose metadata feature to daemonproxy, I decided that Unix gives you
+plenty of alternatives already.  In particular, you can write to files in
+whatever manner is most efficient for you, or you could even have daemonproxy
+open a file in tmpfs and pass it to your controllers, who then use it as shared
+memory!
 
-Failure:
+=== Logging Commands ===
 
-  error file null ERROR_MESSAGE
+Daemonproxy's logging goes to STDOUT by default, but can be adjusted on the fly.
 
+daemonproxy has log levels of TRACE, DEBUG, INFO, WARN, ERROR, and FATAL.
+
+-- Increase Log verbosity --
+
+  log.filter -
+
+This enables the next-lower log level.
+
+-- Decrease Log Verbosity --
+
+  log.filter +
+
+This squelches the next-higher log level.
+
+=== Terminating Daemonproxy ===
+
+Terminate commands are disallowed when the "failsafe" option is enabled.
+"failsafe" is enabled by default when running as process 1.  You must
+turn off failsafe before calling terminate.
+
+-- exit gracefully --
+
+  terminate shutdown [TERM_TIMEOUT] [KILL_TIMEOUT] [IO_TIMEOUT]
+
+This version of terminate invokes a fairly boring default shutdown sequence,
+which saves you from having to write that into your controller if thats all
+you need.
+
+Daemonproxy sends each service SIGTERM, wait()ing on them with a timeout of
+(default 10) seconds, sending them SIGKILL, wait()ing with a timeout of
+(default 5) seconds, then exiting (or exec()ing, if --exec-on-exit was given
+on the commandline.)  Finally, if any logging I/O is pending at the end, it
+will wait (default 5) seconds trying to flush the output buffer.
+
+These timeouts are only for services that won't die; if services exit quickly
+then the shutdown completes quickly.
+
+-- exit abruptly --
+
+  terminate exit [VALUE]
+
+Immediately calls exit with a numeric value.
+
+Daemonproxy cannot be given the terminate.exit command when running as process 1,
+regardless of whether failsafe is disabled.
+
+-- exec to another program --
+
+  terminate exec [ARGUMENTS]
+
+This version of the terminate command will cause daemonproxy to exec() those
+arguments, immediately.  ARGUMENTS override the exec-on-exit setting.
+
+If the exec call fails, daemonproxy remains running.
+
+-- enabling failsafe --
+
+  failsafe + GUARD_VALUE
+
+This enables failsafe, setting a guard value that must be repeated before it
+can be disabled.  This cannot change an existing guard value.
+
+-- disabling failsafe --
+
+  failsafe - GUARD_VALUE
+
+The guard value must match the value specified when failsafe was enabled.
+
+-- setting Exec-On-Exit --
+
+  exec-on-exit [ARGUMENTS]
+
+This sets (or clears) the exec-on-exit feature, which causes daemonproxy to
+exec these arguments any time it would otherwise exit.  This applies to any
+event which causes the process to terminate (providing it can be intercepted)
+
+For example, SIGSEGV and other fatal signals will be caught and call exec()
+instead of aborting the process.  SIGKILL can never be caught.
