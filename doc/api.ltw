@@ -318,6 +318,16 @@ This enables the next-lower log level.
 
 This squelches the next-higher log level.
 
+-- Redirect LogOutput --
+
+  log.dest FD_NAME
+
+This sets the fd used for logging.  The file descriptor will be duplicated so
+logging will continue even if the named handle is closed.  Beware that this
+might hold open a pipe when you thought you closed it.  The file descriptor
+will be made non-blocking, but when passed to a child process it will be
+returned to normal.
+
 === Terminating Daemonproxy ===
 
 Terminate commands are disallowed when the "failsafe" option is enabled.
