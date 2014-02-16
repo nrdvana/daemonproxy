@@ -9,7 +9,7 @@ bool main_mlockall= false;
 int  main_fd_pool_count= -1;
 int  main_fd_pool_size_each= -1;
 bool main_failsafe= false;
-int  main_log_filter= LOG_LEVEL_INFO;
+
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
@@ -221,8 +221,8 @@ void parse_opts(char **argv) {
 
 void show_help(char **argv);
 void show_version(char **argv);
-void set_opt_verbose(char** argv)     { main_log_filter--;    }
-void set_opt_quiet(char** argv)       { main_log_filter++;    }
+void set_opt_verbose(char** argv)     { log_set_filter(log_filter-1); }
+void set_opt_quiet(char** argv)       { log_set_filter(log_filter+1); }
 void set_opt_stdin(char **argv)       { main_use_stdin= true; }
 void set_opt_mlockall(char **argv)    { main_mlockall= true;  }
 void set_opt_failsafe(char **argv)    { main_failsafe= true;  }
@@ -367,6 +367,18 @@ void show_version(char **argv) {
 	fatal(EXIT_NO_OP, "");
 }
 
+/** Exit (or not) from a fatal condition
+ *
+ * If exec-on-exit is set, this will exec into (what we expect to be) the
+ * cleanup handler.
+ *
+ * Else if failsafe is enabled, we do not exit, and attempt to continue.
+ *
+ * Else we exit with the exitcode passed to us.
+ *
+ * Note that the final log message (or more) might be lost because STDERR
+ * is non-blocking.
+ */
 void fatal(int exitcode, const char *msg, ...) {
 	char buffer[1024];
 	int i;
@@ -392,31 +404,10 @@ void fatal(int exitcode, const char *msg, ...) {
 		// If that failed... continue?
 	}
 	
-	if (main_failsafe) {
-		if (buffer[0])
-			fprintf(stderr, "fatal (but attempting to continue): %s\n", buffer);
-	} else {
-		if (buffer[0])
-			fprintf(stderr, "fatal: %s\n", buffer);
+	if (buffer[0])
+		log_write(LOG_LEVEL_FATAL, "%s%s", main_failsafe? "(attempting to continue) ":"", buffer);
+	if (!main_failsafe)
 		exit(exitcode);
-	}
-}
-
-void log_write(int level, const char *msg, ...) {
-	if (main_log_filter > level)
-		return;
-	
-	const char *prefix= level > LOG_LEVEL_INFO? (level > LOG_LEVEL_WARN? "error":"warning")
-		: (level > LOG_LEVEL_DEBUG? "info" : (level > LOG_LEVEL_TRACE? "debug":"trace"));
-	
-	char msg2[256];
-	if (snprintf(msg2, sizeof(msg2), "%s: %s\n", prefix, msg) >= sizeof(msg2))
-		memset(msg2+sizeof(msg2)-4, '.', 3); // append "..." if pattern doesn't fit.  But it always should.
-	
-	va_list val;
-	va_start(val, msg);
-	vfprintf(stderr, msg2, val);
-	va_end(val);
 }
 
 int strseg_cmp(strseg_t a, strseg_t b) {

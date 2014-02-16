@@ -285,15 +285,19 @@ bool ctl_state_cmd_echo(controller_t *ctl) {
 
 bool ctl_state_cmd_log_filter(controller_t *ctl) {
 	strseg_t arg, line= ctl->command_arg_str;
-	if (!strseg_tok_next(&line, '\t', &arg))
-		return END_CMD( ctl_write(ctl, "%d\n", main_log_filter) );
-	else if (arg.len == 1 && arg.data[0] == '+')
-		main_log_filter++;
-	else if (arg.len == 1 && arg.data[0] == '-')
-		main_log_filter--;
-	else
-		return END_CMD( ctl_notify_error(ctl, "invalid loglevel argument") );
-	return END_CMD(true);
+	int level;
+
+	if (line.len && strseg_tok_next(&line, '\t', &arg)) {
+		if (arg.len == 1 && arg.data[0] == '+')
+			level= log_filter + 1;
+		else if (arg.len == 1 && arg.data[0] == '-')
+			level= log_filter - 1;
+		else if (!log_level_by_name(arg, &level))
+			return END_CMD( ctl_notify_error(ctl, "invalid loglevel argument") );
+		log_set_filter(level);
+	}
+
+	return END_CMD( ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) ) );
 }
 
 bool ctl_state_cmd_exit(controller_t *ctl) {

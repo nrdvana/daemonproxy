@@ -29,13 +29,21 @@ typedef struct strseg_s {
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
 int  strseg_cmp(strseg_t a, strseg_t b);
 
+#define LOG_FILTER_INC 99
+#define LOG_FILTER_DEC -99
+#define LOG_LEVEL_FATAL 3
 #define LOG_LEVEL_ERROR 2
 #define LOG_LEVEL_WARN 1
 #define LOG_LEVEL_INFO 0
 #define LOG_LEVEL_DEBUG -1
 #define LOG_LEVEL_TRACE -2
 
-void log_write(int level, const char * msg, ...);
+bool log_write(int level, const char * msg, ...);
+bool log_flush();
+extern int log_filter;
+void log_set_filter(int level);
+const char * log_level_name(int level);
+bool log_level_by_name(strseg_t name, int *lev);
 
 #define log_error(args...) log_write(LOG_LEVEL_ERROR, args)
 #define log_warn(args...)  log_write(LOG_LEVEL_WARN,  args)
@@ -48,7 +56,6 @@ void log_write(int level, const char * msg, ...);
 #endif
 
 extern bool main_terminate;
-extern int  main_log_filter;
 extern wake_t *wake;
 
 extern const char *  version_git_tag;
