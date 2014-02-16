@@ -314,7 +314,7 @@ bool ctl_state_cmd_terminate(controller_t *ctl) {
 	return END_CMD(true);
 }
 
-/** Statedump command, part 1: Initialize vars and pass to part 2.
+/** Statedump command
  */
 bool ctl_state_cmd_statedump(controller_t *ctl) {
 	fd_t *fd= NULL;
@@ -377,6 +377,9 @@ bool ctl_state_cmd_statedump(controller_t *ctl) {
 				return false;
 			}
 		}
+	case 7:
+		ctl->command_substate= 7;
+		ctl_write(ctl, "statedump	complete\n");
 	}
 	return END_CMD(true);
 }
