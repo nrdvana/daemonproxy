@@ -290,6 +290,38 @@ Example:
   # returns an event
   fd.state rand read /dev/urandom
 
+=== Events from Signals ===
+
+When daemonproxy receives a signal, it exposes it as an event.  You may
+optionally flag certain services as signal handlers, such that they are started
+upon receipt of the signal.  (they must query the daemonproxy state like any
+normal controller, to find out which signal was received)
+
+-- Signal Syntax --
+
+  signal SIGNAME COUNT TIMESTAMP
+
+SIGNAME is the symbolic constant for the signal, like SIGTERM or SIGHUP.
+
+COUNT is the number of un-cleared times this signal was received.  These
+accumulate until decremented with "signal.clear SIGNAME COUNT".
+
+-- Clearing Signals --
+
+  signal.clear SIGNAME COUNT
+
+Signal counts accumulate until cleared (decremented) with this command.
+Count is subtracted, rather than setting the number to 0, in case the
+signal arrives again while being cleared.
+
+-- Waking Services --
+
+  service.opts sig_wake=SIGNAME[,SIGNAME]
+
+Setting the sig-wake option causes the service to start if any of the named
+signals have a nonzero count.  This is a level-triggered effect, so if a
+handler exits while a new signal arrives, it will be started again.
+
 === Maintaining Controller State ===
 
 It might happen that you want to store metadata somewhere such that a restarted
