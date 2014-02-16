@@ -178,8 +178,10 @@ bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *co
 	int i, oldest;
 	// first, find oldest with nonzero count
 	for (i= 0, oldest= -1; i < signals_count; i++) {
-		if (signals[i].number_pending > 0 && signals[i].last_received_ts - since_ts > 0
-			&& (oldest < 0 || signals[oldest].last_received_ts - signals[i].last_received_ts > 0))
+		if (signals[i].number_pending > 0
+			&& (since_ts == 0 || signals[i].last_received_ts - since_ts > 0)
+			&& (oldest < 0 || signals[oldest].last_received_ts - signals[i].last_received_ts > 0)
+		)
 			oldest= i;
 	}
 	if (oldest < 0)

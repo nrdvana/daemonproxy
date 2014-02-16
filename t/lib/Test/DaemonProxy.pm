@@ -82,7 +82,7 @@ sub _read_more {
 	my $result= 0;
 	for (@$inputs) {
 		my ($fd_ref, $buf_ref)= @$_;
-		next unless $ready{$$fd_ref};
+		next unless defined $$fd_ref and $ready{$$fd_ref};
 		my $got= sysread($$fd_ref, $$buf_ref, 1024, length($$buf_ref));
 		if (!$got) {
 			close($$fd_ref);

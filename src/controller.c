@@ -20,13 +20,14 @@ struct controller_s {
 	int64_t send_blocked_ts;
 	int64_t last_signal_ts;
 	
-	int line_len;             // length of current TSV line in recv_buf
-	strseg_t command_name;    // strseg of command name (within recv_buf)
-	strseg_t command_arg_str; // TSV string for command to process (within recv_buf)
-	int command_substate;     // set to 0 at start of each command
+	int      line_len;         // length of current TSV line in recv_buf
+	strseg_t command_name;     // strseg of command name (within recv_buf)
+	strseg_t command_arg_str;  // TSV string for command to process (within recv_buf)
+	int      command_substate; // set to 0 at start of each command
 	
-	char statedump_current[NAME_LIMIT];
-	int  statedump_part;
+	char    statedump_current[NAME_LIMIT];
+	int     statedump_part;
+	int64_t statedump_ts;
 };
 
 controller_t client[CONTROLLER_MAX_CLIENTS];
@@ -319,6 +320,9 @@ bool ctl_state_cmd_terminate(controller_t *ctl) {
 bool ctl_state_cmd_statedump(controller_t *ctl) {
 	fd_t *fd= NULL;
 	service_t *svc= NULL;
+	int sig, count;
+	int64_t next_ts;
+	
 	if (ctl->command_substate > 2) {
 		// resume the while loop where we left off, if service still exists
 		svc= svc_by_name((strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }, false);
@@ -377,8 +381,20 @@ bool ctl_state_cmd_statedump(controller_t *ctl) {
 				return false;
 			}
 		}
-	case 7:
+		ctl->statedump_ts= 0;
 		ctl->command_substate= 7;
+	case 7:
+		// Dump every signal where count is nonzero and timestamp has already been
+		// reported to this controller.  (newer signals will be reported normally)
+		while (sig_get_new_events(ctl->statedump_ts, &sig, &next_ts, &count)
+			&& (!ctl->last_signal_ts || next_ts <= ctl->last_signal_ts)
+		) {
+			if (!ctl_notify_signal(ctl, sig, next_ts, count))
+				return false;
+			ctl->statedump_ts= next_ts;
+		}
+		ctl->command_substate= 8;
+	case 8:
 		ctl_write(ctl, "statedump	complete\n");
 	}
 	return END_CMD(true);
@@ -966,7 +982,7 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 
 bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
 	const char *signame= sig_name_by_num(sig_num);
-	return ctl_write(NULL, "signal	%d	%s%s	%lld	%d\n", sig_num, signame? "SIG":"???", signame? signame : "", sig_ts>>32, count);
+	return ctl_write(NULL, "signal	SIG%s	%d	%d\n", signame? signame : "-?", count, (int)(sig_ts>>32));
 }
 
 bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, int wstat, pid_t pid) {
