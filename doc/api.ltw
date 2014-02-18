@@ -368,11 +368,10 @@ turn off failsafe before calling terminate.
 
 -- exit gracefully --
 
-  terminate shutdown [TERM_TIMEOUT] [KILL_TIMEOUT] [IO_TIMEOUT]
+  shutdown [TERM_TIMEOUT] [KILL_TIMEOUT] [IO_TIMEOUT]
 
-This version of terminate invokes a fairly boring default shutdown sequence,
-which saves you from having to write that into your controller if thats all
-you need.
+This command invokes a fairly standard shutdown sequence, which saves you
+from having to write that into your controller if thats all you need.
 
 Daemonproxy sends each service SIGTERM, wait()ing on them with a timeout of
 (default 10) seconds, sending them SIGKILL, wait()ing with a timeout of
@@ -380,30 +379,31 @@ Daemonproxy sends each service SIGTERM, wait()ing on them with a timeout of
 on the commandline.)  Finally, if any logging I/O is pending at the end, it
 will wait (default 5) seconds trying to flush the output buffer.
 
+If all services exited cleanly, it exits with 0.  If it needed to use SIGKILL
+it exits with 10, and if a service still didn't die it exits with 11.  But, if
+exec_on_exit is set, it doesn't exit at all, and performs the exec instead.
+
+This command is disabled when running as process 1 unless exec_on_exit is set.
+
 These timeouts are only for services that won't die; if services exit quickly
 then the shutdown completes quickly.
 
 -- exit abruptly --
 
-  terminate exit [VALUE]
+  terminate [VALUE] [GUARD_CODE]
 
-Immediately calls exit with a numeric value.
+Immediately calls exit with a numeric value.  (unless exec_on_exit is set,
+in which case it execs()).
 
-Daemonproxy cannot be given the terminate.exit command when running as process 1,
-regardless of whether failsafe is disabled.
+If failsafe mode is enabled, then the second parameter is necessary, and must
+match the failsafe code in order to proceed.
 
--- exec to another program --
-
-  terminate exec [ARGUMENTS]
-
-This version of the terminate command will cause daemonproxy to exec() those
-arguments, immediately.  ARGUMENTS override the exec-on-exit setting.
-
-If the exec call fails, daemonproxy remains running.
+When running as process 1, daemonproxy cannot be given the terminate command
+unless exec_on_exit is set, regardless of the failsafe setting.
 
 -- enabling failsafe --
 
-  failsafe + GUARD_VALUE
+  failsafe + GUARD_CODE
 
 This enables failsafe, setting a guard value that must be repeated before it
 can be disabled.  This cannot change an existing guard value.
@@ -416,7 +416,7 @@ The guard value must match the value specified when failsafe was enabled.
 
 -- setting Exec-On-Exit --
 
-  exec-on-exit [ARGUMENTS]
+  exec_on_exit [ARGUMENTS]
 
 This sets (or clears) the exec-on-exit feature, which causes daemonproxy to
 exec these arguments any time it would otherwise exit.  This applies to any
