@@ -7,15 +7,12 @@ my @states;
 my %commands;
 
 while (<STDIN>) {
-	# Look for STATE macros with a command name, like
-	# STATE(state_fn, "command")
-	# We use this both for a mapping from fn pointer to fn name,
-	#  and to build a hash table of command strings
-	if ($_ =~ m|^\s*STATE\s*\(\s*(\S+)\s*(?:,\s*"(\S+)"\s*)?\)|) {
-		push @states, { fn => $1, cmd => $2 };
-		$commands{$2}= $states[-1]
-			if defined $2;
-	}
+	# Look for STATE macros
+	push @states, $1
+		if ($_ =~ m|^\s*STATE\s*\(\s*(\S+)\s*\)|);
+	# Look for COMMAND(fn, "name")
+	$commands{$2}= $1
+		if ($_ =~ m|^\s*COMMAND\s*(\s*(\S+)\s*,\s*"(\S+)"\s*\)|);
 }
 
 # table size is 1.5 x number of entries rounded up to power of 2.
@@ -39,13 +36,13 @@ sub hash_fn {
 sub build_table {
 	my ($mul, $shift)= @_;
 	my @table= (undef) x $table_size;
-	for (values %commands) {
-		my $bucket= hash_fn($_->{cmd}, $mul, $shift);
+	for my $k (keys %commands) {
+		my $bucket= hash_fn($k, $mul, $shift);
 		if (defined $table[$bucket]) {
 #			print STDERR join(' ', map { $_ == $bucket? 2 : $table[$_]? 1 : '-' } 0..($table_size-1))."\n";
 			return undef;
 		}
-		$table[$bucket]= $_;
+		$table[$bucket]= $k;
 	}
 	return \@table;
 }
@@ -65,11 +62,11 @@ sub find_collisionless_hash_params {
 my ($table, $mul, $shift)= find_collisionless_hash_params();
 
 my $state_cases= join("\n", map {
-	qq|	if (fn == $_->{fn}) return "$_->{fn}";|
+	qq|	if (fn == $_) return "$_";|
 	} @states );
 my $n_cmd= keys %commands;
 my $table_items= join("\n", map {
-	$_? qq|	{ "$_->{cmd}", $_->{fn} },| : qq|	{ "", NULL },|
+	defined $_? qq|	{ "$_", $commands{$_} },| : qq|	{ "", NULL },|
 	} @$table );
 
 print <<END;
@@ -80,9 +77,8 @@ $state_cases
 	return "invalid state";
 }
 
-// table size is $table_size
 // $n_cmd commands
-// mul is $mul, shift is $shift
+// table size is $table_size, mul is $mul, shift is $shift
 
 int ctl_command_hash_func(const char* buffer) {
 	uint32_t x= 0;

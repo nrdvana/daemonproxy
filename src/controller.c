@@ -41,22 +41,19 @@ STATE(ctl_state_read_command);
 STATE(ctl_state_cmd_overflow);
 STATE(ctl_state_cmd_unknown);
 STATE(ctl_state_free);
-STATE(ctl_state_cmd_echo,              "echo");
-STATE(ctl_state_cmd_statedump,         "statedump");
-STATE(ctl_state_cmd_svc_args,          "service.args");
-STATE(ctl_state_cmd_svc_args_set,      "service.args.set");
-STATE(ctl_state_cmd_svc_meta,          "service.meta");
-STATE(ctl_state_cmd_svc_meta_set,      "service.meta.set");
-STATE(ctl_state_cmd_svc_meta_apply,    "service.meta.apply");
-STATE(ctl_state_cmd_svc_fds,           "service.fds");
-STATE(ctl_state_cmd_svc_fds_set,       "service.fds.set");
-STATE(ctl_state_cmd_svc_start,         "service.start");
-STATE(ctl_state_cmd_svc_signal,        "service.signal");
-STATE(ctl_state_cmd_fd_pipe,           "fd.pipe");
-STATE(ctl_state_cmd_fd_open,           "fd.open");
-STATE(ctl_state_cmd_exit,              "exit");
-STATE(ctl_state_cmd_terminate,         "terminate");
-STATE(ctl_state_cmd_log_filter,        "log.filter");
+
+#define COMMAND(name, ...) static bool name(controller_t *ctl)
+COMMAND(ctl_cmd_echo, "echo");
+COMMAND(ctl_cmd_statedump,         "statedump");
+COMMAND(ctl_cmd_svc_args,          "service.args");
+COMMAND(ctl_cmd_svc_fds,           "service.fds");
+COMMAND(ctl_cmd_svc_start,         "service.start");
+COMMAND(ctl_cmd_svc_signal,        "service.signal");
+COMMAND(ctl_cmd_fd_pipe,           "fd.pipe");
+COMMAND(ctl_cmd_fd_open,           "fd.open");
+COMMAND(ctl_cmd_exit,              "exit");
+COMMAND(ctl_cmd_terminate,         "terminate");
+COMMAND(ctl_cmd_log_filter,        "log.filter");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
