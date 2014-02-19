@@ -117,12 +117,6 @@ int     svc_get_wstat(service_t *svc);
 int64_t svc_get_up_ts(service_t *svc);
 int64_t svc_get_reap_ts(service_t *svc);
 
-// Set metadata for a service.  Creates the service if it doesn't exist.
-// Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-bool svc_set_meta(service_t *svc, strseg_t tsv_fields);
-bool svc_apply_meta(service_t *svc, strseg_t name, strseg_t value);
-const char * svc_get_meta(service_t *svc);
-
 // Set args for a service.  Creates the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
 bool svc_set_argv(service_t *svc, strseg_t tsv_fields);

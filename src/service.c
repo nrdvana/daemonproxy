@@ -17,7 +17,7 @@
 
 struct service_s {
 	int size, state;
-	int name_len, meta_len, argv_len, fds_len;
+	int name_len, vars_len;
 	RBTreeNode name_index_node;
 	RBTreeNode pid_index_node;
 	struct service_s **active_prev_ptr;
@@ -27,12 +27,12 @@ struct service_s {
 	};
 	pid_t pid;
 	bool auto_restart: 1,
-		pipe_control_event: 1,
-		pipe_control_cmd: 1;
+		uses_control_event: 1,
+		uses_control_cmd: 1;
 	int wait_status;
 	int64_t start_time;
 	int64_t reap_time;
-	char buffer[];
+	char buffer[]; // holds name and vars.  length is "svc->size - sizeof(struct service_s)"
 };
 
 // Define a sensible minimum for service size.
@@ -49,7 +49,6 @@ void svc_notify_state(service_t *svc);
 void svc_change_pid(service_t *svc, pid_t pid);
 void svc_do_exec(service_t *svc);
 void svc_set_active(service_t *svc, bool activate);
-static void svc_reparse_meta(service_t *svc);
 
 int  svc_by_name_compare(void *data, RBTreeNode *node) {
 	strseg_t *name= (strseg_t*) data;
@@ -95,18 +94,6 @@ bool svc_check_name(strseg_t name) {
 	return true;
 }
 
-const char * svc_get_meta(service_t *svc) {
-	return svc->buffer + svc->name_len + 1;
-}
-
-const char * svc_get_argv(service_t *svc) {
-	return svc->buffer + svc->name_len + 1 + svc->meta_len + 1;
-}
-
-const char * svc_get_fds(service_t *svc) {
-	return svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1;
-}
-
 pid_t   svc_get_pid(service_t *svc) {
 	return svc->pid;
 }
@@ -120,87 +107,80 @@ int64_t svc_get_reap_ts(service_t *svc) {
 	return svc->reap_time;
 }
 
-/** Set the string for the service's metadata
- * This string is concatenated with argv and fds in a single buffer.
- * This is slightly expensive, but typically happens only once per service.
+/** Get a named variable.
+ *
+ * Returns true if found or false if not.  If true, and value_out is given,
+ * value_out is pointed to the string which is also NUL terminated.
  */
-bool svc_set_meta(service_t *svc, strseg_t tsv_fields) {
-	if (svc->name_len + 1 + tsv_fields.len + 1 + svc->argv_len + 1 + svc->fds_len + 1
-		> svc->size - sizeof(service_t)
-	)
-		return false;
-	// memmove the argv and fds strings to the new end of this string
-	if (tsv_fields.len != svc->meta_len)
-		memmove(svc->buffer + svc->name_len + 1 + tsv_fields.len + 1,
-			svc->buffer + svc->name_len + 1 + svc->meta_len + 1,
-			svc->argv_len + 1 + svc->fds_len + 1);
-	memcpy(svc->buffer + svc->name_len + 1, tsv_fields.data, tsv_fields.len+1);
-	svc->meta_len= tsv_fields.len;
-	svc_reparse_meta(svc);
-	// unless NDEBUG:
-		svc_check(svc);
-		assert(strncmp(svc_get_meta(svc), tsv_fields.data, tsv_fields.len) == 0);
-	return true;
+static bool svc_get_var(service_t *svc, strseg_t name, strseg_t *value_out) {
+	strseg_t val, key;
+	strseg_t var_buf= { svc->buffer + svc->name_len + 1, svc->vars_len };
+	
+	while (strseg_tok_next(&var_buf, '\0', &val) && var_buf.len > 0) {
+		if (strseg_tok_next(&val, '=', &key) && 0 == strseg_cmp(key, name)) {
+			if (value_out) *value_out= val;
+			return true;
+		}
+	}
+	return false;
 }
 
-bool svc_apply_meta(service_t *svc, strseg_t name, strseg_t value) {
-	// See if we have a metadata field of this name yet
-	char *p, *p2, *v= NULL;
-	int sizediff, buf_used;
-	p= p2= svc->buffer + svc->name_len + 1;
-	while (*p2) {
-		while (*p2 && *p2 != '\t') p2++;
-		if (0 == strncmp(name.data, p, name.len) && p[name.len] == '=') {
-			v= p+name.len+1;
+/** Set the named variable to a new value.
+ *
+ * The variables are packed back to back in a buffer of name=value strings.
+ * It could be expensive to modify these variables, but the service variable
+ * pool is small (200 bytes or so by default) and changes are infrequent,
+ * so this should be sufficient.
+ */
+static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
+	int sizediff;
+	bool found= false;
+	strseg_t oldval, key;
+	strseg_t var_buf= { svc->buffer + svc->name_len + 1, svc->vars_len };
+	int buf_free= svc->size - sizeof(service_t) - svc->name_len - 1 - svc->vars_len;
+
+	// See if we have a variable of this name yet
+	while (strseg_tok_next(&var_buf, '\0', &oldval) && var_buf.len > 0) {
+		if (strseg_tok_next(&oldval, '=', &key) && 0 == strseg_cmp(key, name)) {
+			found= true;
 			break;
 		}
-		if (*p2) p= ++p2;
 	}
-	// find change in size of metadata
-	sizediff= v? (value.len - (p2 - v)) : name.len + 1 + value.len + 1;
-	buf_used= svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + svc->fds_len + 1;
-	if (buf_used + sizediff > svc->size - sizeof(service_t))
+	sizediff= found? ( value? value->len - oldval.len : -(oldval.len + 1 + name.len + 1) )
+		: ( value? name.len + 1 + value->len + 1 : 0 );
+	
+	// make sure we have room for new value
+	if (sizediff > buf_free)
 		return false;
-	// memmove the strings after the value
-	if (sizediff)
-		memmove(p2 + sizediff, p2, buf_used - (p2 - svc->buffer));
-	// create "name=" if didn't exist
-	if (!v) {
-		if (p2 != svc->buffer+svc->name_len+1)
-			*p2++ = '\t';
-		memcpy(p2, name.data, name.len);
-		p2[name.len]= '=';
-		v= p2 + name.len + 1;
+	
+	// if tail of buffer needs to move, move it
+	if (sizediff && var_buf.len > 0)
+		memmove((char*)var_buf.data + sizediff, var_buf.data, var_buf.len);
+	
+	// if we're adding a new var, set up the "name=" portion at the end of the buffer
+	if (!found && value) {
+		memcpy((char*) var_buf.data, name.data, name.len);
+		((char*)var_buf.data)[name.len]= '=';
+		oldval.data= var_buf.data + name.len + 1;
 	}
-	// overwrite value
-	memcpy(v, value.data, value.len);
-	svc->meta_len += sizediff;
-	svc_reparse_meta(svc);
+	
+	// If we have a value, overwrite the old one
+	if (value) {
+		memcpy((char*) oldval.data, value->data, value->len);
+		((char*)oldval.data)[value->len]= '\0';
+	}
+	
+	// adjust recorded size of variables pool
+	svc->vars_len += sizediff;
+	
 	// unless NDEBUG:
 		svc_check(svc);
 	return true;
 }
 
-/** Parse known meta flags.
- */
-void svc_reparse_meta(service_t *svc) {
-	const char *p, *p2;
-	char *end;
-	int i;
-	
-	// reset flags to defaults
-	svc->auto_restart= false;
-	
-	p= p2= svc_get_meta(svc);
-	while (*p2) {
-		while (*p2 && *p2 != '\t') p2++;
-		if (strncmp(p, "auto-restart=", 13) == 0) {
-			i= strtol(p+13, &end, 10);
-			if (end == p2 && i)
-				svc->auto_restart= true;
-		}
-		if (*p2) p= ++p2;
-	}
+const char * svc_get_argv(service_t *svc) {
+	strseg_t val;
+	return svc_get_var(svc, STRSEG("args"), &val)? val.data : "";
 }
 
 /** Set the string for the service's argument list
@@ -208,22 +188,13 @@ void svc_reparse_meta(service_t *svc) {
  * This is slightly expensive, but typically happens only once per service.
  */
 bool svc_set_argv(service_t *svc, strseg_t new_argv) {
-	// Check whether new value will fit in buffer
-	if (svc->name_len + 1 + svc->meta_len + 1 + new_argv.len + 1 + svc->fds_len + 1
-		> svc->size - sizeof(service_t)
-	)
-		return false;
-	// memmove the "fds" string to the new end of this string
-	if (new_argv.len != svc->argv_len)
-		memmove(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + new_argv.len + 1,
-			svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
-			svc->fds_len + 1);
-	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1, new_argv.data, new_argv.len+1);
-	svc->argv_len= new_argv.len;
-	// unless NDEBUG:
-		svc_check(svc);
-		assert(strncmp(svc_get_argv(svc), new_argv.data, new_argv.len) == 0);
-	return true;
+	if (new_argv.len < 0) new_argv.len= 0;
+	return svc_set_var(svc, STRSEG("args"), &new_argv);
+}
+
+const char * svc_get_fds(service_t *svc) {
+	strseg_t val;
+	return svc_get_var(svc, STRSEG("fds"), &val)? val.data : "null\tnull\tnull";
 }
 
 /** Set the string for the service's file descriptor specification
@@ -231,21 +202,13 @@ bool svc_set_argv(service_t *svc, strseg_t new_argv) {
  * This is slightly expensive, but typically happens only once per service.
  */
 bool svc_set_fds(service_t *svc, strseg_t new_fds) {
-	// Check whether new value will fit in buffer
-	if (svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + new_fds.len + 1
-		> svc->size - sizeof(service_t)
-	)
-		return false;
-	// TODO: parse tsv_fields for correct syntax
-	
-	// It's the last field, so no memmove needed
-	memcpy(svc->buffer + svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1,
-		new_fds.data, new_fds.len+1);
-	svc->fds_len= new_fds.len;
-	// unless NDEBUG:
-		svc_check(svc);
-		assert(strncmp(svc_get_fds(svc), new_fds.data, new_fds.len) == 0);
-	return true;
+	if (new_fds.len < 0) new_fds.len= 0;
+	// The default value is "null null null", but we don't want to waste bytes on it
+	// or have to initialize it.  So "null null null" is represented by being unset.
+	if (strseg_cmp(new_fds, STRSEG("null\tnull\tnull")) == 0)
+		return svc_set_var(svc, STRSEG("fds"), NULL);
+	else
+		return svc_set_var(svc, STRSEG("fds"), &new_fds);
 }
 
 bool svc_handle_start(service_t *svc, int64_t when) {
@@ -444,13 +407,6 @@ void svc_do_exec(service_t *svc) {
 	// clear signal mask
 	sig_reset_for_exec();
 	
-	// Make mutable copies (which we don't need to free because we're calling exec)
-	arg_spec= strdup(svc_get_argv(svc));
-	if (!arg_spec) {
-		log_error("out of memory");
-		abort();
-	}
-
 	fd_spec.data= svc_get_fds(svc);
 	fd_spec.len= strlen(fd_spec.data);
 	if (fd_spec.len) {
@@ -511,6 +467,8 @@ void svc_do_exec(service_t *svc) {
 	// close all fd we arent keeping
 	while (i < FD_SETSIZE) close(i++);
 	
+	// just modify the buffer in the service object, since we're execing soon
+	arg_spec= (char*) svc_get_argv(svc);
 	// convert argv into pointers
 	// count, allocate, then populate
 	for (arg_count= 1, p= arg_spec; *p; p++)
@@ -551,13 +509,8 @@ service_t *svc_by_name(strseg_t name, bool create) {
 		svc->state= SVC_STATE_DOWN;
 		svc->name_len= name.len;
 		memcpy(svc->buffer, name.data, name.len);
-		svc->meta_len= 0;
-		svc->buffer[name.len+1]= '\0';
-		svc->argv_len= 0;
-		svc->buffer[name.len+2]= '\0';
-		svc->fds_len= 0;
-		svc->buffer[name.len+3]= '\0';
-		//svc->env_count= 0;
+		svc->buffer[name.len]= '\0';
+		svc->vars_len= 0;
 		svc->active_prev_ptr= NULL;
 		svc->active_next= NULL;
 		svc->pid= 0;
@@ -631,18 +584,14 @@ void svc_check(service_t *svc) {
 	assert(svc->size > min_service_obj_size);
 	buf_len= svc->size - sizeof(service_t);
 	assert(svc->name_len >= 0 && svc->name_len < buf_len);
-	assert(svc->meta_len >= 0 && svc->meta_len < buf_len);
-	assert(svc->argv_len >= 0 && svc->argv_len < buf_len);
-	assert(svc->fds_len  >= 0 && svc->fds_len  < buf_len);
-	assert(svc->name_len + svc->meta_len + svc->argv_len + svc->fds_len +4 <= buf_len);
+	assert(svc->vars_len >= 0 && svc->vars_len < buf_len);
+	assert(svc->name_len + 1 + svc->vars_len <= buf_len);
 	assert(svc->name_index_node.Color == RBTreeNode_Black || svc->name_index_node.Color == RBTreeNode_Red);
 	if (svc->pid)
 		assert(svc->pid_index_node.Color == RBTreeNode_Black || svc->pid_index_node.Color == RBTreeNode_Red);
 	else
 		assert(svc->pid_index_node.Color == RBTreeNode_Unassigned);
 	assert(svc->buffer[svc->name_len] == 0);
-	assert(svc->buffer[svc->name_len + 1 + svc->meta_len] == 0);
-	assert(svc->buffer[svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len] == 0);
-	assert(svc->buffer[svc->name_len + 1 + svc->meta_len + 1 + svc->argv_len + 1 + svc->fds_len] == 0);
+	assert(svc->buffer[svc->name_len + 1 + svc->vars_len-1] == 0);
 }
 #endif
