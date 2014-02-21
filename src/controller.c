@@ -39,7 +39,7 @@ controller_t client[CONTROLLER_MAX_CLIENTS];
 //  processing (true), or yield until later (false).
 
 #define STATE(name, ...) static bool name(controller_t *ctl)
-STATE(ctl_state_read_command);
+STATE(ctl_state_next_command);
 STATE(ctl_state_run_command);
 STATE(ctl_state_end_command);
 STATE(ctl_state_close);
@@ -143,7 +143,7 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 			return false;
 		}
 	// initialize object
-	ctl->state_fn= &ctl_state_read_command;
+	ctl->state_fn= &ctl_state_next_command;
 	ctl->recv_fd= recv_fd;
 	ctl->send_fd= send_fd;
 	ctl->write_timeout_reset= CONTROLLER_WRITE_TIMEOUT>>1;
@@ -282,37 +282,31 @@ bool ctl_deliver_signals(controller_t *ctl) {
 	return true;
 }
 
-// This state is really just a fancy non-blocking readline(), with special
-// handling for long lines (and EOF, when reading the config file)
-bool ctl_state_read_command(controller_t *ctl) {
-	int prev;
+/** Find the next command in the input buffer, if any.
+ *
+ * This function also handles flagging errors on lines longer than the buffer.
+ */
+bool ctl_state_next_command(controller_t *ctl) {
 	char *eol;
 	
+	// Before checking commands, deliver any pending signal events
 	if (!ctl_deliver_signals(ctl))
-		return false;
+		return false; // false means the output buffer is blocked
 
 	// see if we have a full line in the input.  else read some more.
 	eol= (char*) memchr(ctl->recv_buf, '\n', ctl->recv_buf_pos);
-	while (!eol && ctl->recv_fd >= 0) {
+	if (!eol && ctl->recv_fd >= 0) {
 		// if buffer is full, then command is too big, and we ignore the rest of the line
 		if (ctl->recv_buf_pos >= CONTROLLER_RECV_BUF_SIZE) {
 			// In case its a comment, preserve comment character (long comments are not an error)
 			ctl->recv_overflow= true;
 			ctl->recv_buf_pos= 1;
+			log_trace("line overflows buffer, ignoring remainder");
+			return true;
 		}
-		// Try reading more from our non-blocking handle
-		prev= ctl->recv_buf_pos;
-		if (ctl_read_more(ctl)) {
-			log_trace("controller read %d bytes", ctl->recv_buf_pos - prev);
-			// See if new data has a "\n"
-			eol= (char*) memchr(ctl->recv_buf + prev, '\n', ctl->recv_buf_pos - prev);
-		}
-		else {
-			log_trace("controller unable to read more yet");
-			// done for now, until more data available on pipe
-			// We would set wake->fd_read flags here, except we already do that in the ctl_run() method.
-			return false;
-		}
+		log_trace("no command ready");
+		// done for now, until more data available on pipe
+		return false;
 	}
 	// check for EOF (and append newline if needed)
 	if (ctl->recv_fd < 0) {
@@ -325,13 +319,13 @@ bool ctl_state_read_command(controller_t *ctl) {
 		// We know we can append because we would never detect EOF unless we read()
 		//  and we never read unless there is buffer space.
 		if (ctl->recv_buf[ctl->recv_buf_pos-1] != '\n' && ctl->append_final_newline) {
-			log_warn("Line ends with EOF... processing anyway");
+			log_warn("Command ends with EOF... processing anyway");
 			ctl->recv_buf[ctl->recv_buf_pos]= '\n';
 			eol= ctl->recv_buf + ctl->recv_buf_pos++;
 		}
 		// if no eol, then ignore final partial command
 		if (!eol) {
-			log_warn("Line ends with EOF... ignored");
+			log_warn("Command ends with EOF... ignored");
 			ctl->recv_buf_pos= 0;
 			ctl->state_fn= ctl_state_close;
 			return true;
@@ -402,7 +396,7 @@ bool ctl_state_end_command(controller_t *ctl) {
 		memmove(ctl->recv_buf, ctl->recv_buf + ctl->line_len, ctl->recv_buf_pos);
 		ctl->line_len= 0;
 	}
-	ctl->state_fn= ctl_state_read_command;
+	ctl->state_fn= ctl_state_next_command;
 	return true;
 }
 
@@ -888,6 +882,7 @@ bool ctl_read_more(controller_t *ctl) {
 		return false;
 	}
 	ctl->recv_buf_pos += n;
+	log_trace("controller read %d bytes (%d in recv buf)", n, ctl->recv_buf_pos);
 	return true;
 }
 
@@ -996,18 +991,18 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 				ctl->send_blocked_ts= 0;
 				memmove(ctl->send_buf, ctl->send_buf + n, ctl->send_buf_pos);
 			}
-			else {
-				log_debug("controller outbuf write failed: %s", strerror(errno));
-				// we have an error, or the write would block.
+			else if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
 				// mark the time when this happened.  We clear this next time a write succeeds
+				// If the write blocks for too long, ctl_run will perform timeout actions
 				if (!ctl->send_blocked_ts)
 					ctl->send_blocked_ts= wake->now? wake->now : 1; // timestamp must be nonzero
-				
-				FD_SET(ctl->send_fd, &wake->fd_write);
-				FD_SET(ctl->send_fd, &wake->fd_err);
-				if (ctl->send_fd > wake->max_fd)
-					wake->max_fd= ctl->send_fd;
 				return false;
+			} else {
+				// fatal error
+				log_debug("controller outbuf write failed: %s", strerror(errno));
+				close(ctl->send_fd);
+				ctl->send_fd= -1;
+				return true;  // the buffer is now "flushed" for all practical purposes
 			}
 		}
 	}
