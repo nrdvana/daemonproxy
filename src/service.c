@@ -107,6 +107,28 @@ int64_t svc_get_reap_ts(service_t *svc) {
 	return svc->reap_time;
 }
 
+void svc_ctor(service_t *svc, strseg_t name) {
+	int size= svc->size;
+	memset(svc, 0, size);
+	svc->size= size;
+	svc->state= SVC_STATE_DOWN;
+	
+	// This relies on svc_check_name having been called already
+	assert(name.len+1 < svc->size - sizeof(service_t));
+	memcpy(svc->buffer, name.data, name.len);
+	svc->name_len= name.len;
+	
+	RBTreeNode_Init( &svc->name_index_node );
+	svc->name_index_node.Object= svc;
+
+	RBTreeNode_Init( &svc->pid_index_node );
+	svc->pid_index_node.Object= svc;
+	
+	RBTree_Add( &svc_by_name_index, &svc->name_index_node, &name );
+	// unless NDEBUG:
+		svc_check(svc);
+}
+
 /** Get a named variable.
  *
  * Returns true if found or false if not.  If true, and value_out is given,
@@ -508,23 +530,7 @@ service_t *svc_by_name(strseg_t name, bool create) {
 	if (create && svc_free_list && svc_check_name(name)) {
 		svc= svc_free_list;
 		svc_free_list= svc->next_free;
-		svc->state= SVC_STATE_DOWN;
-		svc->name_len= name.len;
-		memcpy(svc->buffer, name.data, name.len);
-		svc->buffer[name.len]= '\0';
-		svc->vars_len= 0;
-		svc->active_prev_ptr= NULL;
-		svc->active_next= NULL;
-		svc->pid= 0;
-		svc->auto_restart= 0;
-		svc->start_time= 0;
-		svc->reap_time= 0;
-		RBTreeNode_Init( &svc->name_index_node );
-		svc->name_index_node.Object= svc;
-		RBTreeNode_Init( &svc->pid_index_node );
-		RBTree_Add( &svc_by_name_index, &svc->name_index_node, &name );
-		// unless NDEBUG:
-			svc_check(svc);
+		svc_ctor(svc, name);
 		return svc;
 	}
 	return NULL;
