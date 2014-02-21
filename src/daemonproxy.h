@@ -31,15 +31,13 @@ bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
 int  strseg_cmp(strseg_t a, strseg_t b);
 bool strseg_atoi(strseg_t *str, int64_t *int_out);
 
-#define LOG_FILTER_INC 99
-#define LOG_FILTER_DEC -99
 #define LOG_LEVEL_FATAL 3
 #define LOG_LEVEL_ERROR 2
 #define LOG_LEVEL_WARN 1
 #define LOG_LEVEL_INFO 0
 #define LOG_LEVEL_DEBUG -1
 #define LOG_LEVEL_TRACE -2
-#define LOG_LEVEL_NONE  -3  // this exists for setting the filter level to "none"
+#define LOG_FILTER_NONE -3
 
 void log_init();
 bool log_write(int level, const char * msg, ...);

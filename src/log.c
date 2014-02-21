@@ -10,8 +10,8 @@ int  log_msg_lost= 0;
 const char * log_level_names[]= { "none", "trace", "debug", "info", "warning", "error", "fatal" };
 
 const char * log_level_name(int level) {
-	if (level >= LOG_LEVEL_NONE && level <= LOG_LEVEL_FATAL)
-		return log_level_names[level - LOG_LEVEL_NONE];
+	if (level >= LOG_FILTER_NONE && level <= LOG_LEVEL_FATAL)
+		return log_level_names[level - LOG_FILTER_NONE];
 	return "unknown";
 }
 
@@ -22,8 +22,8 @@ void log_init() {
 
 bool log_level_by_name(strseg_t name, int *lev) {
 	int i;
-	for (i= LOG_LEVEL_NONE; i <= LOG_LEVEL_FATAL; i++)
-		if (0 == strseg_cmp(name, STRSEG(log_level_names[i - LOG_LEVEL_NONE]))) {
+	for (i= LOG_FILTER_NONE; i <= LOG_LEVEL_FATAL; i++)
+		if (0 == strseg_cmp(name, STRSEG(log_level_names[i - LOG_FILTER_NONE]))) {
 			if (lev) *lev= i;
 			return true;
 		}
@@ -68,7 +68,7 @@ bool log_write(int level, const char *msg, ...) {
 
 void log_set_filter(int value) {
 	log_filter= (value > LOG_LEVEL_FATAL)? LOG_LEVEL_FATAL
-		: (value < LOG_LEVEL_TRACE-1)? LOG_LEVEL_TRACE-1
+		: (value < LOG_FILTER_NONE)? LOG_FILTER_NONE
 		: value;
 }
 
