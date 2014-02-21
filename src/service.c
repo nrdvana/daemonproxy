@@ -224,13 +224,27 @@ const char * svc_get_fds(service_t *svc) {
  * This is slightly expensive, but typically happens only once per service.
  */
 bool svc_set_fds(service_t *svc, strseg_t new_fds) {
+	strseg_t name;
+	
 	if (new_fds.len < 0) new_fds.len= 0;
 	// The default value is "null null null", but we don't want to waste bytes on it
 	// or have to initialize it.  So "null null null" is represented by being unset.
 	if (strseg_cmp(new_fds, STRSEG("null\tnull\tnull")) == 0)
-		return svc_set_var(svc, STRSEG("fds"), NULL);
-	else
-		return svc_set_var(svc, STRSEG("fds"), &new_fds);
+		svc_set_var(svc, STRSEG("fds"), NULL);
+	else if (!svc_set_var(svc, STRSEG("fds"), &new_fds))
+		return false;
+	
+	// fds have been changed, so re-evaluate whether they are using
+	// the special control handles.
+	svc->uses_control_event= false;
+	svc->uses_control_cmd= false;
+	while (strseg_tok_next(&new_fds, '\t', &name)) {
+		if (strseg_cmp(name, STRSEG("cotrol.event")))
+			svc->uses_control_event= true;
+		if (strseg_cmp(name, STRSEG("control.cmd")))
+			svc->uses_control_cmd= true;
+	}
+	return true;
 }
 
 bool svc_handle_start(service_t *svc, int64_t when) {
@@ -325,7 +339,7 @@ void svc_run_active(wake_t *wake) {
 void svc_run(service_t *svc, wake_t *wake) {
 	pid_t pid;
 	int pipes[4], i;
-	controller_t *ctl;
+	controller_t *ctl= NULL;
 
 	re_switch_state:
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
@@ -344,24 +358,35 @@ void svc_run(service_t *svc, wake_t *wake) {
 		svc->state= SVC_STATE_START;
 		svc_notify_state(svc);
 	case SVC_STATE_START:
-		// Check file descriptors for the controller pipe special cases
-		if (0) {
-	case SVC_STATE_ALLOC_CTL:
+		for (i=0; i<4; i++) pipes[i]= -1;
+		// If this service uses the control.{cmd,event} file handles, then we
+		// need to create pipes for them, and attach to a new controller
+		if (svc->uses_control_event || svc->uses_control_cmd) {
 			// We need a controller object, of which there are a fixed number
-			// Do we have one?
-			for (i=0; i<4; i++) pipes[i]= -1;
+			// Do we have one?  And can we create pipes?
 			if (!(ctl= ctl_alloc())
-				|| 0 != pipe(pipes)
-				|| 0 != pipe(pipes+2)
+				|| (svc->uses_control_cmd && 0 != pipe(pipes))
+				|| (svc->uses_control_event && 0 != pipe(pipes+2))
 				|| !ctl_ctor(ctl, pipes[0], pipes[3])
 			) {
+				if (!ctl)
+					log_warn("can't allocate controller object");
+				else
+					log_error("can't create pipe: %s", strerror(errno));
+				
 				for (i=0; i<4; i++) close(pipes[i]);
-				if (ctl) ctl_free(ctl);
-				if (svc->state != SVC_STATE_ALLOC_CTL) {
-					svc->state= SVC_STATE_ALLOC_CTL;
+				if (ctl) {
+					ctl_dtor(ctl);
+					ctl_free(ctl);
+				}
+				if (svc->state != SVC_STATE_START) {
+					svc->state= SVC_STATE_START;
 					svc_notify_state(svc);
 				}
-				break;
+				log_info("will retry in %d seconds", (int)( FORK_RETRY_DELAY >> 32 ));
+				svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
+				svc_notify_state(svc);
+				goto re_switch_state;
 			}
 		}
 		pid= fork();
@@ -369,21 +394,23 @@ void svc_run(service_t *svc, wake_t *wake) {
 			svc_change_pid(svc, pid);
 			svc->start_time= wake->now;
 			if (!svc->start_time) svc->start_time= 1;
-			if (0) {
-				close(pipes[1]);
-				close(pipes[2]);
-			}
 			svc->state= SVC_STATE_UP;
+			if (svc->uses_control_cmd) close(pipes[1]);
+			if (svc->uses_control_event) close(pipes[2]);
 		} else if (pid == 0) {
+			if (svc->uses_control_cmd)
+				fd_set_fdnum(fd_by_name(STRSEG("control.cmd")), pipes[1]);
+			if (svc->uses_control_event)
+				fd_set_fdnum(fd_by_name(STRSEG("control.event")), pipes[2]);
 			svc_do_exec(svc);
-			assert(0);
 			// never returns
+			assert(0);
 		} else {
 			// else fork failed, and we need to wait 3 sec and try again
-			if (0) {
+			if (svc->uses_control_cmd || svc->uses_control_event) {
 				close(pipes[1]);
 				close(pipes[2]);
-				ctl_dtor(ctl);
+				ctl_dtor(ctl); // this closes the other 2 pipe handles
 				ctl_free(ctl);
 			}
 			svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
@@ -423,7 +450,7 @@ void svc_run(service_t *svc, wake_t *wake) {
  */
 void svc_do_exec(service_t *svc) {
 	int fd_count, arg_count, i;
-	int *fd_list;
+	int *fd_list= NULL;
 	fd_t *fd;
 	char **argv, *arg_spec, *p;
 	strseg_t fd_spec, tmp, fd_name;
@@ -433,9 +460,9 @@ void svc_do_exec(service_t *svc) {
 	
 	fd_spec.data= svc_get_fds(svc);
 	fd_spec.len= strlen(fd_spec.data);
+	fd_count= 0;
 	if (fd_spec.len) {
 		// count our file descriptors, to allocate buffer
-		fd_count= 0;
 		tmp= fd_spec;
 		while (strseg_tok_next(&tmp, '\t', &fd_name))
 			fd_count++;
@@ -455,13 +482,6 @@ void svc_do_exec(service_t *svc) {
 				abort();
 			}
 		}
-	} else {
-		// if spec is zero length, default to '/dev/null' on stdin,stdout,stderr
-		// rather than defaulting to having them closed
-		fd_count= 3;
-		fd_list= alloca(fd_count);
-		fd= fd_by_name(STRSEG("null"));
-		fd_list[0]= fd_list[1]= fd_list[2]= (fd? fd_get_fdnum(fd) : -1);
 	}
 	
 	// Now move them into correct places

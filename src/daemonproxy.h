@@ -180,6 +180,7 @@ bool fd_preallocate(int count, int size_each);
 
 const char* fd_get_name(fd_t *fd);
 int         fd_get_fdnum(fd_t *fd);
+void        fd_set_fdnum(fd_t *fd, int fdnum);
 fd_flags_t  fd_get_flags(fd_t *fd);
 const char* fd_get_file_path(fd_t *fd);
 fd_t *      fd_get_pipe_peer(fd_t *fd);

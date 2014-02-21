@@ -18,7 +18,7 @@ wake_t main_wake;
 
 wake_t *wake= &main_wake;
 
-// Parse options and apply to global vars; return false if fails
+// Parse options and apply to global vars; calls fatal() on failure.
 void parse_opts(char **argv);
 void parse_option(char shortname, char* longname, char ***argv);
 int parse_size(const char *str, char **endp);

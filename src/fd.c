@@ -150,6 +150,10 @@ int fd_get_fdnum(fd_t *fd) {
 	return fd->fd;
 }
 
+void fd_set_fdnum(fd_t *fd, int fdnum) {
+	fd->fd= fdnum;
+}
+
 fd_flags_t fd_get_flags(fd_t *fd) {
 	return fd->flags;
 }
