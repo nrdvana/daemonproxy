@@ -200,7 +200,7 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 	return f1;
 }
 
-// Open a file on the given name, possibly closing a handle by that name
+// Allocate a new fd object which represents an open file
 fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path) {
 	int buf_free;
 	fd_t *f, *old= fd_by_name(name);
@@ -250,13 +250,15 @@ fd_t * fd_by_name(strseg_t name) {
 	return NULL;
 }
 
-fd_t * fd_iter_next(fd_t *current, strseg_t from_name) {
-	log_trace("fd_iter_next(%p, %.*s)", current, from_name.len, from_name.data);
+fd_t * fd_iter_next(fd_t *current, const char *from_name) {
+	strseg_t n;
+	log_trace("fd_iter_next(%p, %s)", current, from_name);
 	RBTreeNode *node;
 	if (current) {
 		node= RBTreeNode_GetNext(&current->name_index_node);
 	} else {
-		RBTreeSearch s= RBTree_Find( &fd_by_name_index, (void*) &from_name );
+		n= STRSEG(from_name);
+		RBTreeSearch s= RBTree_Find( &fd_by_name_index, &n );
 		if (s.Nearest == NULL)
 			node= NULL;
 		else if (s.Relation < 0) // If key is less than returned node,

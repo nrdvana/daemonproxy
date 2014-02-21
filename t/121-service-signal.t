@@ -12,8 +12,8 @@ $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
 $dp->timeout(0.5);
 
-$dp->send('service.args.set	foo	perl	-e	setpgrp;$|=1;print "ready\n";sleep 1000;');
-$dp->send('service.fds.set	foo	null	stderr	stderr');
+$dp->send('service.args	foo	perl	-e	setpgrp;$|=1;print "ready\n";sleep 1000;');
+$dp->send('service.fds	foo	null	stderr	stderr');
 
 $dp->send("service.start	foo");
 $dp->response_like( qr!^service.state\tfoo\tup!m, 'service started' );
@@ -40,6 +40,6 @@ $dp->send("service.signal	foo	SIGQUIT	group");
 $dp->response_like( qr!^service.state\tfoo\tdown\t.*\tsignal.*=SIGQUIT\t!m, 'process group signalled SIGHUP' );
 
 $dp->send("terminate");
-$dp->exit_is( 0 );
+$dp->exit_is( 6 );
 
 done_testing;

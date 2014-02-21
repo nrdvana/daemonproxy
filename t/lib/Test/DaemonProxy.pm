@@ -68,9 +68,31 @@ sub run {
 	1;
 }
 
+my %_escape_mapping= (
+    "\0" => '\0',
+    "\n" => '\n',
+    "\r" => '\r',
+    "\t" => '\t',
+    "\f" => '\f',
+    "\b" => '\b',
+    "\a" => '\a',
+    "\e" => '\e',
+);
+sub _escape_char {
+    exists $_escape_mapping{$_[0]}?
+        $_escape_mapping{$_[0]}
+        : sprintf((ord $_[0] <= 0xFF)? "\\x%02X" : "\\x{%X}", ord $_[0]);
+}
+sub _quote_str {
+	my $s= shift;
+	$s =~ s/([\0-\x1F\x7F-\xFF])/ _escape_char($1) /eg;
+	qq("$s");
+}
+
 sub send {
 	my ($self, $msg)= @_;
-	Test::More::note("send: \"$msg\"");
+	Test::More::note("send: "._quote_str($msg));
+	local $SIG{PIPE}= sub {};
 	$self->dp_stdin->print($msg."\n");
 }
 
@@ -87,8 +109,10 @@ sub _read_more {
 		if (!$got) {
 			close($$fd_ref);
 			$$fd_ref= undef;
+			next;
 		}
-		Test::More::note("recv: $_") for (substr($$buf_ref, -$got) =~ /^.*$/mg);
+		Test::More::note("recv: "._quote_str($_))
+			for (substr($$buf_ref, -$got) =~ /^.*$/mg);
 		$result= 1;
 	}
 	return $result;

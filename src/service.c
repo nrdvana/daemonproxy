@@ -116,7 +116,7 @@ static bool svc_get_var(service_t *svc, strseg_t name, strseg_t *value_out) {
 	strseg_t val, key;
 	strseg_t var_buf= { svc->buffer + svc->name_len + 1, svc->vars_len };
 	
-	while (strseg_tok_next(&var_buf, '\0', &val) && var_buf.len > 0) {
+	while (var_buf.len > 0 && strseg_tok_next(&var_buf, '\0', &val)) {
 		if (strseg_tok_next(&val, '=', &key) && 0 == strseg_cmp(key, name)) {
 			if (value_out) *value_out= val;
 			return true;
@@ -140,7 +140,7 @@ static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
 	int buf_free= svc->size - sizeof(service_t) - svc->name_len - 1 - svc->vars_len;
 
 	// See if we have a variable of this name yet
-	while (strseg_tok_next(&var_buf, '\0', &oldval) && var_buf.len > 0) {
+	while (var_buf.len > 0 && strseg_tok_next(&var_buf, '\0', &oldval)) {
 		if (strseg_tok_next(&oldval, '=', &key) && 0 == strseg_cmp(key, name)) {
 			found= true;
 			break;
@@ -233,6 +233,7 @@ bool svc_handle_start(service_t *svc, int64_t when) {
 	svc->wait_status= -1;
 	svc_set_active(svc, true);
 	svc_notify_state(svc);
+	wake->next= wake->now;
 	return true;
 }
 
@@ -247,6 +248,7 @@ void svc_handle_reaped(service_t *svc, int wstat) {
 		svc->state= SVC_STATE_REAPED;
 		svc->reap_time= wake->now;
 		svc_set_active(svc, true);
+		wake->next= wake->now;
 	}
 	else log_trace("Service \"%s\" pid %d reaped, but service is not up", svc_get_name(svc), svc->pid);
 }
@@ -548,14 +550,16 @@ service_t *svc_by_pid(pid_t pid) {
 	return NULL;
 }
 
-service_t * svc_iter_next(service_t *svc, strseg_t from_name) {
+service_t * svc_iter_next(service_t *svc, const char *from_name) {
 	RBTreeNode *node;
-	log_trace("next service from %p or \"%.*s\"", svc, from_name.len, from_name.data);
+	strseg_t n;
+	log_trace("next service from %p or \"%s\"", svc, from_name);
 	if (svc) {
 		node= RBTreeNode_GetNext(&svc->name_index_node);
 	} else {
-		RBTreeSearch s= RBTree_Find( &svc_by_name_index, &from_name );
-		log_trace("find(\"%.*s\"): { %d, %p }", from_name.len, from_name.data, s.Relation, s.Nearest);
+		n= STRSEG(from_name);
+		RBTreeSearch s= RBTree_Find( &svc_by_name_index, &n );
+		log_trace("find(\"%.*s\"): { %d, %p }", n.len, n.data, s.Relation, s.Nearest);
 		if (s.Nearest == NULL)
 			node= NULL;
 		else if (s.Relation < 0) // If key is less than returned node,
@@ -592,6 +596,6 @@ void svc_check(service_t *svc) {
 	else
 		assert(svc->pid_index_node.Color == RBTreeNode_Unassigned);
 	assert(svc->buffer[svc->name_len] == 0);
-	assert(svc->buffer[svc->name_len + 1 + svc->vars_len-1] == 0);
+	assert(svc->buffer[svc->name_len + 1 + svc->vars_len - 1] == 0);
 }
 #endif

@@ -9,6 +9,7 @@ int64_t gettime_mon_frac();
 #define EXIT_INVALID_ENVIRONMENT  3
 #define EXIT_BROKEN_PROGRAM_STATE 4
 #define EXIT_IMPOSSIBLE_SCENARIO  5
+#define EXIT_TERMINATE            6
 void fatal(int exitcode, const char * msg, ...);
 
 typedef struct wake_s {
@@ -28,6 +29,7 @@ typedef struct strseg_s {
 
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
 int  strseg_cmp(strseg_t a, strseg_t b);
+bool strseg_atoi(strseg_t *str, int64_t *int_out);
 
 #define LOG_FILTER_INC 99
 #define LOG_FILTER_DEC -99
@@ -37,7 +39,9 @@ int  strseg_cmp(strseg_t a, strseg_t b);
 #define LOG_LEVEL_INFO 0
 #define LOG_LEVEL_DEBUG -1
 #define LOG_LEVEL_TRACE -2
+#define LOG_LEVEL_NONE  -3  // this exists for setting the filter level to "none"
 
+void log_init();
 bool log_write(int level, const char * msg, ...);
 bool log_flush();
 extern int log_filter;
@@ -56,6 +60,10 @@ bool log_level_by_name(strseg_t name, int *lev);
 #endif
 
 extern bool main_terminate;
+extern int  main_exitcode;
+extern bool main_failsafe;
+extern int  main_failsafe_guard_code;
+extern bool main_exec_on_exit;
 extern wake_t *wake;
 
 extern const char *  version_git_tag;
@@ -144,7 +152,7 @@ void svc_run_active(wake_t *wake);
 // Lookup services by attributes
 service_t * svc_by_name(strseg_t name, bool create);
 service_t * svc_by_pid(pid_t pid);
-service_t * svc_iter_next(service_t *current, strseg_t from_name);
+service_t * svc_iter_next(service_t *current, const char *from_name);
 
 bool svc_send_signal(service_t *svc, int sig, bool group);
 
@@ -172,8 +180,6 @@ extern const int min_fd_obj_size;
 void fd_init();
 bool fd_preallocate(int count, int size_each);
 
-#define fd_check_name svc_check_name
-
 const char* fd_get_name(fd_t *fd);
 int         fd_get_fdnum(fd_t *fd);
 fd_flags_t  fd_get_flags(fd_t *fd);
@@ -189,9 +195,10 @@ fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path);
 
 void fd_delete(fd_t *fd);
 
+#define fd_check_name svc_check_name
 fd_t * fd_by_name(strseg_t name);
 fd_t * fd_by_fd(int fd);
-fd_t * fd_iter_next(fd_t *current, strseg_t from_name);
+fd_t * fd_iter_next(fd_t *current, const char *from_name);
 
 //----------------------------------------------------------------------------
 // signal.c interface

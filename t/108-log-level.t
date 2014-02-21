@@ -17,7 +17,7 @@ $dp->send("log.filter	-");
 $dp->recv_ok( qr/^log.filter	trace$/m, 'lower filter to trace' );
 
 $dp->send("log.filter	-");
-$dp->recv_ok( qr/^log.filter	trace$/m, 'lower bound reached' );
+$dp->recv_ok( qr/^log.filter	none$/m, 'lower bound reached' );
 
 for (qw: trace debug info warning error fatal :) {
 	$dp->send("log.filter	$_");
@@ -25,6 +25,6 @@ for (qw: trace debug info warning error fatal :) {
 }
 
 $dp->send("terminate");
-$dp->exit_is(0);
+$dp->exit_is(6);
 
 done_testing;

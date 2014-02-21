@@ -11,12 +11,11 @@ my $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
 
 $dp->send("blah\t" x 1000);
-$dp->response_like( qr/error:.*long/, 'long line causes error' );
+$dp->recv_ok( qr/error:.*long/, 'long line causes error' );
 
+$dp->discard_response;
 $dp->send("# blah\t" x 1000);
-ok( ! $dp->_read_more, 'comment ignored even though too long' );
-
 $dp->send("echo\t-marker-");
-$dp->response_like( qr/^-marker-/, 'can still send/receive' );
+$dp->recv_ok( qr/^-marker-$/, 'long comment doens\'t generate an error' );
 
 done_testing;

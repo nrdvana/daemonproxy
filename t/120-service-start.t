@@ -13,7 +13,7 @@ $dp->run('--stdin');
 
 # Test return values
 for my $ret (0, 42, 255) {
-	$dp->send("service.args.set	foo	perl	-e	exit($ret)");
+	$dp->send("service.args	foo	perl	-e	exit($ret)");
 	$dp->send("service.start	foo");
 	$dp->recv_ok( qr!^service.state\tfoo\tup!m, 'service started' );
 	$dp->recv_ok( qr!^service.state\tfoo\tdown\t.*\texit\t$ret\t!m, "service exited $ret" );
@@ -21,7 +21,7 @@ for my $ret (0, 42, 255) {
 
 # Test script exit on signal
 for my $sig (qw: SIGTERM SIGHUP SIGINT SIGKILL :) {
-	$dp->send("service.args.set	foo	perl	-e	kill $sig=>\$\$");
+	$dp->send("service.args	foo	perl	-e	kill $sig=>\$\$");
 	$dp->send("service.start	foo");
 	$dp->recv_ok( qr!^service.state\tfoo\tup!m, 'service started' );
 	$dp->recv_ok( qr!^service.state\tfoo\tdown\t.*\tsignal.*=${sig}\t!m, 'service signalled $sig' );
@@ -29,8 +29,8 @@ for my $sig (qw: SIGTERM SIGHUP SIGINT SIGKILL :) {
 
 # Test uptime and timestamps
 $dp->timeout(4);
-$dp->send('service.args.set	foo	perl	-e	use Time::HiRes qw:clock_gettime CLOCK_MONOTONIC sleep:; $|=1; print clock_gettime(CLOCK_MONOTONIC).qq{\n};sleep 2;print clock_gettime(CLOCK_MONOTONIC).qq{\n};');
-$dp->send("service.fds.set	foo	null	stdout	stdout");
+$dp->send('service.args	foo	perl	-e	use Time::HiRes qw:clock_gettime CLOCK_MONOTONIC sleep:; $|=1; print clock_gettime(CLOCK_MONOTONIC).qq{\n};sleep 2;print clock_gettime(CLOCK_MONOTONIC).qq{\n};');
+$dp->send("service.fds	foo	null	stdout	stdout");
 $dp->send("service.start	foo");
 $dp->recv_ok( qr!^service.state\tfoo\tup\t(\d+)!m, 'service up' );
 my $t_start= clock_gettime(CLOCK_MONOTONIC);
@@ -51,6 +51,6 @@ cmp_ok( abs($uptime - ($t_finish - $t_start)), '<', 1, 'uptime near expected val
 	or diag "uptime: $uptime, t_end: $t_finish, t_start: $t_start";
 
 $dp->send("terminate");
-$dp->exit_is( 0 );
+$dp->exit_is( 6 );
 
 done_testing;

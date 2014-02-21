@@ -17,16 +17,19 @@ struct controller_s {
 	char send_buf[CONTROLLER_SEND_BUF_SIZE];
 	int  send_buf_pos;
 	bool send_overflow;
+	int64_t write_timeout_reset;
+	int64_t write_timeout_close;
 	int64_t send_blocked_ts;
 	int64_t last_signal_ts;
 	
-	int      line_len;         // length of current TSV line in recv_buf
-	strseg_t command_name;     // strseg of command name (within recv_buf)
-	strseg_t command_arg_str;  // TSV string for command to process (within recv_buf)
-	int      command_substate; // set to 0 at start of each command
+	int      line_len;         // length of current command in recv_buf
+	strseg_t command_name;     // str segment of command name (within recv_buf)
+	strseg_t command;          // remainder of command (within recv_buf)
+	const char *command_error; // error message set by commands
+	char     command_error_buf[64];// buffer in case we want to write a custom error msg
 	
+	int     command_substate;
 	char    statedump_current[NAME_LIMIT];
-	int     statedump_part;
 	int64_t statedump_ts;
 };
 
@@ -36,11 +39,14 @@ controller_t client[CONTROLLER_MAX_CLIENTS];
 //  processing (true), or yield until later (false).
 
 #define STATE(name, ...) static bool name(controller_t *ctl)
-STATE(ctl_state_close);
 STATE(ctl_state_read_command);
-STATE(ctl_state_cmd_overflow);
-STATE(ctl_state_cmd_unknown);
+STATE(ctl_state_run_command);
+STATE(ctl_state_end_command);
+STATE(ctl_state_close);
 STATE(ctl_state_free);
+STATE(ctl_state_dump_fds);
+STATE(ctl_state_dump_services);
+STATE(ctl_state_dump_signals);
 
 #define COMMAND(name, ...) static bool name(controller_t *ctl)
 COMMAND(ctl_cmd_echo, "echo");
@@ -54,20 +60,41 @@ COMMAND(ctl_cmd_fd_open,           "fd.open");
 COMMAND(ctl_cmd_exit,              "exit");
 COMMAND(ctl_cmd_terminate,         "terminate");
 COMMAND(ctl_cmd_log_filter,        "log.filter");
+COMMAND(ctl_cmd_event_pipe_timeout,"conn.event_timeout");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
+static bool ctl_out_buf_ready(controller_t *ctl);
+
+static inline bool ctl_peek_arg(controller_t *ctl, strseg_t *arg_out) {
+	strseg_t str= ctl->command;
+	return strseg_tok_next(&str, '\t', arg_out);
+}
+
+static inline bool ctl_get_arg(controller_t *ctl, strseg_t *arg_out) {
+	if (!strseg_tok_next(&ctl->command, '\t', arg_out)) {
+		ctl->command_error= "missing argument";
+		return false;
+	}
+	return true;
+}
+
+static bool ctl_get_arg_int(controller_t *ctl, int64_t *val);
+//static bool ctl_get_arg_name_val(controller_t *ctl, strseg_t *name, strseg_t *val);
+static bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, service_t **svc_out);
+static bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out);
+static bool ctl_get_arg_signal(controller_t *ctl, int *sig_out);
 
 typedef struct ctl_command_table_entry_s {
-	const char *command;
-	ctl_state_fn_t *state_fn;
+	strseg_t command;
+	ctl_state_fn_t *fn;
 } ctl_command_table_entry_t;
 
 #include "controller_data.autogen.c"
 
-const ctl_command_table_entry_t * ctl_find_command(const char *buffer) {
-	const ctl_command_table_entry_t *result= &ctl_command_table[ ctl_command_hash_func(buffer) ];
-	return result->state_fn && strstr(buffer, result->command) == buffer? result : NULL;
+const ctl_command_table_entry_t * ctl_find_command(strseg_t name) {
+	const ctl_command_table_entry_t *result= &ctl_command_table[ ctl_command_hash_func(name) ];
+	return result->fn && 0 == strseg_cmp(name, result->command)? result : NULL;
 }
 
 void ctl_set_auto_final_newline(controller_t *ctl, bool enable) {
@@ -119,6 +146,8 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	ctl->state_fn= &ctl_state_read_command;
 	ctl->recv_fd= recv_fd;
 	ctl->send_fd= send_fd;
+	ctl->write_timeout_reset= CONTROLLER_WRITE_TIMEOUT>>1;
+	ctl->write_timeout_close= CONTROLLER_WRITE_TIMEOUT;
 	return true;
 }
 
@@ -129,57 +158,139 @@ void ctl_dtor(controller_t *ctl) {
 	ctl->state_fn= ctl_state_free;
 }
 
-bool ctl_state_close(controller_t *ctl) {
-	if (ctl->send_fd >= 0)
-		if (!ctl_flush_outbuf(ctl))
-			return false; // remain in this state and try again later
-	ctl_dtor(ctl);
-	return true; // final state is 'free'.
-}
-
 void ctl_free(controller_t *ctl) {
 	ctl->state_fn= NULL;
 }
 
-bool ctl_state_free(controller_t *ctl) {
-	ctl_free(ctl);
-	return false; // don't run any more state iterations, because there aren't any
+/** Run all processing needed for the controller for this time slice
+ * This function is mainly a wrapper that repeatedly executes the current state until
+ * the state_fn returns false.  We then flush buffers and decide what to wake on.
+ */
+void ctl_run(wake_t *wake) {
+	int i, j;
+	controller_t *ctl;
+	ctl_state_fn_t *prev_state;
+	int64_t lateness, next_check_ts;
+	
+	// list is very small, so just iterate all, allocated or not.
+	for (i= 0, ctl= client; i < CONTROLLER_MAX_CLIENTS; ctl= &client[++i]) {
+		// non-null state means client is allocated
+		if (!ctl->state_fn)
+			continue;
+
+		// if input buffer not full, try reading more (in case script is blocking on output)
+		if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
+			ctl_read_more(ctl);
+		
+		// Run (max 10) iterations of state machine while state returns true.
+		// The arbitrary limit of 10 helps keep our timestamps and signal
+		// delivery and reaped procs current.  (also mitigates infinite loops)
+		prev_state= NULL;
+		for (j= 10; --j;) {
+			if (ctl->state_fn != prev_state) {
+				log_trace("ctl state = %s", ctl_get_state_name(ctl->state_fn));
+				prev_state= ctl->state_fn;
+			}
+			if (!ctl->state_fn(ctl))
+				break;
+		}
+		// Note: it is possible for ctl to have been destroyed (null state_fn), here.
+		
+		// If final iteration is still true, set wake to 'now', causing another
+		// iteration in the main loop.
+		if (!j) wake->next= wake->now;
+	}
+	
+	// Now that all processing is complete for this iteration, flush all output
+	// buffers.  This is a separate loop because sometimes controllers generate
+	// output to another controller.
+	for (i= 0, ctl= client; i < CONTROLLER_MAX_CLIENTS; ctl= &client[++i]) {
+		// non-null state means client is allocated
+		if (!ctl->state_fn)
+			continue;
+		
+		// If anything was left un-written, wake on writable pipe
+		// Also, set/check timeout for writes
+		if (ctl->send_fd >= 0 && ctl->send_buf_pos > 0) {
+			if (!ctl_flush_outbuf(ctl)) {
+				lateness= wake->now - ctl->send_blocked_ts;
+				
+				// If the controller script doesn't read its events before timeout,
+				// close the connection.
+				if (lateness >= ctl->write_timeout_close) {
+					log_error("controller %d blocked pipe for %d seconds, closing connection", i, (int)(lateness>>32));
+					ctl_dtor(ctl); // destroy client
+					ctl_free(ctl);
+					continue;      // next client
+				}
+				
+				// If the controller script doesn't read events before half its timeout,
+				// log a warning, and if the input buffer is full, set an overflow on the
+				// output stream so that we can resume processing the commands in the
+				// input buffer.  The controller script will have to re-sync state if it
+				// finally wakes up.
+				if (lateness >= ctl->write_timeout_reset) {
+					log_warn("controller %d blocked pipe for %d seconds", i, (int)(lateness>>32));
+					if (ctl->recv_buf_pos >= CONTROLLER_RECV_BUF_SIZE) {
+						ctl->send_overflow= true;
+						wake->next= wake->now;
+					}
+					next_check_ts= ctl->send_blocked_ts + ctl->write_timeout_close;
+				}
+				else {
+					next_check_ts= ctl->send_blocked_ts + ctl->write_timeout_reset;
+				}
+				
+				if (wake->next - next_check_ts > 0) {
+					log_trace("wake in %d ms to check timeout", (next_check_ts - wake->now) * 1000 >> 32 );
+					wake->next= next_check_ts;
+				}
+				log_trace("wake on controller[%d] send_fd", i);
+				FD_SET(ctl->send_fd, &wake->fd_write);
+				FD_SET(ctl->send_fd, &wake->fd_err);
+				if (ctl->send_fd > wake->max_fd)
+					wake->max_fd= ctl->send_fd;
+			}
+			else if (ctl->recv_buf_pos)
+				// we might have flushed data that was blocking us from processing
+				// additional commands, so come back for another iteration.
+				wake->next= wake->now;
+		}
+		// If incoming fd, wake on data available, unless input buffer full
+		// (this could also be the config file, initially)
+		if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE) {
+			log_trace("wake on controller[%d] recv_fd", i);
+			FD_SET(ctl->recv_fd, &wake->fd_read);
+			FD_SET(ctl->recv_fd, &wake->fd_err);
+			if (ctl->recv_fd > wake->max_fd)
+				wake->max_fd= ctl->recv_fd;
+		}
+	}
 }
 
-#define END_CMD(cond) end_cmd_(ctl, cond)
-static inline bool end_cmd_(controller_t *ctl, bool final_cond) {
-	if (final_cond) {
-		ctl->state_fn= ctl_state_read_command;
-		return true;
+bool ctl_deliver_signals(controller_t *ctl) {
+	int signum, sig_count;
+	int64_t sig_ts;
+	
+	while (sig_get_new_events(ctl->last_signal_ts, &signum, &sig_ts, &sig_count)) {
+		if (!ctl_out_buf_ready(ctl))
+			return false;
+		// deliver next signal that this controller hasn't seen
+		ctl_notify_signal(ctl, signum, sig_ts, sig_count);
+		ctl->last_signal_ts= sig_ts;
 	}
-	return false;
+	return true;
 }
 
 // This state is really just a fancy non-blocking readline(), with special
 // handling for long lines (and EOF, when reading the config file)
 bool ctl_state_read_command(controller_t *ctl) {
 	int prev;
-	char *eol, *p, *p2;
-	const ctl_command_table_entry_t *cmd;
-	int signum, sig_count;
-	int64_t sig_ts;
+	char *eol;
+	
+	if (!ctl_deliver_signals(ctl))
+		return false;
 
-	// clean up old command, if any.
-	if (ctl->line_len > 0) {
-		ctl->recv_buf_pos -= ctl->line_len;
-		memmove(ctl->recv_buf, ctl->recv_buf + ctl->line_len, ctl->recv_buf_pos);
-		ctl->line_len= 0;
-	}
-	
-	// First, see if there is a signal to report
-	if (sig_get_new_events(ctl->last_signal_ts, &signum, &sig_ts, &sig_count)) {
-		// deliver next signal that this controller hasn't seen
-		ctl_notify_signal(ctl, signum, sig_ts, sig_count);
-		if (!ctl->send_overflow)
-			ctl->last_signal_ts= sig_ts;
-		return true;
-	}
-	
 	// see if we have a full line in the input.  else read some more.
 	eol= (char*) memchr(ctl->recv_buf, '\n', ctl->recv_buf_pos);
 	while (!eol && ctl->recv_fd >= 0) {
@@ -199,7 +310,7 @@ bool ctl_state_read_command(controller_t *ctl) {
 		else {
 			log_trace("controller unable to read more yet");
 			// done for now, until more data available on pipe
-			
+			// We would set wake->fd_read flags here, except we already do that in the ctl_run() method.
 			return false;
 		}
 	}
@@ -231,350 +342,343 @@ bool ctl_state_read_command(controller_t *ctl) {
 	ctl->line_len= eol - ctl->recv_buf + 1;
 	*eol= '\0';
 	log_debug("controller got line: \"%s\"", ctl->recv_buf);
+	ctl->state_fn= ctl_state_run_command;
+	return true;
+}
+
+bool ctl_state_run_command(controller_t *ctl) {
+	const ctl_command_table_entry_t *cmd;
+
+	// Commands often generate output, so stop if output buffer too full.
+	// For a true solution to the problem, we could add states to each place
+	// where we try to write data (like co-routines) and resume a long write().
+	// But it saves tons of code if we just make sure we have enough buffer
+	// for the largest write we might do.
+	if (!ctl_out_buf_ready(ctl))
+		return false;
+	
+	// The next state will be 'end', unless a command changes that
+	// (for example, the 'statedump' command)
+	ctl->state_fn= ctl_state_end_command;
+	
 	// Ignore overflow lines, empty lines, lines starting with #, and lines that start with whitespace
 	if (ctl->recv_buf[0] == '\n'
 		|| ctl->recv_buf[0] == '\r'
 		|| ctl->recv_buf[0] == '#'
 		|| ctl->recv_buf[0] == ' '
 		|| ctl->recv_buf[0] == '\t'
-	)
-	{
+	) {
 		log_trace("Ignoring comment line");
 		ctl->recv_overflow= false;
-		// continue back to this state by doing nothing
 	}
 	// check for command overflow
 	else if (ctl->recv_overflow)
-		ctl->state_fn= ctl_state_cmd_overflow;
+		ctl_notify_error(ctl, "line too long");
 	// else try to parse and dispatch it
 	else {
-		// break off the first N tsv fields into an argv[] array
-		p= p2= ctl->recv_buf;
-		while (*p2 != '\t' && p2 < eol) p2++;
-		*p2= '\0';
-		ctl->command_name= (strseg_t){ p, p2-p };
-		if (p2 < eol) p2++;
-		ctl->command_arg_str= (strseg_t){ p2, eol - p2 };
-		// Now see if we can find the command
-		if ((cmd= ctl_find_command(p)))
-			ctl->state_fn= cmd->state_fn;
-		else
-			ctl->state_fn= ctl_state_cmd_unknown;
-		ctl->command_substate= 0;
+		// ctl->command is the un-parsed portion of our command.
+		ctl->command.data= ctl->recv_buf;
+		ctl->command.len= ctl->line_len - 1; // line_len includes terminating NUL
+		ctl->command_error= "unknown error";
+		
+		// We first parse the command name
+		if (strseg_tok_next(&ctl->command, '\t', &ctl->command_name)) {
+			// look up the command to see if it exists
+			cmd= ctl_find_command(ctl->command_name);
+			if (!cmd)
+				ctl_notify_error(ctl, "Unknown command: %.*s", ctl->command_name.len, ctl->command_name.data);
+			// dispatch it (returns false if it encounters an error, and sets ctl->command_error)
+			else if (!cmd->fn(ctl))
+				ctl_notify_error(ctl, "%s, for command \"%.*s%s\"", ctl->command_error, ctl->recv_buf, ctl->line_len > 30? 30 : ctl->line_len, ctl->line_len > 30? "...":"");
+		}
 	}
 	return true;
 }
 
-bool ctl_state_cmd_overflow(controller_t *ctl) {
-	ctl->recv_overflow= false;
-	return END_CMD( ctl_notify_error(ctl, "line too long") );
+bool ctl_state_end_command(controller_t *ctl) {
+	// clean up old command, if any.
+	if (ctl->line_len > 0) {
+		ctl->recv_buf_pos -= ctl->line_len;
+		memmove(ctl->recv_buf, ctl->recv_buf + ctl->line_len, ctl->recv_buf_pos);
+		ctl->line_len= 0;
+	}
+	ctl->state_fn= ctl_state_read_command;
+	return true;
 }
 
-bool ctl_state_cmd_unknown(controller_t *ctl) {
-	// find command string
-	return END_CMD( ctl_notify_error(ctl, "Unknown command: %.*s",
-		ctl->command_name.len, ctl->command_name.data) );
+bool ctl_state_close(controller_t *ctl) {
+	if (ctl->send_fd >= 0)
+		if (!ctl_flush_outbuf(ctl))
+			return false; // remain in this state and try again later
+	ctl_dtor(ctl);
+	return true; // final state is 'free'.
 }
 
-bool ctl_state_cmd_echo(controller_t *ctl) {
-	// find command string
-	return END_CMD( ctl_write(ctl, "%.*s\n", ctl->command_arg_str.len, ctl->command_arg_str.data) );
+bool ctl_state_free(controller_t *ctl) {
+	ctl_free(ctl);
+	return false; // don't run any more state iterations, because there aren't any
 }
 
-bool ctl_state_cmd_log_filter(controller_t *ctl) {
-	strseg_t arg, line= ctl->command_arg_str;
+//----------------------------------------------------------------------------
+// Commands
+
+/** Echo back to client
+ *
+ * "echo ANY_STRING_OF_ANY_CHAARCTERS"
+ *
+ * This can be used to find the completion of a command.  When the echoed string
+ * is received, it means any prior commands have completed.
+ */
+bool ctl_cmd_echo(controller_t *ctl) {
+	if (ctl->command.len > 0)
+		ctl_write(ctl, "%.*s\n", ctl->command.len, ctl->command.data);
+	return true;
+}
+
+/** Request to view or change loglevel of filter
+ * 
+ * "log.filter [+|-|LEVELNAME]"
+ *
+ * With argument, set the filter level.  In both cases, print the value.
+ */
+bool ctl_cmd_log_filter(controller_t *ctl) {
+	strseg_t arg;
 	int level;
-
-	if (line.len && strseg_tok_next(&line, '\t', &arg)) {
+	
+	// Optional argument to set the filter level, else just print it
+	if (ctl_peek_arg(ctl, &arg)) {
+		// Level can be a level name, or "+" or "-"
 		if (arg.len == 1 && arg.data[0] == '+')
 			level= log_filter + 1;
 		else if (arg.len == 1 && arg.data[0] == '-')
 			level= log_filter - 1;
-		else if (!log_level_by_name(arg, &level))
-			return END_CMD( ctl_notify_error(ctl, "invalid loglevel argument") );
+		else if (!log_level_by_name(arg, &level)) {
+			ctl->command_error= "Invalid loglevel argument";
+			return false;
+		}
+		// If got a level, assign it.
 		log_set_filter(level);
 	}
 
-	return END_CMD( ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) ) );
+	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
+	return true;
 }
 
-bool ctl_state_cmd_exit(controller_t *ctl) {
+bool ctl_cmd_event_pipe_timeout(controller_t *ctl) {
+	int64_t reset_timeout, close_timeout;
+	
+	if (!ctl_get_arg_int(ctl, &reset_timeout)
+		|| !ctl_get_arg_int(ctl, &close_timeout))
+		return false;
+	
+	if (reset_timeout > 0x7FFFFFFF || reset_timeout < 0
+		|| close_timeout > 0x7FFFFFFF || close_timeout < 0)
+	{
+		ctl->command_error= "invalid timeout (must be 0..7FFFFFFF)";
+		return false;
+	}
+	if (reset_timeout > close_timeout) {
+		ctl->command_error= "reset timeout is greater than close timeout";
+		return false;
+	}
+	
+	ctl->write_timeout_reset= (reset_timeout << 32);
+	ctl->write_timeout_close= (close_timeout << 32);
+	return true;
+}
+
+/** Request to close communications
+ *
+ * "exit"
+ */
+bool ctl_cmd_exit(controller_t *ctl) {
 	// they asked for it...
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
 	ctl->recv_fd= -1;
 	ctl->state_fn= ctl_state_close;
-	return false;
+	return true;
 }
 
-bool ctl_state_cmd_terminate(controller_t *ctl) {
+/** Request to terminate immediately
+ *
+ * "terminate [EXIT_CODE] [FAILSAFE_GUARD_CODE]"
+ */
+bool ctl_cmd_terminate(controller_t *ctl) {
+	int exitcode= EXIT_TERMINATE;
+	int64_t x;
+	int guard_code;
+	bool need_guard_code= main_failsafe;
+	
+	// First argument is optional exit value
+	if (ctl_peek_arg(ctl, NULL)) {
+		if (!ctl_get_arg_int(ctl, &x))
+			return false;
+		exitcode= (int) x;
+		// Next argument is optional guard code
+		if (ctl_peek_arg(ctl, NULL)) {
+			if (!ctl_get_arg_int(ctl, &x))
+				return false;
+			guard_code= (int) x;
+			if (guard_code != main_failsafe_guard_code) {
+				ctl->command_error= "incorrect failsafe guard code";
+				return false;
+			}
+			need_guard_code= false;
+		}
+	}
+	
+	// Guard code is needed for failsafe mode
+	if (need_guard_code) {
+		ctl->command_error= "failsafe guard code required";
+		return false;
+	}
+	
+	// Can't exit if running as pid 1
+	if (main_failsafe && !main_exec_on_exit) {
+		ctl->command_error= "cannot exit, and exec-on-exit is not configured";
+		return false;
+	}
+	
 	main_terminate= true;
+	main_exitcode= exitcode;
 	wake->next= wake->now;
-	return END_CMD(true);
+	return true;
 }
 
 /** Statedump command
+ *
+ * "statedump [service NAME|fd NAME|signal NAME]"
+ *
+ * With no arguments, prints all state of services, fds, and signals.
+ * With argument of type and name, dump the state only of the named thing,
+ * if it exists.
  */
-bool ctl_state_cmd_statedump(controller_t *ctl) {
-	fd_t *fd= NULL;
-	service_t *svc= NULL;
-	int sig, count;
-	int64_t next_ts;
-	
-	if (ctl->command_substate > 2) {
-		// resume the while loop where we left off, if service still exists
-		svc= svc_by_name((strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }, false);
-		if (!svc) ctl->command_substate= 2;
-	}
-	
-	switch (ctl->command_substate) {
-	case 0:
-		ctl->statedump_current[0]= '\0';
-		ctl->command_substate= 1;
-	case 1:
-		/* Statedump command, part 1: iterate fd objects and dump each one.
-		 * Uses an iterator of fd_t's name so that if fds are creeated or destroyed during our
-		 * iteration, we can safely resume.  (and this iteration could be idle for a while if
-		 * the controller script doesn't read its pipe)
-		 */
-		while ((fd= fd_iter_next(fd, (strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }))) {
-			if (!ctl_notify_fd_state(ctl, fd)) {
-				// if state dump couldn't complete (output buffer full)
-				//  save our position to resume later
-				strcpy(ctl->statedump_current, fd_get_name(fd)); // length of name has already been checked
-				return false;
-			}
-		}
-		ctl->statedump_current[0]= '\0';
-		ctl->command_substate= 2;
-	case 2:
-		/* Statedump command, part 2: iterate services and dump each one.
-		 * Like part 2 above, except a service has 4 lines of output, and we need to be able to resume
-		 * if a full buffer interrupts us half way through one service.
-		 */
-		while ((svc= svc_iter_next(svc, (strseg_t){ ctl->statedump_current, strlen(ctl->statedump_current) }))) {
-			log_debug("service iter = %s", svc_get_name(svc));
-			svc_check(svc);
-			strcpy(ctl->statedump_current, svc_get_name(svc)); // length of name has already been checked
-	case 3:
-			if (!ctl_notify_svc_state(ctl, svc_get_name(svc), svc_get_up_ts(svc),
-					svc_get_reap_ts(svc), svc_get_pid(svc), svc_get_wstat(svc))
-			) {
-				ctl->command_substate= 3;
-				return false;
-			}
-	case 4:
-			if (!ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc))) {
-				ctl->command_substate= 4;
-				return false;
-			}
-	case 5:
-			if (!ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc))) {
-				ctl->command_substate= 5;
-				return false;
-			}
-	case 6:
-			if (!ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc))) {
-				ctl->command_substate= 6;
-				return false;
-			}
-		}
-		ctl->statedump_ts= 0;
-		ctl->command_substate= 7;
-	case 7:
-		// Dump every signal where count is nonzero and timestamp has already been
-		// reported to this controller.  (newer signals will be reported normally)
-		while (sig_get_new_events(ctl->statedump_ts, &sig, &next_ts, &count)
-			&& (!ctl->last_signal_ts || next_ts <= ctl->last_signal_ts)
-		) {
-			if (!ctl_notify_signal(ctl, sig, next_ts, count))
-				return false;
-			ctl->statedump_ts= next_ts;
-		}
-		ctl->command_substate= 8;
-	case 8:
-		ctl_write(ctl, "statedump	complete\n");
-	}
-	return END_CMD(true);
-}
-
-bool ctl_extract_svc_arg(controller_t *ctl, strseg_t *line, service_t **svc, bool create, bool *notified) {
-	strseg_t name;
-	if (!strseg_tok_next(line, '\t', &name)) {
-		*notified= ctl_notify_error(ctl, "Missing service name");
-		return false;
-	}
-	if (!svc_check_name(name)) {
-		*notified= ctl_notify_error(ctl, "Invalid service name: \"%.*s\"", name.len, name.data);
-		return false;
-	}
-	if (!( *svc= svc_by_name(name, create) )) {
-		*notified= create? ctl_notify_error(ctl, "Unable to create new service")
-				: ctl_notify_error(ctl, "No such service");
-		return false;
-	}
+bool ctl_cmd_statedump(controller_t *ctl) {
+	ctl->state_fn= ctl_state_dump_fds;
+	ctl->statedump_current[0]= '\0';
+	ctl->command_substate= 0;
 	return true;
 }
 
-bool ctl_extract_fdname_arg(controller_t *ctl, strseg_t *line, strseg_t *name, bool existing, bool assignable, bool *notified) {
-	fd_t *fd;
-	if (!strseg_tok_next(line, '\t', name)) {
-		*notified= ctl_notify_error(ctl, "Missing file descriptor name");
+bool ctl_state_dump_fds(controller_t *ctl) {
+	fd_t *fd= fd_by_name(STRSEG(ctl->statedump_current));
+	if (!fd) ctl->command_substate= 0;
+	/* Statedump command, part 1: iterate fd objects and dump each one.
+	 * Uses an iterator of fd_t's name so that if fds are creeated or destroyed during our
+	 * iteration, we can safely resume.  (and this iteration could be idle for a while if
+	 * the controller script doesn't read its pipe)
+	 */
+ switch (ctl->command_substate) {
+ case 0:
+	
+	while ((fd= fd_iter_next(fd, ctl->statedump_current))) {
+		log_trace("fd iter = %s", fd_get_name(fd));
+ case 1:
+		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 1; break; }
+		ctl_notify_fd_state(ctl, fd);
+	}
+ } //switch
+	if (fd) { // If we broke the loop early, record name of where to resume
+		strcpy(ctl->statedump_current, fd_get_name(fd)); // length of name has already been checked
 		return false;
 	}
-	if (!fd_check_name(*name)) {
-		*notified= ctl_notify_error(ctl, "Invalid file descriptor name: \"%.*s\"", name->len, name->data);
-		return false;
-	}
-	fd= fd_by_name(*name);
-	if (assignable && fd && fd_get_flags(fd).is_const) {
-		*notified= ctl_notify_error(ctl, "File descriptor \"%s\" cannot be altered", fd_get_name(fd));
-		return false;
-	}
-	if (existing && !fd) {
-		*notified= ctl_notify_error(ctl, "No such file descriptor: \"%s\"", fd_get_name(fd));
-		return false;
-	}
+	ctl->statedump_current[0]= '\0';
+	ctl->state_fn= ctl_state_dump_services;
+	ctl->command_substate= 0;
 	return true;
 }
 
-bool ctl_extract_sig_arg(controller_t *ctl, strseg_t *line, int *sig_out) {
-	strseg_t signame;
-	char *endp;
-	long signum;
-	
-	if (!strseg_tok_next(line, '\t', &signame)) {
-		ctl_notify_error(ctl, "Missing signal argument");
-		return false;
-	}
-	
-	if (signame.len > 0 && signame.data[0] >= '0' && signame.data[0] <= '9') {
-		signum= strtol(signame.data, &endp, 10);
-		if (endp != signame.data + signame.len)
-			signum= 0;
-	}
-	else {
-		signum= sig_num_by_name(signame);
-	}
-	
-	if (signum <= 0) {
-		ctl_notify_error(ctl, "Invalid signal argument");
-		return false;
-	}
+bool ctl_state_dump_services(controller_t *ctl) {
+	service_t *svc= svc_by_name(STRSEG(ctl->statedump_current), false);
+	if (!svc) ctl->command_substate= 0;
+	/* Statedump command, part 2: iterate services and dump each one.
+	 * Like part 1 above, except a service has 4 lines of output.
+	 */
+ switch (ctl->command_substate) {
+ case 0:
 
-	if (sig_out) *sig_out= signum;
+	while ((svc= svc_iter_next(svc, ctl->statedump_current))) {
+		log_trace("service iter = %s", svc_get_name(svc));
+ case 1:
+		svc_check(svc);
+		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 1; break; }
+		ctl_notify_svc_state(ctl, svc_get_name(svc), svc_get_up_ts(svc),
+			svc_get_reap_ts(svc), svc_get_pid(svc), svc_get_wstat(svc));
+// case 2:
+//		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 2; break; }
+//		ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc));
+ case 3:
+		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 3; break; }
+		ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc));
+ case 4:
+		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 4; break; }
+		ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc));
+	}
+ }//switch
+	if (svc) { // If we broke the loop early, record name of where to resume
+		strcpy(ctl->statedump_current, svc_get_name(svc)); // length of name has already been checked
+		return false;
+	}
+	ctl->last_signal_ts= 0;
+	ctl->state_fn= ctl_state_dump_signals;
+	ctl->command_substate= 0;
+	return true;
+}
+
+bool ctl_state_dump_signals(controller_t *ctl) {
+	// Just use the deliver_signals, after having reset the last_signal_ts
+	if (!ctl_deliver_signals(ctl))
+		return false;
+	// But, need to override the state transition that it performs when complete
+	ctl->state_fn= ctl_state_end_command;
 	return true;
 }
 
 /** service.args command
- * request a dump of the args for the named service.
+ *
+ * "service.args NAME ARGUMENT_LIST"
+ *
+ * Set service NAME's args to the supplied arguent list.
  */
-bool ctl_state_cmd_svc_args(controller_t *ctl) {
+bool ctl_cmd_svc_args(controller_t *ctl) {
 	service_t *svc;
-	bool notified;
-	strseg_t line= ctl->command_arg_str;
 	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
-		return END_CMD(notified);
+	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
+		return false;
 	
-	ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc));
-	return END_CMD(true);
-}
-
-/** service.args.set
- * Set the argv for a service object
- * Also report the state change when done.
- */
-bool ctl_state_cmd_svc_args_set(controller_t *ctl) {
-	service_t *svc;
-	bool notified;
-	strseg_t line= ctl->command_arg_str;
-	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
-		return END_CMD(notified);
-	
-	if (line.len < 0)
-		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
-	
-	if (!svc_set_argv(svc, line))
-		return END_CMD( ctl_notify_error(ctl, "unable to set argv for service \"%s\"", svc_get_name(svc)) );
-	ctl_notify_svc_argv(NULL, svc_get_name(svc), svc_get_argv(svc));
-	return END_CMD(true);
-}
-
-bool ctl_state_cmd_svc_meta(controller_t *ctl) {
-	service_t *svc;
-	bool notified;
-	strseg_t line= ctl->command_arg_str;
-	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
-		return END_CMD(notified);
-	
-	return END_CMD( ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc)) );
-}
-
-bool ctl_state_cmd_svc_meta_set(controller_t *ctl) {
-	service_t *svc;
-	bool notified;
-	strseg_t line= ctl->command_arg_str;
-	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
-		return END_CMD(notified);
-	
-	if (line.len < 0)
-		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
-
-	if (!svc_set_meta(svc, line))
-		return END_CMD( ctl_notify_error(ctl, "Unable to set meta for service \"%s\"", svc_get_name(svc)) );
-
-	ctl_notify_svc_meta(NULL, svc_get_name(svc), svc_get_meta(svc));
-	return END_CMD(true);
-}
-
-bool ctl_state_cmd_svc_meta_apply(controller_t *ctl) {
-	service_t *svc;
-	bool notified;
-	strseg_t item, key, line= ctl->command_arg_str;
-
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
-		return END_CMD(notified);
-
-	while (strseg_tok_next(&line, '\t', &item)) {
-		if (!strseg_tok_next(&item, '=', &key))
-			return END_CMD( ctl_notify_error(ctl, "Invalid metadata token \"%.*s\" (missing '=')", item.len, item.data) );
-		if (!svc_apply_meta(svc, key, item))
-			return END_CMD( ctl_notify_error(ctl, "Out of space for metadata change to service \"%s\"", svc_get_name(svc)) );
+	if (!svc_set_argv(svc, ctl->command.len >= 0? ctl->command : STRSEG(""))) {
+		ctl->command_error= "unable to set argv";
+		return false;
 	}
-	ctl_notify_svc_meta(NULL, svc_get_name(svc), svc_get_meta(svc));
-	return END_CMD(true);
+	
+	ctl_notify_svc_argv(NULL, svc_get_name(svc), svc_get_argv(svc));
+	return true;
 }
 
-bool ctl_state_cmd_svc_fds(controller_t *ctl) {
+bool ctl_cmd_svc_fds(controller_t *ctl) {
 	service_t *svc;
-	bool notified;
-	strseg_t line= ctl->command_arg_str;
+	strseg_t fd_spec, name;
 	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
-		return END_CMD(notified);
+	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
+		return false;
+	
+	fd_spec= ctl->command;
+	while (strseg_tok_next(&ctl->command, '\t', &name)) {
+		if (!fd_check_name(name)) {
+			ctl->command_error= "invalid fd name";
+			return false;
+		}
+		if (!fd_by_name(name))
+			ctl_write(ctl, "warning: fd \"%.*s\" is not yet defined\n", name.len, name.data);
+	}
+	
+	if (!svc_set_fds(svc, fd_spec)) {
+		ctl->command_error= "unable to set file descriptors";
+		return false;
+	}
 	
 	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
-	return END_CMD(true);
-}
-
-bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
-	service_t *svc;
-	bool notified;
-	strseg_t line= ctl->command_arg_str;
-	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, true, &notified))
-		return END_CMD(notified);
-	
-	if (line.len < 0)
-		return END_CMD( ctl_notify_error(ctl, "Missing argument list") );
-
-	if (!svc_set_fds(svc, line))
-		return END_CMD( ctl_notify_error(ctl, "Unable to set file descriptors for service \"%s\"", svc_get_name(svc)) );
-	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
-	return END_CMD(true);
+	return true;
 }
 
 /** service.exec command
@@ -582,106 +686,124 @@ bool ctl_state_cmd_svc_fds_set(controller_t *ctl) {
  * Errors in specification (or if service is up) are reported immediately.
  * Results of exec attempt are reported via other events.
  */
-bool ctl_state_cmd_svc_start(controller_t *ctl) {
+bool ctl_cmd_svc_start(controller_t *ctl) {
 	const char *argv;
-	char *endp;
 	int64_t starttime_ts;
 	service_t *svc;
-	bool notified;
-	strseg_t starttime, line= ctl->command_arg_str;
 	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
-		return END_CMD(notified);
+	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
+		return false;
 	
 	// Optional timestamp for service start
-	if (strseg_tok_next(&line, '\t', &starttime)) {
-		starttime_ts= strtol( starttime.data, &endp, 10);
-		if (endp - starttime.data != starttime.len)
-			return END_CMD( ctl_notify_error(ctl, "Invalid timestamp") );
+	if (ctl_peek_arg(ctl, NULL)) {
+		if (!ctl_get_arg_int(ctl, &starttime_ts) || starttime_ts - wake->now < 10000) {
+			ctl->command_error= "invalid timestamp";
+			return false;
+		}
 	}
 	else starttime_ts= wake->now;
 	
 	argv= svc_get_argv(svc);
-	if (!argv[0] || argv[0] == '\t' || argv[0] == '\0')
-		return END_CMD( ctl_notify_error(ctl, "Missing/invalid argument list for \"%s\"", svc_get_name(svc)) );
+	if (!argv[0] || argv[0] == '\t') {
+		ctl->command_error= "no args configured for service";
+		return false;
+	}
 	
 	svc_handle_start(svc, starttime_ts);
-	return END_CMD(true);
+	return true;
 }
 
-bool ctl_state_cmd_svc_signal(controller_t *ctl) {
+bool ctl_cmd_svc_signal(controller_t *ctl) {
 	service_t *svc;
-	bool notified, group= false;
-	strseg_t line= ctl->command_arg_str, flags;
+	bool group= false;
+	strseg_t flags, flag;
 	int sig;
 	
-	if (!ctl_extract_svc_arg(ctl, &line, &svc, false, &notified))
-		return END_CMD(notified);
+	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
+		return false;
 	
-	if (!ctl_extract_sig_arg(ctl, &line, &sig))
-		return END_CMD(true);
+	if (!ctl_get_arg_signal(ctl, &sig))
+		return false;
 	
-	if (strseg_tok_next(&line, '\t', &flags)) {
-		if (strseg_cmp(flags, STRSEG("group")) == 0)
-			group= true;
-		else {
-			ctl_notify_error(ctl, "Unknown flag: %.*s", flags.len, flags.data);
-			return END_CMD(true);
+	if (ctl_peek_arg(ctl, &flags)) {
+		while (strseg_tok_next(&flags, ',', &flag)) {
+			if (strseg_cmp(flag, STRSEG("group")) == 0)
+				group= true;
+			else {
+				snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+					"unknown option \"%.*s\"", flag.len, flag.data);
+				ctl->command_error= ctl->command_error_buf;
+				return false;
+			}
 		}
 	}
 	
-	if (svc_get_pid(svc) <= 0 || svc_get_wstat(svc) >= 0)
-		ctl_notify_error(ctl, "Service is not running");
-	else if (!svc_send_signal(svc, sig, group))
-		ctl_notify_error(ctl, "Can't kill %s (%s %d): %s", svc_get_name(svc), group? "pgid":"pid", (int)svc_get_pid(svc), strerror(errno));
-	return END_CMD(true);
+	if (svc_get_pid(svc) <= 0 || svc_get_wstat(svc) >= 0) {
+		ctl->command_error= "service is not running";
+		return false;
+	}
+	
+	if (!svc_send_signal(svc, sig, group)) {
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"can't kill %s (%s %d): %s", svc_get_name(svc), group? "pgid":"pid", (int)svc_get_pid(svc), strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
+	return true;
 }
 
-bool ctl_state_cmd_fd_pipe(controller_t *ctl) {
+bool ctl_cmd_fd_pipe(controller_t *ctl) {
 	fd_t *fd;
-	bool notified;
 	int pair[2];
-	strseg_t read_side, write_side, line= ctl->command_arg_str;
+	strseg_t read_side, write_side;
 	
-	if (!ctl_extract_fdname_arg(ctl, &line, &write_side, false, true, &notified))
-		return END_CMD(notified);
+	if (!ctl_get_arg_fd(ctl, false, true, &read_side, NULL)
+		|| !ctl_get_arg_fd(ctl, false, true, &write_side, NULL))
+		return false;
 	
-	if (!ctl_extract_fdname_arg(ctl, &line, &read_side, false, true, &notified))
-		return END_CMD(notified);
-	
-	if (0 != pipe(pair))
-		return END_CMD( ctl_notify_error(ctl, "pipe() failed: %s", strerror(errno)) );
+	if (0 != pipe(pair)) {
+		ctl_notify_error(ctl, );
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"pipe() failed: %s", strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+	}
 	
 	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1]);
 	if (!fd) {
 		close(pair[0]);
 		close(pair[1]);
-		return END_CMD( ctl_notify_error(ctl, "Failed to create pipe") );
+		ctl->command_error= "failed to create pipe";
+		return false;
 	}
 	
 	ctl_notify_fd_state(NULL, fd);
 	ctl_notify_fd_state(NULL, fd_get_pipe_peer(fd));
-	return END_CMD(true);
+	return true;
 }
 
-bool ctl_state_cmd_fd_open(controller_t *ctl) {
-	bool notified;
+bool ctl_cmd_fd_open(controller_t *ctl) {
 	int f, open_flags;
 	fd_flags_t flags;
 	fd_t *fd;
-	strseg_t fdname, opts, opt, path, line= ctl->command_arg_str;
+	strseg_t fdname, opts, opt, path;
 
-	if (!ctl_extract_fdname_arg(ctl, &line, &fdname, false, true, &notified))
-		return END_CMD(notified);
+	if (!ctl_get_arg_fd(ctl, false, true, &fdname, NULL))
+		return false;
 	
-	if (!strseg_tok_next(&line, '\t', &opts))
-		return END_CMD( ctl_notify_error(ctl, "Missing flags argument") );
+	if (!ctl_get_arg(ctl, &opts)) {
+		ctl->command_error= "missing flags argument";
+		return false;
+	}
 	
-	if (!strseg_tok_next(&line, '\t', &path))
-		return END_CMD( ctl_notify_error(ctl, "Missing path argument") );
+	if (!ctl_get_arg(ctl, &path)) {
+		ctl->command_error= "missing path argument";
+		return false;
+	}
 	
-	if (line.len >= 0)
-		return END_CMD( ctl_notify_error(ctl, "Unexpected argument after path") );
+	if (ctl_peek_arg(ctl, NULL)) {
+		ctl->command_error= "unexpected argument after path";
+		return false;
+	}
 	assert(path.data[path.len] == '\0');
 	
 	memset(&flags, 0, sizeof(flags));
@@ -710,11 +832,16 @@ bool ctl_state_cmd_fd_open(controller_t *ctl) {
 			if (STRMATCH("nonblock")) { flags.nonblock= true; continue; }
 			break;
 		}
-		ctl_notify_error(ctl, "Unknown flag \"%.*s\"", opt.len, opt.data);
+		
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"unknown flag \"%.*s\"\n", opt.len, opt.data);
+		ctl->command_error= ctl->command_error_buf;
+		return false;
 	}
 	#undef STRMATCH
 	
 	if (flags.mkdir)
+		// we don't check success on this.  we just let open() fail and check that.
 		create_missing_dirs((char*)path.data);
 
 	open_flags= (flags.write? (flags.read? O_RDWR : O_WRONLY) : O_RDONLY)
@@ -723,109 +850,22 @@ bool ctl_state_cmd_fd_open(controller_t *ctl) {
 		| O_NOCTTY;
 
 	f= open(path.data, open_flags, 0600);
-	if (f < 0)
-		return END_CMD( ctl_notify_error(ctl, "Open failed: %s", strerror(errno)) );
+	if (f < 0) {
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"open failed: %s", strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
 
 	fd= fd_new_file(fdname, f, flags, path);
 	if (!fd) {
 		close(f);
-		return END_CMD( ctl_notify_error(ctl, "Unable to create named file descriptor") );
+		ctl->command_error= "no room for new fd object";
+		return false;
 	}
 
 	ctl_notify_fd_state(NULL, fd);
-	return END_CMD(true);
-}
-
-/** Run all processing needed for the controller for this time slice
- * This function is mainly a wrapper that repeatedly executes the current state until
- * the state_fn returns false.  We then flush buffers and decide what to wake on.
- */
-void ctl_run(wake_t *wake) {
-	int i;
-	// list is very small, so "allocated" is any client with non-null state
-	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++) {
-		if (client[i].state_fn) {
-			controller_t *ctl= &client[i];
-			// if input buffer not full, try reading more (in case script is blocking on output)
-			if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
-				ctl_read_more(ctl);
-			// Run iterations of state machine while state returns true,
-			do {
-				// To help prevent overflows on the output pipe (which can happen if there are many
-				//  asynchronous events) we stop processing commands when the pipe is full and buffer
-				//  is half-full.
-				// But wait! if the recv buffer is also full, then the client is still
-				//  trying to write to us.  So only stop processing commands if the recv buffer
-				//  isn't full.
-				if (ctl->send_buf_pos > CONTROLLER_SEND_BUF_SIZE/2
-					&& !ctl_flush_outbuf(ctl)
-					&& ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
-				{
-					log_debug("delaying further command processing until outbuf is less full");
-					break;
-				}
-				log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
-			} while (ctl->state_fn(ctl));
-			// Note: it is possible for ctl to have been destroyed (null state_fn), here.
-			if (ctl->state_fn)
-				log_debug("ctl state = %s", ctl_get_state_name(ctl->state_fn));
-		}
-	}
-}
-
-/** Flush all output buffers of controller objects
- * This can't be part of ctl_run because services get handled after the controller,
- * and might generate notifications for the controllers.
- */
-void ctl_flush(wake_t *wake) {
-	int i;
-	int64_t next_check_ts, lateness;
-	// list is very small, so "allocated" is any client with non-null state
-	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++) {
-		if (client[i].state_fn) {
-			controller_t *ctl= &client[i];
-			// If anything was left un-written, wake on writable pipe
-			// Also, set/check timeout for writes
-			if (ctl->send_fd >= 0 && ctl->send_buf_pos > 0) {
-				if (!ctl_flush_outbuf(ctl)) {
-					lateness= wake->now - ctl->send_blocked_ts;
-					if (lateness >= CONTROLLER_WRITE_TIMEOUT) {
-						log_error("controller %d blocked pipe for %d seconds, closing connection", i, (int)(lateness>>32));
-						ctl_dtor(ctl); // destroy client
-						continue;      // next client
-					}
-					if (lateness >= (CONTROLLER_WRITE_TIMEOUT>>1))
-						log_warn("controller %d blocked pipe for %d seconds", i, (int)(lateness>>32));
-
-					next_check_ts= ctl->send_blocked_ts + CONTROLLER_WRITE_TIMEOUT;
-					if (wake->next - next_check_ts > 0) {
-						log_trace("wake in %d ms to check timeout", (next_check_ts - wake->now) * 1000 >> 32 );
-						wake->next= next_check_ts;
-					}
-					log_trace("wake on controller[%d] send_fd", i);
-					FD_SET(ctl->send_fd, &wake->fd_write);
-					FD_SET(ctl->send_fd, &wake->fd_err);
-					if (ctl->send_fd > wake->max_fd)
-						wake->max_fd= ctl->send_fd;
-				}
-				else if (ctl->recv_buf_pos)
-					// immediately return to processing controllers if we managed to flush
-					// the data that might have been blocking us from processing additional
-					// commands
-					wake->next= wake->now;
-			}
-			// If incoming fd, wake on data available, unless input buffer full or current state
-			//  is a command
-			// (this could also be the config file, initially)
-			if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE) {
-				log_trace("wake on controller[%d] recv_fd", i);
-				FD_SET(ctl->recv_fd, &wake->fd_read);
-				FD_SET(ctl->recv_fd, &wake->fd_err);
-				if (ctl->recv_fd > wake->max_fd)
-					wake->max_fd= ctl->recv_fd;
-			}
-		}
-	}
+	return true;
 }
 
 // Read more controller input from recv_fd
@@ -961,7 +1001,12 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 				// we have an error, or the write would block.
 				// mark the time when this happened.  We clear this next time a write succeeds
 				if (!ctl->send_blocked_ts)
-					ctl->send_blocked_ts= wake->now? wake->now : 1;
+					ctl->send_blocked_ts= wake->now? wake->now : 1; // timestamp must be nonzero
+				
+				FD_SET(ctl->send_fd, &wake->fd_write);
+				FD_SET(ctl->send_fd, &wake->fd_err);
+				if (ctl->send_fd > wake->max_fd)
+					wake->max_fd= ctl->send_fd;
 				return false;
 			}
 		}
@@ -975,6 +1020,12 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 		return ctl_flush_outbuf(ctl);
 	}
 	return true;
+}
+
+static bool ctl_out_buf_ready(controller_t *ctl) {
+	return ctl->send_buf_pos <= (CONTROLLER_SEND_BUF_SIZE-CONTROLLER_LARGEST_WRITE)
+		|| ctl->send_overflow // if overflow, just allow writes to be discarded
+		|| ctl_flush_outbuf(ctl);
 }
 
 bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
@@ -1034,3 +1085,110 @@ bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
 			(flags.mkdir? ",mkdir":""), fd_get_file_path(fd));
 	}
 }
+
+/** Extract the next argument as an integer
+ */
+bool ctl_get_arg_int(controller_t *ctl, int64_t *val) {
+	strseg_t str;
+	if (!strseg_tok_next(&ctl->command, '\t', &str)
+		|| !strseg_atoi(&str, val)
+		|| str.len > 0   // should consume all of str
+	) {
+		ctl->command_error= "Expected integer";
+		return false;
+	}
+	return true;
+}
+
+/** Extract the next argument as a name=value pair
+ */
+//bool ctl_get_arg_name_val(controller_t *ctl, strseg_t *name, strseg_t *val) {
+//	strseg_t str, n;
+//	if (!strseg_tok_next(&ctl->command, '\t', &str)
+//		|| !strseg_tok_next(&str, '=', &n)
+//		|| n.len <= 0 || str.len < 0
+//	) {
+//		ctl->command_error= "Expected name=value pair";
+//		return false;
+//	}
+//	if (name) *name= n;
+//	if (val) *val= str;
+//	return true;
+//}
+
+/** Extract the next argument as a service reference
+ */
+bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, service_t **svc_out) {
+	strseg_t name;
+	service_t *svc;
+	
+	if (!strseg_tok_next(&ctl->command, '\t', &name) || !name.len) {
+		ctl->command_error= "Expected service name";
+		return false;
+	}
+	if (!svc_check_name(name)) {
+		ctl->command_error= "Invalid service name";
+		return false;
+	}
+	svc= svc_by_name(name, !existing);
+	if (!svc) {
+		ctl->command_error= existing? "No such service" : "Unable to create new service";
+		return false;
+	}
+	if (name_out) *name_out= name;
+	if (svc_out) *svc_out= svc;
+	return true;
+}
+
+bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out) {
+	strseg_t name;
+	fd_t *fd;
+	
+	if (!strseg_tok_next(&ctl->command, '\t', &name) || !name.len) {
+		ctl->command_error= "Expected file descriptor name";
+		return false;
+	}
+	if (!fd_check_name(name)) {
+		ctl->command_error= "Invalid file descriptor name";
+		return false;
+	}
+	fd= fd_by_name(name);
+	if (assignable && fd && fd_get_flags(fd).is_const) {
+		ctl->command_error= "File descriptor cannot be altered";
+		return false;
+	}
+	if (existing && !fd) {
+		ctl->command_error= "No such file descriptor";
+		return false;
+	}
+	if (name_out) *name_out= name;
+	if (fd_out) *fd_out= fd;
+	return true;
+}
+
+bool ctl_get_arg_signal(controller_t *ctl, int *sig_out) {
+	strseg_t signame;
+	int64_t i;
+	int signum;
+	
+	if (!strseg_tok_next(&ctl->command, '\t', &signame) || !signame.len) {
+		ctl->command_error= "Expected signal argument";
+		return false;
+	}
+	if (signame.data[0] >= '0' && signame.data[0] <= '9') {
+		if (!strseg_atoi(&signame, &i) || signame.len != 0 || i < 0 || i >> 16) {
+			ctl->command_error= "Invalid signal number";
+			return false;
+		}
+		signum= (int) i;
+	}
+	else {
+		if (0 > (signum= sig_num_by_name(signame))) {
+			ctl->command_error= "Invalid signal argument";
+			return false;
+		}
+	}
+	if (sig_out) *sig_out= signum;
+	return true;
+}
+

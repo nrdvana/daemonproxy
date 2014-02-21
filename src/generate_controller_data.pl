@@ -12,7 +12,7 @@ while (<STDIN>) {
 		if ($_ =~ m|^\s*STATE\s*\(\s*(\S+)\s*\)|);
 	# Look for COMMAND(fn, "name")
 	$commands{$2}= $1
-		if ($_ =~ m|^\s*COMMAND\s*(\s*(\S+)\s*,\s*"(\S+)"\s*\)|);
+		if ($_ =~ m|^\s*COMMAND\s*\(\s*(\S+)\s*,\s*"(\S+)"\s*\)|);
 }
 
 # table size is 1.5 x number of entries rounded up to power of 2.
@@ -27,8 +27,9 @@ my $table_size= $mask+1;
 sub hash_fn {
 	my ($string, $mul, $shift)= @_;
 	use integer;
+	my $i32_mask= (1<<(32-$shift))-1;
 	my $result= 0;
-	$result= (((($result * $mul) >> $shift)&((1<<(32-$shift))-1)) + $_)
+	$result= ((($result * $mul) >> $shift) & $i32_mask) + $_
 		for unpack( 'C' x length($string), $string );
 	return $result & $mask;
 }
@@ -66,7 +67,7 @@ my $state_cases= join("\n", map {
 	} @states );
 my $n_cmd= keys %commands;
 my $table_items= join("\n", map {
-	defined $_? qq|	{ "$_", $commands{$_} },| : qq|	{ "", NULL },|
+	defined $_? qq|	{ { "$_", |.length($_).qq|}, $commands{$_} },| : qq|	{ { NULL, 0 }, NULL },|
 	} @$table );
 
 print <<END;
@@ -80,17 +81,17 @@ $state_cases
 // $n_cmd commands
 // table size is $table_size, mul is $mul, shift is $shift
 
-int ctl_command_hash_func(const char* buffer) {
+int ctl_command_hash_func(strseg_t name) {
 	uint32_t x= 0;
-	const char *p= buffer;
-	while (*p && *p != '\\t') {
-		x= ((x * $mul) >> $shift) + (*p++ & 0xFF);
-	}
+	int i= 0;
+	for (i= 0; i < name.len; i++)
+		x= ((x * $mul) >> $shift) + (name.data[i] & 0xFF);
+	
 	return x & $mask;
 }
 
 const ctl_command_table_entry_t ctl_command_table[]= {
 $table_items
-	{NULL, NULL}
+	{ {NULL, 0}, NULL}
 };
 END

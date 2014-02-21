@@ -81,7 +81,12 @@ void sig_init() {
 	int pipe_fd[2];
 	struct sigaction act;
 	struct signal_spec_s *ss;
-	
+
+	// in a last-ditch attempt to recover from fatal errors, we might re-run
+	// the initialization.  otherwise, this condition is never true.
+	if (sig_wake_rd >= 0) close(sig_wake_rd);
+	if (sig_wake_wr >= 0) close(sig_wake_wr);
+
 	// initialize with 0
 	memset((void*)signals, 0, sizeof(signals));
 	

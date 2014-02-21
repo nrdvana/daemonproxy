@@ -2,13 +2,17 @@
 #include "daemonproxy.h"
 
 bool main_terminate= false;
+int  main_exitcode= 0;
 const char *main_cfgfile= NULL;
-const char *main_exec_on_exit= NULL;
+bool main_exec_on_exit= false;
+char main_exec_on_exit_buf[256];
+strseg_t main_exec_on_exit_args;
 bool main_use_stdin= false;
 bool main_mlockall= false;
 int  main_fd_pool_count= -1;
 int  main_fd_pool_size_each= -1;
 bool main_failsafe= false;
+int  main_failsafe_guard_code= 1;
 
 wake_t main_wake;
 
@@ -38,6 +42,8 @@ int main(int argc, char** argv) {
 		main_failsafe= true;
 	}
 	
+	log_init();
+	
 	// parse arguments, overriding default values
 	parse_opts(argv+1);
 	
@@ -55,8 +61,8 @@ int main(int argc, char** argv) {
 	if (f < 0) {
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %s (%d)", strerror(errno), errno);
 		// if we're in failsafe mode, fatal doesn't exit()
-		log_error("Will use stderr instead of /dev/null!");
-		f= 2;
+		log_error("Services using 'null' descriptor will get closed handles instead!");
+		f= -1;
 	}
 	if (!create_standard_handles(f))
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't allocate standard handle objects");
@@ -123,13 +129,13 @@ int main(int argc, char** argv) {
 		if (pid < 0)
 			log_trace("waitpid: %s", strerror(errno));
 		
-		// run controller state machine
-		ctl_run(wake);
-		
 		// run state machine of each service that is active.
 		svc_run_active(wake);
 		
-		ctl_flush(wake);
+		// run controller state machines
+		ctl_run(wake);
+		
+		log_flush();
 		
 		sig_enable(true);
 
@@ -142,7 +148,7 @@ int main(int argc, char** argv) {
 			tv.tv_usec= (long)((((wake->next - wake->now)&0xFFFFFFFFLL) * 1000000) >> 32);
 			log_trace("wait up to %d.%d sec", tv.tv_sec, tv.tv_usec);
 			
-			ret= select(wake->max_fd, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv);
+			ret= select(wake->max_fd+1, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv);
 			if (ret < 0) {
 				// shouldn't ever fail, but if not EINTR, at least log it and prevent
 				// looping too fast
@@ -159,8 +165,8 @@ int main(int argc, char** argv) {
 	}
 	
 	if (main_exec_on_exit)
-		fatal(0, "terminated normally");
-	return 0;
+		fatal(main_exitcode, "terminated normally");
+	return main_exitcode;
 }
 
 bool create_standard_handles(int dev_null) {
@@ -220,24 +226,44 @@ void parse_opts(char **argv) {
 }
 
 void show_help(char **argv);
+
 void show_version(char **argv);
+
 void set_opt_verbose(char** argv)     { log_set_filter(log_filter-1); }
+
 void set_opt_quiet(char** argv)       { log_set_filter(log_filter+1); }
+
 void set_opt_stdin(char **argv)       { main_use_stdin= true; }
+
 void set_opt_mlockall(char **argv)    { main_mlockall= true;  }
+
 void set_opt_failsafe(char **argv)    { main_failsafe= true;  }
+
 void set_opt_configfile(char** argv ) {
 	struct stat st;
 	if (stat(argv[0], &st))
 		fatal(EXIT_BAD_OPTIONS, "Cannot stat configfile \"%s\"", argv[0]);
 	main_cfgfile= argv[0];
 }
+
 void set_opt_exec_on_exit(char **argv) {
 	struct stat st;
+	int i, len= strlen(argv[0]);
+	
+	if (len >= sizeof(main_exec_on_exit_buf))
+		fatal(EXIT_BAD_OPTIONS, "exec-on-exit arguments exceed buffer size");
+	// convert tab-delimited arguments to NUL-delimited
+	for (i= 0; i < len; i++)
+		if (argv[0][i] == '\t')
+			argv[0][i]= '\0';
 	if (stat(argv[0], &st))
 		fatal(EXIT_BAD_OPTIONS, "Cannot stat exec-on-exit program \"%s\"", argv[0]);
-	main_exec_on_exit= argv[0];
+	main_exec_on_exit= true;
+	memcpy(main_exec_on_exit_buf, argv[0], len+1);
+	main_exec_on_exit_args.data= main_exec_on_exit_buf;
+	main_exec_on_exit_args.len= len;
 }
+
 void set_opt_fd_prealloc(char **argv) {
 	int n, m= FD_OBJ_SIZE;
 	char *end= NULL;
@@ -383,6 +409,9 @@ void fatal(int exitcode, const char *msg, ...) {
 	char buffer[1024];
 	int i;
 	va_list val;
+	strseg_t args, arg;
+	char **argv;
+	
 	if (msg && msg[0]) {
 		va_start(val, msg);
 		vsnprintf(buffer, sizeof(buffer), msg, val);
@@ -396,12 +425,22 @@ void fatal(int exitcode, const char *msg, ...) {
 		setenv("INIT_FRAME_ERROR", buffer, 1);
 		sprintf(buffer, "%d", exitcode);
 		setenv("INIT_FRAME_EXITCODE", buffer, 1);
-		// Close all nonstandard FDs
-		for (i= 3; i < FD_SETSIZE; i++) close(i);
+		// count argument list
+		args= main_exec_on_exit_args;
+		for (i= 0; strseg_tok_next(&args, '\0', NULL); i++);
+		log_debug("%d arguments to exec", i);
+		// build argv
+		argv= alloca(sizeof(char*) * (i+1));
+		args= main_exec_on_exit_args;
+		for (i= 0; strseg_tok_next(&args, '\0', &arg); i++)
+			argv[i]= (char*) arg.data;
+		argv[i]= NULL; // required by spec
 		// exec child
-		execl(main_exec_on_exit, main_exec_on_exit, NULL);
-		log_error("Unable to exec \"%s\": %s", main_exec_on_exit, strerror(errno));
-		// If that failed... continue?
+		sig_reset_for_exec();
+		execvp(argv[0], argv);
+		// If that failed... continue?  we might be screwed here.
+		sig_init();
+		log_error("Unable to exec \"%s\": %s", argv[0], strerror(errno));
 	}
 	
 	if (buffer[0])
@@ -416,19 +455,45 @@ int strseg_cmp(strseg_t a, strseg_t b) {
 		if (a.data[i] != b.data[i])
 			return a.data[i] < b.data[i]? -1 : 1;
 	}
-	if (a.len != b.len)
-		return a.len < b.len? -1 : 1;
-	return 0;
+	return a.len < b.len? -1
+		: a.len > b.len? 1
+		: 0;
 }
 
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out) {
+	const char *p= string_inout->data;
+	int len;
+	
 	if (string_inout->len < 0)
 		return false;
-	tok_out->data= string_inout->data;
-	for (tok_out->len= 0; tok_out->len < string_inout->len; tok_out->len++)
-		if (tok_out->data[tok_out->len] == sep)
+	
+	for (len= 0; len < string_inout->len; len++)
+		if (p[len] == sep)
 			break;
-	string_inout->data+= tok_out->len + 1;
-	string_inout->len -= tok_out->len + 1;
+	if (tok_out) {
+		tok_out->data= p;
+		tok_out->len= len;
+	}
+	string_inout->data+= len + 1;
+	string_inout->len -= len + 1;
+	return true;
+}
+
+bool strseg_atoi(strseg_t *string, int64_t *val) {
+	int64_t accum= 0;
+	int i= 0;
+	int sign= 1;
+
+	if (string->len && string->data[0] == '-') {
+		sign= -1;
+		i++;
+	}
+	while (i < string->len && string->data[i] >= '0' && string->data[i] <= '9')
+		accum= accum * 10 + (string->data[i++] - '0');
+	if (i < (sign < 0? 2 : 1)) // did we get at least one digit?
+		return false;
+	string->data += i;
+	string->len -= i;
+	if (val) *val= accum * sign;
 	return true;
 }

@@ -12,21 +12,21 @@ $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
 
 $dp->send("echo\tfoo");
-$dp->response_like( qr/^foo/m, 'test comm' );
+$dp->recv_ok( qr/^foo/m, 'test comm' );
 
 kill INT => $dp->pid;
-$dp->response_like( qr/^signal	SIGINT/m );
+$dp->recv_ok( qr/^signal	SIGINT/m );
 
 $dp->send("echo\tbar");
-$dp->response_like( qr/^bar/m, 'test comm' );
+$dp->recv_ok( qr/^bar/m, 'test comm' );
 
 kill SIGUSR1 => $dp->pid;
-$dp->response_like( qr/^signal	SIGUSR1/m );
+$dp->recv_ok( qr/^signal	SIGUSR1/m );
 
 kill SIGUSR2 => $dp->pid;
-$dp->response_like( qr/^signal	SIGUSR2/m );
+$dp->recv_ok( qr/^signal	SIGUSR2/m );
 
 $dp->send("terminate");
-$dp->exit_is( 0 );
+$dp->exit_is( 6 );
 
 done_testing;
