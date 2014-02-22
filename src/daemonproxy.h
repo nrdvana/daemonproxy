@@ -64,6 +64,8 @@ extern int  main_failsafe_guard_code;
 extern bool main_exec_on_exit;
 extern wake_t *wake;
 
+bool set_exec_on_exit(strseg_t args);
+
 extern const char *  version_git_tag;
 extern const int64_t version_build_ts;
 extern const char *  version_git_head;

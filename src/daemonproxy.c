@@ -23,6 +23,7 @@ void parse_opts(char **argv);
 void parse_option(char shortname, char* longname, char ***argv);
 int parse_size(const char *str, char **endp);
 bool create_standard_handles(int dev_null);
+bool set_exec_on_exit(strseg_t arguments_tsv);
 
 int main(int argc, char** argv) {
 	int wstat, f, ret;
@@ -247,21 +248,8 @@ void set_opt_configfile(char** argv ) {
 }
 
 void set_opt_exec_on_exit(char **argv) {
-	struct stat st;
-	int i, len= strlen(argv[0]);
-	
-	if (len >= sizeof(main_exec_on_exit_buf))
+	if (!set_exec_on_exit(STRSEG(argv[0])))
 		fatal(EXIT_BAD_OPTIONS, "exec-on-exit arguments exceed buffer size");
-	// convert tab-delimited arguments to NUL-delimited
-	for (i= 0; i < len; i++)
-		if (argv[0][i] == '\t')
-			argv[0][i]= '\0';
-	if (stat(argv[0], &st))
-		fatal(EXIT_BAD_OPTIONS, "Cannot stat exec-on-exit program \"%s\"", argv[0]);
-	main_exec_on_exit= true;
-	memcpy(main_exec_on_exit_buf, argv[0], len+1);
-	main_exec_on_exit_args.data= main_exec_on_exit_buf;
-	main_exec_on_exit_args.len= len;
 }
 
 void set_opt_fd_prealloc(char **argv) {
@@ -391,6 +379,33 @@ void show_version(char **argv) {
 	
 	// now exit, unless they also specified exec-on-exit
 	fatal(EXIT_NO_OP, "");
+}
+
+bool set_exec_on_exit(strseg_t args) {
+	int i;
+	
+	// empty string disables the feature
+	if (args.len <= 0) {
+		main_exec_on_exit= false;
+		return true;
+	}
+	
+	// Stored in a fixed-size buffer...
+	if (args.len >= sizeof(main_exec_on_exit_buf))
+		return false;
+
+	memcpy(main_exec_on_exit_buf, args.data, args.len);
+	main_exec_on_exit_buf;
+	main_exec_on_exit_buf[args.len]= '\0';
+	
+	// convert tab-delimited arguments to NUL-delimited
+	for (i= 0; i < args.len; i++)
+		if (main_exec_on_exit_buf[i] == '\t')
+			main_exec_on_exit_buf[i]= '\0';
+	
+	main_exec_on_exit= true;
+	main_exec_on_exit_args= (strseg_t){ main_exec_on_exit_buf, args.len };
+	return true;
 }
 
 /** Exit (or not) from a fatal condition

@@ -61,6 +61,7 @@ COMMAND(ctl_cmd_exit,              "exit");
 COMMAND(ctl_cmd_terminate,         "terminate");
 COMMAND(ctl_cmd_log_filter,        "log.filter");
 COMMAND(ctl_cmd_event_pipe_timeout,"conn.event_timeout");
+COMMAND(ctl_cmd_exec_on_exit,      "exec_on_exit");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
@@ -741,6 +742,14 @@ bool ctl_cmd_svc_signal(controller_t *ctl) {
 		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
 			"can't kill %s (%s %d): %s", svc_get_name(svc), group? "pgid":"pid", (int)svc_get_pid(svc), strerror(errno));
 		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
+	return true;
+}
+
+bool ctl_cmd_exec_on_exit(controller_t *ctl) {
+	if (!set_exec_on_exit(ctl->command)) {
+		ctl->command_error= "exec arguments exceed buffer size (255)";
 		return false;
 	}
 	return true;

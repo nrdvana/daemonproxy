@@ -36,4 +36,12 @@ for my $sig ( qw( SIGABRT SIGSEGV ) ) {
 	$dp->exit_is( 42, "$sig exec()s" );
 }
 
+$dp= Test::DaemonProxy->new;
+$dp->run('--stdin');
+$dp->send("exec_on_exit	perl	-e	exit 42");
+$dp->send("echo	done");
+$dp->recv( qr/^done/m );
+kill SIGILL => $dp->pid;
+$dp->exit_is( 42, "exec_on_exit command" );
+
 done_testing;
