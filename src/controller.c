@@ -415,51 +415,52 @@ bool ctl_state_free(controller_t *ctl) {
 	return false; // don't run any more state iterations, because there aren't any
 }
 
-//----------------------------------------------------------------------------
-// Commands
+/*----------------------------------------------------------------------------
 
-/** Echo back to client
- *
- * "echo ANY_STRING_OF_ANY_CHAARCTERS"
- *
- * This can be used to find the completion of a command.  When the echoed string
- * is received, it means any prior commands have completed.
- */
+=head1 PROTOCOL
+
+Daemonproxy reads commands in tab-separated-values format, with one
+command per line.  There is no escaping mechanism, and your commands
+must not contain ASCII control characters.  Events are delivered in
+this same format.
+
+In practice, ascii control characters shouldn't be needed, and the
+absence of quoting/escaping makes the protocol easier to implement
+in your script.
+
+A full protocol reference can be found in the documentation included
+with daemonproxy.  However, here is a quick reference guide:
+
+=head2 COMMANDS
+
+=over 4
+
+=item echo ANY_STRING_OF_CHARACTERS
+
+Prints all arguments as-is back as an event.  This is primarily intended to be
+used to mark the ends of other commands, by following the other command with
+an echo and a unique string, then watching for the echo to complete.
+
+=cut
+*/
 bool ctl_cmd_echo(controller_t *ctl) {
 	if (ctl->command.len > 0)
 		ctl_write(ctl, "%.*s\n", ctl->command.len, ctl->command.data);
 	return true;
 }
 
-/** Request to view or change loglevel of filter
- * 
- * "log.filter [+|-|LEVELNAME]"
- *
- * With argument, set the filter level.  In both cases, print the value.
- */
-bool ctl_cmd_log_filter(controller_t *ctl) {
-	strseg_t arg;
-	int level;
-	
-	// Optional argument to set the filter level, else just print it
-	if (ctl_peek_arg(ctl, &arg)) {
-		// Level can be a level name, or "+" or "-"
-		if (arg.len == 1 && arg.data[0] == '+')
-			level= log_filter + 1;
-		else if (arg.len == 1 && arg.data[0] == '-')
-			level= log_filter - 1;
-		else if (!log_level_by_name(arg, &level)) {
-			ctl->command_error= "Invalid loglevel argument";
-			return false;
-		}
-		// If got a level, assign it.
-		log_set_filter(level);
-	}
+/*
+=item conn.event_timeout RESET_TIMEOUT CLOSE_TIMEOUT
 
-	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
-	return true;
-}
+Set the timeouts associated with this controller.  If the controller's event
+stream has been blocked for more than RESET_TIMEOUT seconds, daemonproxy
+will flag the connection as "overflowed" and discard further writes until
+the script resumes reading events.  If the pipe has not been cleared by
+CLOSE_TIMEOUT seconds, daemonproxy will close the pipe and retsart the
+controller.
 
+=cut
+*/
 bool ctl_cmd_event_pipe_timeout(controller_t *ctl) {
 	int64_t reset_timeout, close_timeout;
 	
@@ -483,10 +484,14 @@ bool ctl_cmd_event_pipe_timeout(controller_t *ctl) {
 	return true;
 }
 
-/** Request to close communications
- *
- * "exit"
- */
+/*
+=item exit
+
+Close the connection to daemonproxy.  'exit' is a poor name for this command,
+but people expect to be able to type 'exit' to end a command stream.
+
+=cut
+*/
 bool ctl_cmd_exit(controller_t *ctl) {
 	// they asked for it...
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
@@ -495,14 +500,14 @@ bool ctl_cmd_exit(controller_t *ctl) {
 	return true;
 }
 
-/** Statedump command
- *
- * "statedump [service NAME|fd NAME|signal NAME]"
- *
- * With no arguments, prints all state of services, fds, and signals.
- * With argument of type and name, dump the state only of the named thing,
- * if it exists.
- */
+/*
+=item statedump
+
+Re-emit all events for daemonproxy's current state, to get the controller back
+into sync.  Useful after event overflow, or controller restart.
+
+=cut
+*/
 bool ctl_cmd_statedump(controller_t *ctl) {
 	ctl->state_fn= ctl_state_dump_fds;
 	ctl->statedump_current[0]= '\0';
@@ -584,222 +589,14 @@ bool ctl_state_dump_signals(controller_t *ctl) {
 	return true;
 }
 
-/** service.args command
- *
- * "service.args NAME ARGUMENT_LIST"
- *
- * Set service NAME's args to the supplied arguent list.
- */
-bool ctl_cmd_svc_args(controller_t *ctl) {
-	service_t *svc;
-	
-	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
-		return false;
-	
-	if (!svc_set_argv(svc, ctl->command.len >= 0? ctl->command : STRSEG(""))) {
-		ctl->command_error= "unable to set argv";
-		return false;
-	}
-	
-	ctl_notify_svc_argv(NULL, svc_get_name(svc), svc_get_argv(svc));
-	return true;
-}
+/*
+=item fd.pipe NAME_READ NAME_WRITE
 
-bool ctl_cmd_svc_fds(controller_t *ctl) {
-	service_t *svc;
-	strseg_t fd_spec, name;
-	
-	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
-		return false;
-	
-	fd_spec= ctl->command;
-	while (strseg_tok_next(&ctl->command, '\t', &name)) {
-		if (!fd_check_name(name)) {
-			ctl->command_error= "invalid fd name";
-			return false;
-		}
-		if (!fd_by_name(name))
-			ctl_write(ctl, "warning: fd \"%.*s\" is not yet defined\n", name.len, name.data);
-	}
-	
-	if (!svc_set_fds(svc, fd_spec)) {
-		ctl->command_error= "unable to set file descriptors";
-		return false;
-	}
-	
-	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
-	return true;
-}
+Create a pipe, with the read-end named NAME_READ and write-end named
+NAME_WRITE.  Re-using an existing name will close the old handle.
 
-/** service.exec command
- * Forks and execs named service, if it is not running.
- * Errors in specification (or if service is up) are reported immediately.
- * Results of exec attempt are reported via other events.
- */
-bool ctl_cmd_svc_start(controller_t *ctl) {
-	const char *argv;
-	int64_t starttime_ts;
-	service_t *svc;
-	
-	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
-		return false;
-	
-	// Optional timestamp for service start
-	if (ctl_peek_arg(ctl, NULL)) {
-		if (!ctl_get_arg_int(ctl, &starttime_ts) || starttime_ts - wake->now < 10000) {
-			ctl->command_error= "invalid timestamp";
-			return false;
-		}
-	}
-	else starttime_ts= wake->now;
-	
-	argv= svc_get_argv(svc);
-	if (!argv[0] || argv[0] == '\t') {
-		ctl->command_error= "no args configured for service";
-		return false;
-	}
-	
-	svc_handle_start(svc, starttime_ts);
-	return true;
-}
-
-bool ctl_cmd_svc_signal(controller_t *ctl) {
-	service_t *svc;
-	bool group= false;
-	strseg_t flags, flag;
-	int sig;
-	
-	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
-		return false;
-	
-	if (!ctl_get_arg_signal(ctl, &sig))
-		return false;
-	
-	if (ctl_peek_arg(ctl, &flags)) {
-		while (strseg_tok_next(&flags, ',', &flag)) {
-			if (strseg_cmp(flag, STRSEG("group")) == 0)
-				group= true;
-			else {
-				snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
-					"unknown option \"%.*s\"", flag.len, flag.data);
-				ctl->command_error= ctl->command_error_buf;
-				return false;
-			}
-		}
-	}
-	
-	if (svc_get_pid(svc) <= 0 || svc_get_wstat(svc) >= 0) {
-		ctl->command_error= "service is not running";
-		return false;
-	}
-	
-	if (!svc_send_signal(svc, sig, group)) {
-		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
-			"can't kill %s (%s %d): %s", svc_get_name(svc), group? "pgid":"pid", (int)svc_get_pid(svc), strerror(errno));
-		ctl->command_error= ctl->command_error_buf;
-		return false;
-	}
-	return true;
-}
-
-/** Request to terminate immediately
- *
- * "terminate [EXIT_CODE] [FAILSAFE_GUARD_CODE]"
- */
-bool ctl_cmd_terminate(controller_t *ctl) {
-	int exitcode= EXIT_TERMINATE;
-	int64_t x;
-	int guard_code;
-	bool need_guard_code= (bool) main_terminate_guard;
-
-	// First argument is optional exit value
-	if (ctl_peek_arg(ctl, NULL)) {
-		if (!ctl_get_arg_int(ctl, &x))
-			return false;
-		exitcode= (int) x;
-		// Next argument is optional guard code
-		if (ctl_peek_arg(ctl, NULL)) {
-			if (!ctl_get_arg_int(ctl, &x))
-				return false;
-			guard_code= (int) x;
-			if (guard_code != main_terminate_guard) {
-				ctl->command_error= "incorrect terminate guard code";
-				return false;
-			}
-			need_guard_code= false;
-		}
-	}
-	
-	// Guard code is needed for failsafe mode
-	if (need_guard_code) {
-		ctl->command_error= "terminate guard code required";
-		return false;
-	}
-	
-	// Can't exit if running as pid 1
-	if (main_terminate_guard && !main_exec_on_exit) {
-		ctl->command_error= "cannot exit, and exec-on-exit is not configured";
-		return false;
-	}
-	
-	main_terminate= true;
-	main_exitcode= exitcode;
-	wake->next= wake->now;
-	return true;
-}
-
-bool ctl_cmd_terminate_exec_args(controller_t *ctl) {
-	if (!set_exec_on_exit(ctl->command)) {
-		ctl->command_error= "exec arguments exceed buffer size (255)";
-		return false;
-	}
-	return true;
-}
-
-bool ctl_cmd_terminate_guard(controller_t *ctl) {
-	strseg_t arg;
-	int64_t code;
-	
-	if (!ctl_get_arg(ctl, &arg) || arg.len != 1
-		|| (arg.data[0] != '-' && arg.data[0] != '+'))
-	{
-		ctl->command_error= "expected + or -";
-		return false;
-	}
-
-	if (!ctl_get_arg_int(ctl, &code))
-		return false;
-	
-	if (!code) {
-		ctl->command_error= "code cannot be 0";
-		return false;
-	}
-	
-	if (arg.data[0] == '+') {
-		if (main_terminate_guard) {
-			ctl->command_error= "terminate guard code is already set";
-			return false;
-		}
-		main_terminate_guard= code;
-		return true;
-	}
-	else {
-		if (!main_terminate_guard) {
-			ctl->command_error= "terminate guard was not set";
-			return false;
-		}
-		if (code != main_terminate_guard) {
-			ctl->command_error= "incorrect guard code";
-			return false;
-		}
-		main_terminate_guard= 0;
-		return true;
-	}
-
-	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
-	return true;
-}
-
+=cut
+*/
 bool ctl_cmd_fd_pipe(controller_t *ctl) {
 	fd_t *fd;
 	int pair[2];
@@ -829,6 +626,15 @@ bool ctl_cmd_fd_pipe(controller_t *ctl) {
 	return true;
 }
 
+/*
+=item fd.open NAME FLAG1,FLAG2,.. PATH
+
+Opens a file at PATH.  FLAGS is a comma-sparated list of flags of the
+set read, write, create, truncate, nonblock, mkdir.  Re-using an
+existing name will close the old handle.
+
+=cut
+*/
 bool ctl_cmd_fd_open(controller_t *ctl) {
 	int f, open_flags;
 	fd_flags_t flags;
@@ -915,6 +721,431 @@ bool ctl_cmd_fd_open(controller_t *ctl) {
 	ctl_notify_fd_state(NULL, fd);
 	return true;
 }
+
+/*
+=item fd.delete NAME
+
+Close (and remove) the named handle.
+
+=cut
+*/
+
+
+/*
+=item service.args NAME ARG_1 ARG_2 ... ARG_N
+
+Assign new exec() arguments to the service.  NAME will be created if
+it didn't exist.  ARG_1 is both the file to execute and argv[0] to
+pass to the service.  To falsify argv[0], use an external program.
+
+=cut
+*/
+bool ctl_cmd_svc_args(controller_t *ctl) {
+	service_t *svc;
+	
+	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
+		return false;
+	
+	if (!svc_set_argv(svc, ctl->command.len >= 0? ctl->command : STRSEG(""))) {
+		ctl->command_error= "unable to set argv";
+		return false;
+	}
+	
+	ctl_notify_svc_argv(NULL, svc_get_name(svc), svc_get_argv(svc));
+	return true;
+}
+
+/*
+=item service.fds NAME HANDLE_1 HANDLE_2 ... HANDLE_N
+
+Set the list of file descriptors to pass to the service.  Name will
+be created if it didn't exist.  The name 'null' is always available
+and refers to /dev/null.  '-' means to pass the service a closed
+file descriptor.
+
+=cut
+*/
+bool ctl_cmd_svc_fds(controller_t *ctl) {
+	service_t *svc;
+	strseg_t fd_spec, name;
+	
+	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
+		return false;
+	
+	fd_spec= ctl->command;
+	while (strseg_tok_next(&ctl->command, '\t', &name)) {
+		if (!fd_check_name(name)) {
+			ctl->command_error= "invalid fd name";
+			return false;
+		}
+		if (!fd_by_name(name))
+			ctl_write(ctl, "warning: fd \"%.*s\" is not yet defined\n", name.len, name.data);
+	}
+	
+	if (!svc_set_fds(svc, fd_spec)) {
+		ctl->command_error= "unable to set file descriptors";
+		return false;
+	}
+	
+	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
+	return true;
+}
+
+/*
+=item service.start NAME [FUTURE_TIMESTAMP]
+
+Start the service, optionally at a future time.  Errors in service specification
+are reported immediate.  Errors during fork/exec are reported later.
+
+=cut
+*/
+bool ctl_cmd_svc_start(controller_t *ctl) {
+	const char *argv;
+	int64_t starttime_ts;
+	service_t *svc;
+	
+	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
+		return false;
+	
+	// Optional timestamp for service start
+	if (ctl_peek_arg(ctl, NULL)) {
+		if (!ctl_get_arg_int(ctl, &starttime_ts) || starttime_ts - wake->now < 10000) {
+			ctl->command_error= "invalid timestamp";
+			return false;
+		}
+	}
+	else starttime_ts= wake->now;
+	
+	argv= svc_get_argv(svc);
+	if (!argv[0] || argv[0] == '\t') {
+		ctl->command_error= "no args configured for service";
+		return false;
+	}
+	
+	svc_handle_start(svc, starttime_ts);
+	return true;
+}
+
+/*
+=item service.signal NAME SIGNAL [FLAGS]
+
+Send SIGNAL to the named service's pid, if it is running.  Optional flag may
+be "group", in which case (if the service leads a process group) the pprocess
+group is sent the signal.
+
+=cut
+*/
+bool ctl_cmd_svc_signal(controller_t *ctl) {
+	service_t *svc;
+	bool group= false;
+	strseg_t flags, flag;
+	int sig;
+	
+	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
+		return false;
+	
+	if (!ctl_get_arg_signal(ctl, &sig))
+		return false;
+	
+	if (ctl_peek_arg(ctl, &flags)) {
+		while (strseg_tok_next(&flags, ',', &flag)) {
+			if (strseg_cmp(flag, STRSEG("group")) == 0)
+				group= true;
+			else {
+				snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+					"unknown option \"%.*s\"", flag.len, flag.data);
+				ctl->command_error= ctl->command_error_buf;
+				return false;
+			}
+		}
+	}
+	
+	if (svc_get_pid(svc) <= 0 || svc_get_wstat(svc) >= 0) {
+		ctl->command_error= "service is not running";
+		return false;
+	}
+	
+	if (!svc_send_signal(svc, sig, group)) {
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"can't kill %s (%s %d): %s", svc_get_name(svc), group? "pgid":"pid", (int)svc_get_pid(svc), strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
+	return true;
+}
+
+/*
+=item log.filter [+|-|none|LEVELNAME]
+
+Change the logging filter level of daemonproxy.  A value of none causes all
+log messages to be printed.  A value of + or - increases or decreases the
+filter level.  A level of 'info' would suppress 'info', 'debug', and 'trace'
+messages.  Note that trace messages are only available when compiled in
+debug mode.
+
+=cut
+*/
+bool ctl_cmd_log_filter(controller_t *ctl) {
+	strseg_t arg;
+	int level;
+	
+	// Optional argument to set the filter level, else just print it
+	if (ctl_peek_arg(ctl, &arg)) {
+		// Level can be a level name, or "+" or "-"
+		if (arg.len == 1 && arg.data[0] == '+')
+			level= log_filter + 1;
+		else if (arg.len == 1 && arg.data[0] == '-')
+			level= log_filter - 1;
+		else if (!log_level_by_name(arg, &level)) {
+			ctl->command_error= "Invalid loglevel argument";
+			return false;
+		}
+		// If got a level, assign it.
+		log_set_filter(level);
+	}
+
+	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
+	return true;
+}
+
+/*
+=item terminate [EXIT_CODE] [GUARD_CODE]
+
+Terminate daemonproxy immediately.  No cleanup is performed, and all handles
+and child processes will be lost.  Graceful shutdown should be part of the
+controller script, and this should be the final step.
+
+If the terminate-guard feature is enabled, then you need an additional argument
+of the correct code in order for the command to happen.
+
+If the exec-on-exit feature is enabled, daemonproxy will exec() instead
+of exit().  If daemonproxy is process 1, terminate will fail unless
+exec-on-exit is enabled.
+
+=cut
+*/
+bool ctl_cmd_terminate(controller_t *ctl) {
+	int exitcode;
+	int64_t x;
+
+	// First argument is exit value
+	if (!ctl_get_arg_int(ctl, &x))
+		return false;
+	exitcode= (int) x;
+
+	// Next argument is optional guard code
+	if (main_terminate_guard) {
+		if (!ctl_get_arg_int(ctl, &x)) {
+			ctl->command_error= "terminate guard code required";
+			return false;
+		}
+		if (main_terminate_guard != x) {
+			ctl->command_error= "incorrect terminate guard code";
+			return false;
+		}
+	}
+	
+	// Can't exit if running as pid 1
+	if (main_terminate_guard && !main_exec_on_exit) {
+		ctl->command_error= "cannot exit, and exec-on-exit is not configured";
+		return false;
+	}
+	
+	main_terminate= true;
+	main_exitcode= exitcode;
+	wake->next= wake->now;
+	return true;
+}
+
+/*
+=item terminate.exec_args [ARG_1] .. [ARG_N]
+
+Set argument list for daemonproxy's exec-on-exit feature.  This feature causes
+daemonproxy to exec(ARGS) instead of exiting in any trappable scenario.  An
+empty argument list disables the feature.
+
+=cut
+*/
+bool ctl_cmd_terminate_exec_args(controller_t *ctl) {
+	if (!set_exec_on_exit(ctl->command)) {
+		ctl->command_error= "exec arguments exceed buffer size (255)";
+		return false;
+	}
+	return true;
+}
+
+/*
+=item terminate.guard [+|-] CODE
+
+Enable or disable the terminate-guard feature.  '+' enables the feature and
+sets the guard code to CODE.  '-' disables the feature only if CODE matches
+the previously set value.
+
+=cut
+*/
+bool ctl_cmd_terminate_guard(controller_t *ctl) {
+	strseg_t arg;
+	int64_t code;
+	
+	if (!ctl_get_arg(ctl, &arg) || arg.len != 1
+		|| (arg.data[0] != '-' && arg.data[0] != '+'))
+	{
+		ctl->command_error= "expected + or -";
+		return false;
+	}
+
+	if (!ctl_get_arg_int(ctl, &code))
+		return false;
+	
+	if (!code) {
+		ctl->command_error= "code cannot be 0";
+		return false;
+	}
+	
+	if (arg.data[0] == '+') {
+		if (main_terminate_guard) {
+			ctl->command_error= "terminate guard code is already set";
+			return false;
+		}
+		main_terminate_guard= code;
+		return true;
+	}
+	else {
+		if (!main_terminate_guard) {
+			ctl->command_error= "terminate guard was not set";
+			return false;
+		}
+		if (code != main_terminate_guard) {
+			ctl->command_error= "incorrect guard code";
+			return false;
+		}
+		main_terminate_guard= 0;
+		return true;
+	}
+
+	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
+	return true;
+}
+
+/*-----------------------------------------------------------------------------
+ * end of commands
+
+=back
+
+=head2 EVENTS
+
+=over 4
+
+=item signal NAME TS COUNT
+
+NAME is the C constant like SIGINT.  TS is a timestamp from CLOCK_MONOTONIC
+when the signal was last received.  COUNT is the number of times it was
+received since last cleared (however you can't actually know the exact count
+due to the nature of signals)
+
+=cut
+*/
+bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
+	const char *signame= sig_name_by_num(sig_num);
+	return ctl_write(NULL, "signal	SIG%s	%d	%d\n", signame? signame : "-?", (int)(sig_ts>>32), count);
+}
+
+/*
+=item service.state NAME STATE TS PID EXITREASON EXITVALUE UPTIME DOWNTIME
+
+The state of service has changed.  STATE is 'start', 'up', 'down', or 'deleted'.
+TS is a timestamp from CLOCK_MONOTONIC.  PID is the process ID if relevant,
+and '-' otherwise.  EXITREASON is '-', 'exit', or 'signal'.  EXITVALUE is an
+integer or signal name.  UPTIME and DOWNTIME are in seconds, and '-' if not
+relevant.
+
+=cut
+*/
+
+bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, int wstat, pid_t pid) {
+	const char *signame;
+	log_trace("ctl_notify_svc_state(%s, %lld, %lld, %d, %d)", name, up_ts, reap_ts, pid, wstat);
+	if (!up_ts)
+		return ctl_write(ctl, "service.state	%s	down	-	-	-	-	-	-\n", name);
+	else if ((up_ts - wake->now) >= 0 && !pid)
+		return ctl_write(ctl, "service.state	%s	start	%d	-	-	-	-	-\n",
+			name, (int)(up_ts>>32));
+	else if (!reap_ts)
+		return ctl_write(ctl, "service.state	%s	up	%d	%d	-	-	%d	-\n",
+			name, (int)(up_ts>>32), (int) pid, (int)((wake->now - up_ts)>>32));
+	else if (WIFEXITED(wstat))
+		return ctl_write(ctl, "service.state	%s	down	%d	%d	exit	%d	%d	%d\n",
+			name, (int)(reap_ts>>32), (int) pid, WEXITSTATUS(wstat),
+			(int)((reap_ts - up_ts)>>32), (int)((wake->now - reap_ts)>>32));
+	else {
+		signame= sig_name_by_num(WTERMSIG(wstat));
+		return ctl_write(ctl, "service.state	%s	down	%d	%d signal	SIG%s	%d	%d\n",
+			name, (int)(reap_ts>>32), (int) pid, signame? signame : "-?",
+			(int)((reap_ts - up_ts)>>32), (int)((wake->now - reap_ts)>>32));
+	}
+}
+
+/*
+=item service.args NAME ARG_1 ARG_2 ... ARG_N
+
+Arguments for the service have changed
+
+=cut
+*/
+bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields) {
+	return ctl_write(ctl, "service.args	%s	%s\n", name, tsv_fields);
+}
+
+/*
+=item service.fds NAME HANDLE_1 HANDLE_2 ... HANDLE_N
+
+File handles for the service have changed
+
+=cut
+*/
+bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields) {
+	return ctl_write(ctl, "service.fds	%s	%s\n", name, tsv_fields);
+}
+
+/*
+=item fd.state NAME TYPE FLAGS DESCRIPTION
+
+TYPE is 'file', 'pipe', 'special', or 'deleted'.  Deleted means the file
+handle has just been removed and no longer exists.  Type 'file' has FLAGS
+that match the flags used to open it (though possibly in a different order).
+Type 'pipe' has flags of 'to' or 'from'.  DESCRIPTION is the filename
+(possibly truncated), the pipe-peer handle name, or a free-form string
+describing the handle.
+
+=cut
+*/
+bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
+	fd_t *peer;
+	const char *name= fd_get_name(fd);
+	fd_flags_t flags= fd_get_flags(fd);
+	
+	if (flags.pipe) {
+		peer= fd_get_pipe_peer(fd);
+		return ctl_write(ctl, "fd.state	%s	pipe	%s	%s\n",
+			name, flags.write? "to":"from", peer? fd_get_name(peer) : "?");
+	}
+	else {
+		return ctl_write(ctl, "fd.state	%s	%s	%s%s%s%s%s%s	%s\n",
+			name, flags.special? "special" : "file",
+			(flags.write? (flags.read? "read,write":"write"):"read"),
+			(flags.append? ",append":""), (flags.create? ",create":""),
+			(flags.trunc? ",trunc":""), (flags.nonblock? ",nonblock":""),
+			(flags.mkdir? ",mkdir":""), fd_get_file_path(fd));
+	}
+}
+
+/*----------------------------------------------------------------------------
+ * End of events
+
+=back
+
+=cut
+*/
 
 // Read more controller input from recv_fd
 bool ctl_read_more(controller_t *ctl) {
@@ -1075,60 +1306,6 @@ static bool ctl_out_buf_ready(controller_t *ctl) {
 	return ctl->send_buf_pos <= (CONTROLLER_SEND_BUF_SIZE-CONTROLLER_LARGEST_WRITE)
 		|| ctl->send_overflow // if overflow, just allow writes to be discarded
 		|| ctl_flush_outbuf(ctl);
-}
-
-bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
-	const char *signame= sig_name_by_num(sig_num);
-	return ctl_write(NULL, "signal	SIG%s	%d	%d\n", signame? signame : "-?", count, (int)(sig_ts>>32));
-}
-
-bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, int wstat, pid_t pid) {
-	const char *signame;
-	log_trace("ctl_notify_svc_state(%s, %lld, %lld, %d, %d)", name, up_ts, reap_ts, pid, wstat);
-	if (!up_ts)
-		return ctl_write(ctl, "service.state	%s	down\n", name);
-	else if ((up_ts - wake->now) >= 0 && !pid)
-		return ctl_write(ctl, "service.state	%s	starting	%d\n", name, up_ts>>32);
-	else if (!reap_ts)
-		return ctl_write(ctl, "service.state	%s	up	%d	pid	%d\n", name, up_ts>>32, (int) pid);
-	else if (WIFEXITED(wstat))
-		return ctl_write(ctl, "service.state	%s	down	%d	exit	%d	uptime	%d	pid	%d\n",
-			name, (int)(reap_ts>>32), WEXITSTATUS(wstat), (int)((reap_ts-up_ts)>>32), (int) pid);
-	else {
-		signame= sig_name_by_num(WTERMSIG(wstat));
-		return ctl_write(ctl, "service.state	%s	down	%d	signal	%d=%s%s	uptime	%d	pid	%d\n",
-			name, (int)(reap_ts>>32), WTERMSIG(wstat), signame? "SIG":"???", signame? signame : "",
-			(int)((reap_ts-up_ts)>>32), (int) pid);
-	}
-}
-
-bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields) {
-	return ctl_write(ctl, "service.args	%s	%s\n", name, tsv_fields);
-}
-
-bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields) {
-	return ctl_write(ctl, "service.fds	%s	%s\n", name, tsv_fields);
-}
-
-bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
-	fd_t *peer;
-	const char *name= fd_get_name(fd);
-	fd_flags_t flags= fd_get_flags(fd);
-	
-	if (flags.pipe) {
-		peer= fd_get_pipe_peer(fd);
-		return ctl_write(ctl, "fd.state	%s	pipe_%s	%s\n",
-			name, flags.write? "to":"from", peer? fd_get_name(peer) : "?");
-	}
-	else if (flags.special)
-		return ctl_write(ctl, "fd.state	%s	special	%s\n", name, fd_get_file_path(fd));
-	else {
-		return ctl_write(ctl, "fd.state	%s	file	%s%s%s%s%s%s	%s\n", name,
-			(flags.write? (flags.read? "read,write":"write"):"read"),
-			(flags.append? ",append":""), (flags.create? ",create":""),
-			(flags.trunc? ",trunc":""), (flags.nonblock? ",nonblock":""),
-			(flags.mkdir? ",mkdir":""), fd_get_file_path(fd));
-	}
 }
 
 /** Extract the next argument as an integer
