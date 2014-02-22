@@ -11,7 +11,7 @@ use Carp;
 
 BEGIN {
 	# make sure cleanup code runs
-	$SIG{INT}= $SIG{TERM}= $SIG{QUIT}= $SIG{HUP}= sub { print STDERR "# killed\n"; exit(2) };
+	$SIG{INT}= $SIG{TERM}= $SIG{QUIT}= $SIG{HUP}= sub { print STDERR "# test script killed\n"; exit(2) };
 }
 
 sub binary_path {
@@ -20,6 +20,14 @@ sub binary_path {
 		my $path= ($ENV{builddir} || 'build').'/daemonproxy';
 		-f $path or Test::More::BAIL_OUT("Cannot stat \"$path\".  Set env 'builddir' to correct directory");
 		$path;
+	};
+}
+
+sub temp_path {
+	my $self= shift;
+	$self->{temp_path} ||= do {
+		my $path= ($ENV{tempdir} || 'build');
+		-d $path or Test::More::BAIL_OUT("Cannot write tempdir \"$path\".  Set env 'tempdir' to correct directory");
 	};
 }
 

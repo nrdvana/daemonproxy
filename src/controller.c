@@ -1048,10 +1048,6 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 	}
 }
 
-bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields) {
-	return ctl_write(ctl, "service.meta	%s	%s\n", name, tsv_fields);
-}
-
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields) {
 	return ctl_write(ctl, "service.args	%s	%s\n", name, tsv_fields);
 }
@@ -1073,7 +1069,7 @@ bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
 	else if (flags.special)
 		return ctl_write(ctl, "fd.state	%s	special	%s\n", name, fd_get_file_path(fd));
 	else {
-		return ctl_write(ctl, "fd.state	%s	file	%s%s%s%s%s%s	%s",
+		return ctl_write(ctl, "fd.state	%s	file	%s%s%s%s%s%s	%s\n", name,
 			(flags.write? (flags.read? "read,write":"write"):"read"),
 			(flags.append? ",append":""), (flags.create? ",create":""),
 			(flags.trunc? ",trunc":""), (flags.nonblock? ",nonblock":""),
