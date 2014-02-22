@@ -54,7 +54,7 @@ void fatal_sig_handler(int sig) {
 	fatal(EXIT_BROKEN_PROGRAM_STATE, "Received signal %s%s (%d)", signame? "SIG":"???", signame? signame : "", sig);
 	// No fallback available.  Probably can't actually recover from fatal signal...
 	// TODO: consider some sort of longjmp + state recovery
-	exit(EXIT_BROKEN_PROGRAM_STATE);
+	_exit(EXIT_BROKEN_PROGRAM_STATE);
 }
 
 struct signal_spec_s {
@@ -66,6 +66,7 @@ struct signal_spec_s {
 	{ SIGTERM, sig_handler },
 	{ SIGUSR1, sig_handler },
 	{ SIGUSR2, sig_handler },
+	{ SIGQUIT, sig_handler },
 	{ SIGCHLD, sig_handler },
 	{ SIGPIPE, SIG_IGN },
 	{ SIGABRT, fatal_sig_handler },

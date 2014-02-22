@@ -50,18 +50,19 @@ STATE(ctl_state_dump_signals);
 
 #define COMMAND(name, ...) static bool name(controller_t *ctl)
 COMMAND(ctl_cmd_echo, "echo");
-COMMAND(ctl_cmd_statedump,         "statedump");
-COMMAND(ctl_cmd_svc_args,          "service.args");
-COMMAND(ctl_cmd_svc_fds,           "service.fds");
-COMMAND(ctl_cmd_svc_start,         "service.start");
-COMMAND(ctl_cmd_svc_signal,        "service.signal");
-COMMAND(ctl_cmd_fd_pipe,           "fd.pipe");
-COMMAND(ctl_cmd_fd_open,           "fd.open");
-COMMAND(ctl_cmd_exit,              "exit");
-COMMAND(ctl_cmd_terminate,         "terminate");
-COMMAND(ctl_cmd_log_filter,        "log.filter");
-COMMAND(ctl_cmd_event_pipe_timeout,"conn.event_timeout");
-COMMAND(ctl_cmd_exec_on_exit,      "exec_on_exit");
+COMMAND(ctl_cmd_statedump,           "statedump");
+COMMAND(ctl_cmd_svc_args,            "service.args");
+COMMAND(ctl_cmd_svc_fds,             "service.fds");
+COMMAND(ctl_cmd_svc_start,           "service.start");
+COMMAND(ctl_cmd_svc_signal,          "service.signal");
+COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
+COMMAND(ctl_cmd_fd_open,             "fd.open");
+COMMAND(ctl_cmd_exit,                "exit");
+COMMAND(ctl_cmd_log_filter,          "log.filter");
+COMMAND(ctl_cmd_event_pipe_timeout,  "conn.event_timeout");
+COMMAND(ctl_cmd_terminate_exec_args, "terminate.exec_args");
+COMMAND(ctl_cmd_terminate_guard,     "terminate.guard");
+COMMAND(ctl_cmd_terminate,           "terminate");
 
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
@@ -384,7 +385,7 @@ bool ctl_state_run_command(controller_t *ctl) {
 				ctl_notify_error(ctl, "Unknown command: %.*s", ctl->command_name.len, ctl->command_name.data);
 			// dispatch it (returns false if it encounters an error, and sets ctl->command_error)
 			else if (!cmd->fn(ctl))
-				ctl_notify_error(ctl, "%s, for command \"%.*s%s\"", ctl->command_error, ctl->recv_buf, ctl->line_len > 30? 30 : ctl->line_len, ctl->line_len > 30? "...":"");
+				ctl_notify_error(ctl, "%s, for command \"%.*s%s\"", ctl->command_error, ctl->line_len > 30? 30 : ctl->line_len, ctl->recv_buf, ctl->line_len > 30? "...":"");
 		}
 	}
 	return true;
@@ -491,52 +492,6 @@ bool ctl_cmd_exit(controller_t *ctl) {
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
 	ctl->recv_fd= -1;
 	ctl->state_fn= ctl_state_close;
-	return true;
-}
-
-/** Request to terminate immediately
- *
- * "terminate [EXIT_CODE] [FAILSAFE_GUARD_CODE]"
- */
-bool ctl_cmd_terminate(controller_t *ctl) {
-	int exitcode= EXIT_TERMINATE;
-	int64_t x;
-	int guard_code;
-	bool need_guard_code= main_failsafe;
-	
-	// First argument is optional exit value
-	if (ctl_peek_arg(ctl, NULL)) {
-		if (!ctl_get_arg_int(ctl, &x))
-			return false;
-		exitcode= (int) x;
-		// Next argument is optional guard code
-		if (ctl_peek_arg(ctl, NULL)) {
-			if (!ctl_get_arg_int(ctl, &x))
-				return false;
-			guard_code= (int) x;
-			if (guard_code != main_failsafe_guard_code) {
-				ctl->command_error= "incorrect failsafe guard code";
-				return false;
-			}
-			need_guard_code= false;
-		}
-	}
-	
-	// Guard code is needed for failsafe mode
-	if (need_guard_code) {
-		ctl->command_error= "failsafe guard code required";
-		return false;
-	}
-	
-	// Can't exit if running as pid 1
-	if (main_failsafe && !main_exec_on_exit) {
-		ctl->command_error= "cannot exit, and exec-on-exit is not configured";
-		return false;
-	}
-	
-	main_terminate= true;
-	main_exitcode= exitcode;
-	wake->next= wake->now;
 	return true;
 }
 
@@ -747,11 +702,101 @@ bool ctl_cmd_svc_signal(controller_t *ctl) {
 	return true;
 }
 
-bool ctl_cmd_exec_on_exit(controller_t *ctl) {
+/** Request to terminate immediately
+ *
+ * "terminate [EXIT_CODE] [FAILSAFE_GUARD_CODE]"
+ */
+bool ctl_cmd_terminate(controller_t *ctl) {
+	int exitcode= EXIT_TERMINATE;
+	int64_t x;
+	int guard_code;
+	bool need_guard_code= (bool) main_terminate_guard;
+
+	// First argument is optional exit value
+	if (ctl_peek_arg(ctl, NULL)) {
+		if (!ctl_get_arg_int(ctl, &x))
+			return false;
+		exitcode= (int) x;
+		// Next argument is optional guard code
+		if (ctl_peek_arg(ctl, NULL)) {
+			if (!ctl_get_arg_int(ctl, &x))
+				return false;
+			guard_code= (int) x;
+			if (guard_code != main_terminate_guard) {
+				ctl->command_error= "incorrect terminate guard code";
+				return false;
+			}
+			need_guard_code= false;
+		}
+	}
+	
+	// Guard code is needed for failsafe mode
+	if (need_guard_code) {
+		ctl->command_error= "terminate guard code required";
+		return false;
+	}
+	
+	// Can't exit if running as pid 1
+	if (main_terminate_guard && !main_exec_on_exit) {
+		ctl->command_error= "cannot exit, and exec-on-exit is not configured";
+		return false;
+	}
+	
+	main_terminate= true;
+	main_exitcode= exitcode;
+	wake->next= wake->now;
+	return true;
+}
+
+bool ctl_cmd_terminate_exec_args(controller_t *ctl) {
 	if (!set_exec_on_exit(ctl->command)) {
 		ctl->command_error= "exec arguments exceed buffer size (255)";
 		return false;
 	}
+	return true;
+}
+
+bool ctl_cmd_terminate_guard(controller_t *ctl) {
+	strseg_t arg;
+	int64_t code;
+	
+	if (!ctl_get_arg(ctl, &arg) || arg.len != 1
+		|| (arg.data[0] != '-' && arg.data[0] != '+'))
+	{
+		ctl->command_error= "expected + or -";
+		return false;
+	}
+
+	if (!ctl_get_arg_int(ctl, &code))
+		return false;
+	
+	if (!code) {
+		ctl->command_error= "code cannot be 0";
+		return false;
+	}
+	
+	if (arg.data[0] == '+') {
+		if (main_terminate_guard) {
+			ctl->command_error= "terminate guard code is already set";
+			return false;
+		}
+		main_terminate_guard= code;
+		return true;
+	}
+	else {
+		if (!main_terminate_guard) {
+			ctl->command_error= "terminate guard was not set";
+			return false;
+		}
+		if (code != main_terminate_guard) {
+			ctl->command_error= "incorrect guard code";
+			return false;
+		}
+		main_terminate_guard= 0;
+		return true;
+	}
+
+	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
 	return true;
 }
 

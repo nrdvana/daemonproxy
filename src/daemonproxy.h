@@ -57,11 +57,10 @@ bool log_level_by_name(strseg_t name, int *lev);
 #define log_trace(args...) do {} while (0)
 #endif
 
-extern bool main_terminate;
-extern int  main_exitcode;
-extern bool main_failsafe;
-extern int  main_failsafe_guard_code;
-extern bool main_exec_on_exit;
+extern bool    main_terminate;
+extern int     main_exitcode;
+extern int64_t main_terminate_guard;
+extern bool    main_exec_on_exit;
 extern wake_t *wake;
 
 bool set_exec_on_exit(strseg_t args);

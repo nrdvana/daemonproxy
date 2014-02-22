@@ -1,18 +1,17 @@
 #include "config.h"
 #include "daemonproxy.h"
 
-bool main_terminate= false;
-int  main_exitcode= 0;
+bool     main_terminate= false;
+int      main_exitcode= 0;
+int64_t  main_terminate_guard= 0;
 const char *main_cfgfile= NULL;
-bool main_exec_on_exit= false;
-char main_exec_on_exit_buf[256];
+bool     main_exec_on_exit= false;
+char     main_exec_on_exit_buf[256];
 strseg_t main_exec_on_exit_args;
-bool main_use_stdin= false;
-bool main_mlockall= false;
-int  main_fd_pool_count= -1;
-int  main_fd_pool_size_each= -1;
-bool main_failsafe= false;
-int  main_failsafe_guard_code= 1;
+bool     main_use_stdin= false;
+bool     main_mlockall= false;
+int      main_fd_pool_count= -1;
+int      main_fd_pool_size_each= -1;
 
 wake_t main_wake;
 
@@ -40,7 +39,7 @@ int main(int argc, char** argv) {
 	// Special defaults when running as init
 	if (getpid() == 1) {
 		main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
-		main_failsafe= true;
+		main_terminate_guard= 1;
 	}
 	
 	log_init();
@@ -238,7 +237,15 @@ void set_opt_stdin(char **argv)       { main_use_stdin= true; }
 
 void set_opt_mlockall(char **argv)    { main_mlockall= true;  }
 
-void set_opt_failsafe(char **argv)    { main_failsafe= true;  }
+void set_opt_failsafe(char **argv) {
+	char *end= NULL;
+	long n= strtol(argv[0], &end, 10);
+	
+	if (*end)
+		fatal(EXIT_BAD_OPTIONS, "Terminate guard must be an integer");
+
+	main_terminate_guard= n;
+}
 
 void set_opt_configfile(char** argv ) {
 	struct stat st;
@@ -287,16 +294,16 @@ const struct option_table_entry_s {
 	const char *help;
 	const char *argname;
 } option_table[]= {
-	{  0 , "version",      0, show_version,         "display version info", "" },
-	{ 'h', "help",         0, show_help,            "display quick usage synopsys", "" },
-	{ 'v', "verbose",      0, set_opt_verbose,      "enable next level of logging (debug, trace)", "" },
-	{ 'q', "quiet",        0, set_opt_quiet,        "hide next level of logging (info, warn, error)", "" },
-	{ 'c', "config-file",  1, set_opt_configfile,   "read commands from file at startup", "PATH" },
-	{  0 , "stdin",        0, set_opt_stdin,        "read commands from stdin, as a client", "" },
-	{  0 , "prealloc-fd",  1, set_opt_fd_prealloc,  "Preallocate static pool of N named handles [of M bytes each]", "N[xM]" },
-	{ 'M', "mlockall",     0, set_opt_mlockall,     "call mlockall after allocating memory", "" },
-	{ 'F', "failsafe",     0, set_opt_failsafe,     "try not to exit, even on fatal errors", "" },
-	{ 'E', "exec-on-exit", 1, set_opt_exec_on_exit, "if program exits for any reason, call exec(PROG) instead", "PROG" },
+	{  0 , "version",         0, show_version,         "display version info", "" },
+	{ 'h', "help",            0, show_help,            "display quick usage synopsys", "" },
+	{ 'v', "verbose",         0, set_opt_verbose,      "enable next level of logging (debug, trace)", "" },
+	{ 'q', "quiet",           0, set_opt_quiet,        "hide next level of logging (info, warn, error)", "" },
+	{ 'c', "config-file",     1, set_opt_configfile,   "read commands from file at startup", "PATH" },
+	{  0 , "stdin",           0, set_opt_stdin,        "read commands from stdin, as a client", "" },
+	{  0 , "prealloc-fd",     1, set_opt_fd_prealloc,  "Preallocate static pool of N named handles [of M bytes each]", "N[xM]" },
+	{ 'M', "mlockall",        0, set_opt_mlockall,     "call mlockall after allocating memory", "" },
+	{  0 , "terminate-guard", 1, set_opt_failsafe,     "try not to exit, even on fatal errors", "CODE" },
+	{ 'E', "terminate-exec",  1, set_opt_exec_on_exit, "if program exits for any reason, call exec(PROG) instead", "PROG" },
 	{  0 , NULL, 0, NULL, NULL }
 };
 
@@ -395,7 +402,6 @@ bool set_exec_on_exit(strseg_t args) {
 		return false;
 
 	memcpy(main_exec_on_exit_buf, args.data, args.len);
-	main_exec_on_exit_buf;
 	main_exec_on_exit_buf[args.len]= '\0';
 	
 	// convert tab-delimited arguments to NUL-delimited
@@ -459,7 +465,7 @@ void fatal(int exitcode, const char *msg, ...) {
 	}
 	
 	if (buffer[0])
-		log_write(LOG_LEVEL_FATAL, "%s%s", main_failsafe? "(attempting to continue) ":"", buffer);
-	if (!main_failsafe)
+		log_write(LOG_LEVEL_FATAL, "%s%s", main_terminate_guard? "(attempting to continue) ":"", buffer);
+	if (!main_terminate_guard)
 		exit(exitcode);
 }
