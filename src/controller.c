@@ -57,6 +57,7 @@ COMMAND(ctl_cmd_svc_start,           "service.start");
 COMMAND(ctl_cmd_svc_signal,          "service.signal");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
+COMMAND(ctl_cmd_fd_delete,           "fd.delete");
 COMMAND(ctl_cmd_exit,                "exit");
 COMMAND(ctl_cmd_log_filter,          "log.filter");
 COMMAND(ctl_cmd_event_pipe_timeout,  "conn.event_timeout");
@@ -730,7 +731,16 @@ Close (and remove) the named handle.
 
 =cut
 */
+bool ctl_cmd_fd_delete(controller_t *ctl) {
+	fd_t *fd;
 
+	if (!ctl_get_arg_fd(ctl, true, true, NULL, &fd))
+		return false;
+
+	ctl_write(NULL, "fd.state	%s	deleted\n", fd_get_name(fd));
+	fd_delete(fd);
+	return true;
+}
 
 /*
 =item service.args NAME ARG_1 ARG_2 ... ARG_N
@@ -1166,6 +1176,11 @@ bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
 
 /*----------------------------------------------------------------------------
  * End of events
+
+=item error MESSAGE
+
+Error events are reported free-form, with "error" as the first tab delimited
+token, but MESSAGE being arbitrary ascii text.
 
 =back
 

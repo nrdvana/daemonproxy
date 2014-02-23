@@ -9,12 +9,7 @@ use Time::HiRes 'sleep';
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '-v');
-
-my $fname= $dp->temp_path . '200-testfile.txt';
-
-unlink( $fname );
-ok( ! -f $fname, 'test file unlinked' );
+$dp->run('--stdin');
 
 $dp->send("fd.pipe	temp.r	temp.w");
 $dp->recv_ok( qr/^fd.state	temp.r	pipe	from	temp.w/m, 'pipe read end' );

@@ -112,7 +112,7 @@ bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fi
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd);
-#define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error: " msg "\n", ##__VA_ARGS__))
+#define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error\t" msg "\n", ##__VA_ARGS__))
 
 // Handle state transitions based on communication with the controller
 void ctl_run(wake_t *wake);

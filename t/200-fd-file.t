@@ -17,12 +17,12 @@ unlink( $fname );
 ok( ! -f $fname, 'test file unlinked' );
 
 $dp->send("fd.open	temp.w	write,create	$fname");
-$dp->recv_ok( qr/^fd.state.*write.*$fname/m, 'create file command' );
+$dp->recv_ok( qr/^fd.state	temp.w	file	.*write.*	$fname$/m, 'create file command' );
 
 ok( -f $fname, 'file created' );
 
 $dp->send("fd.open	temp.r	read	$fname");
-$dp->recv_ok( qr/^fd.state.*read.*$fname/m, 'open created file' );
+$dp->recv_ok( qr/^fd.state	temp.r	file	.*read.*	$fname$/m, 'open created file' );
 
 my $script= '$|=1; print "test $$\n"; my $x=<STDIN>; exit ($x =~ /test $$/? 0 : 1)';
 $dp->send("service.args	test	perl	-e	$script" );
