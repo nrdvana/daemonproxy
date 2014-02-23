@@ -113,6 +113,7 @@ sub _read_more {
 	for (@$inputs) {
 		my ($fd_ref, $buf_ref)= @$_;
 		next unless defined $$fd_ref and $ready{$$fd_ref};
+		$result= 1;
 		my $got= sysread($$fd_ref, $$buf_ref, 1024, length($$buf_ref));
 		if (!$got) {
 			close($$fd_ref);
@@ -121,7 +122,6 @@ sub _read_more {
 		}
 		Test::More::note("recv: "._quote_str($_))
 			for (substr($$buf_ref, -$got) =~ /^.*$/mg);
-		$result= 1;
 	}
 	return $result;
 }
