@@ -30,7 +30,7 @@ $dp->send("service.fds	test	temp.r	temp.w	stderr");
 $dp->send("service.start	test");
 $dp->recv_ok( qr/^service.state	test	.*exit	0/m, 'test script able to write and read' );
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

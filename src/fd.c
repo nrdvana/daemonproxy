@@ -35,6 +35,7 @@ int fd_obj_pool_size_each= 0;
 
 // Set minimum FD size of struct + fd name + 31 chars for partial file name
 const int min_fd_obj_size= sizeof(fd_t) + NAME_LIMIT + 32;
+const int max_fd_obj_size= ((sizeof(fd_t) + NAME_LIMIT + PATH_MAX)|0xF)+1;
 
 bool fd_list_resize(int new_limit);
 void add_fd_by_name(fd_t *fd);

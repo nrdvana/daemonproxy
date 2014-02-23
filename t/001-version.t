@@ -11,6 +11,6 @@ $dp->run('--version');
 $dp->response_like(qr/daemonproxy.*version/i, 'version message');
 $dp->response_like(qr/build timestamp:/i, 'build info');
 $dp->response_like(qr/git HEAD:/i, 'revision control info');
-$dp->exit_is(1);
+$dp->exit_is( 1 );
 
 done_testing;

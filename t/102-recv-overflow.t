@@ -31,7 +31,7 @@ $dp->discard_response;
 $dp->send("echo\t-marker-");
 $dp->response_like( qr/^-marker-/, 'can still send/receive' );
 
-$dp->send("terminate");
-$dp->exit_is(6);
+$dp->send("terminate	0");
+$dp->exit_is(0);
 
 done_testing;

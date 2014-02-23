@@ -8,9 +8,9 @@ use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
-$dp->send("terminate");
+$dp->send("terminate	0");
 $dp->discard_response;
-$dp->exit_is(6, 'exit with EXIT_TERMINATE');
+$dp->exit_is(0, 'exit with 0');
 
 $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
@@ -25,7 +25,7 @@ $dp->discard_response;
 $dp->exit_is(255);
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--terminate-guard', 54321);
+$dp->run('--stdin', '--exit-guard', 54321);
 $dp->send("terminate	0");
 $dp->recv_ok( qr/^error.*guard code/m, 'terminate fails without code' );
 $dp->send("terminate	0	12345");

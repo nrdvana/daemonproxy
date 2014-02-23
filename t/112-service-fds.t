@@ -23,7 +23,7 @@ $dp->response_like( qr!^service.fds\tfoo\tnull\tstdout\tstdout$!, 'overwrite fds
 $dp->send("service.fds	foo");
 $dp->response_like( qr!^service.fds\tfoo\t$!, 'unset fds' );
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

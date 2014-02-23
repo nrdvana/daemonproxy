@@ -8,9 +8,9 @@ use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
 $dp->run('--help');
-$dp->response_like( qr/usage/i, 'usage message' );
-$dp->response_like( qr/--stdin/, 'various options' );
-$dp->response_like( qr/--exec-on-exit/, 'various options' );
-$dp->exit_is(1);
+$dp->recv_ok( qr/options/i, 'usage message' );
+$dp->recv_ok( qr/--stdin/, 'various options' );
+$dp->recv_ok( qr/--exit-exec/, 'various options' );
+$dp->exit_is( 1 );
 
 done_testing;

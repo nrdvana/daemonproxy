@@ -30,6 +30,7 @@ typedef struct strseg_s {
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
 int  strseg_cmp(strseg_t a, strseg_t b);
 bool strseg_atoi(strseg_t *str, int64_t *int_out);
+bool strseg_parse_size(strseg_t *string, int64_t *val);
 
 #define LOG_LEVEL_FATAL 3
 #define LOG_LEVEL_ERROR 2
@@ -57,10 +58,16 @@ bool log_level_by_name(strseg_t name, int *lev);
 #define log_trace(args...) do {} while (0)
 #endif
 
+void parse_opts(char **argv);
+extern const char *main_cfgfile;
+extern bool    main_use_stdin;
 extern bool    main_terminate;
 extern int     main_exitcode;
 extern int64_t main_terminate_guard;
 extern bool    main_exec_on_exit;
+extern int     main_fd_pool_count;
+extern int     main_fd_pool_size_each;
+extern bool    main_mlockall;
 extern wake_t *wake;
 
 bool set_exec_on_exit(strseg_t args);
@@ -111,7 +118,7 @@ void ctl_flush(wake_t *wake);
 //----------------------------------------------------------------------------
 // service.c interface
 
-extern const int min_service_obj_size;
+extern const int min_service_obj_size, max_service_obj_size;
 
 // Initialize the service pool
 void svc_init(int service_count, int size_each);
@@ -173,7 +180,8 @@ typedef struct fd_flags_s {
 		special: 1,
 		is_const: 1;
 } fd_flags_t;
-extern const int min_fd_obj_size;
+
+extern const int min_fd_obj_size, max_fd_obj_size;
 
 // Initialize the fd pool from a static chunk of memory
 void fd_init();

@@ -21,7 +21,7 @@ $dp->discard_response;
 $dp->send("service.start	controller");
 $dp->recv_ok( qr/^service.state	controller.*down.*exit	0/m, 'controller echo test' );
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

@@ -49,3 +49,45 @@ bool strseg_atoi(strseg_t *string, int64_t *val) {
 	if (val) *val= accum * sign;
 	return true;
 }
+
+/** Parse a positive integer with size suffix.
+ *
+ */
+bool strseg_parse_size(strseg_t *string, int64_t *val) {
+	long mul= 1, factor= 1024;
+	int suffix_len;
+	if (!strseg_atoi(string, val))
+		return false;
+	if (string->len < 1)
+		return true; // return plain constant
+	
+	suffix_len= 1;
+	if (string->len >= 3 && string->data[1] == 'i' && string->data[2] == 'B') {
+		suffix_len= 3;
+	}
+	else if (string->len >= 2 && string->data[1] == 'B') {
+		suffix_len= 2;
+		factor= 1000; // SI units
+	}
+	
+	switch (string->data[0]) {
+	case 't': case 'T': mul= LONG_MAX; break;
+	case 'g': case 'G': mul*= factor;
+	case 'm': case 'M': mul*= factor;
+	case 'k': case 'K': mul*= factor;
+	case 'b': case 'B': break;
+	default: return true;
+	}
+
+	// consume suffix
+	string->data += suffix_len;
+	string->len -= suffix_len;
+	
+	// make sure multiplied value fits in int64
+	if (*val < 0 || *val * mul / mul != *val) {
+		*val= (*val < 0)? -1 : 1;
+		return false;
+	}
+	*val *= mul;
+	return true;
+}

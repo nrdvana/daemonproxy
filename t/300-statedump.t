@@ -26,7 +26,7 @@ $dp->recv_ok( qr/^service.state	foo/m, 'service foo' );
 $dp->recv_ok( qr/^signal	SIGHUP/m, 'signal HUP' );
 $dp->recv_ok( qr/^complete/m, 'statedump complete' );
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

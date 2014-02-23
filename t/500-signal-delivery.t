@@ -26,7 +26,7 @@ $dp->recv_ok( qr/^signal	SIGUSR1/m );
 kill SIGUSR2 => $dp->pid;
 $dp->recv_ok( qr/^signal	SIGUSR2/m );
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

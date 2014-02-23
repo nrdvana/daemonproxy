@@ -1079,7 +1079,7 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 			(int)((reap_ts - up_ts)>>32), (int)((wake->now - reap_ts)>>32));
 	else {
 		signame= sig_name_by_num(WTERMSIG(wstat));
-		return ctl_write(ctl, "service.state	%s	down	%d	%d signal	SIG%s	%d	%d\n",
+		return ctl_write(ctl, "service.state	%s	down	%d	%d	signal	SIG%s	%d	%d\n",
 			name, (int)(reap_ts>>32), (int) pid, signame? signame : "-?",
 			(int)((reap_ts - up_ts)>>32), (int)((wake->now - reap_ts)>>32));
 	}

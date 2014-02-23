@@ -24,7 +24,7 @@ for (qw: trace debug info warning error fatal :) {
 	$dp->recv_ok( qr/^log.filter	$_$/m, "by name: $_" );
 }
 
-$dp->send("terminate");
-$dp->exit_is(6);
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

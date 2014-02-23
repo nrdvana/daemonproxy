@@ -23,7 +23,7 @@ $dp->response_like( qr!^service.args\tfoo\t/bin/sleep\t1$!, 'overwrite args' );
 $dp->send("service.args	foo");
 $dp->response_like( qr!^service.args\tfoo\t$!, 'unset args' );
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;

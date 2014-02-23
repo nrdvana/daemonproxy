@@ -24,7 +24,7 @@ for my $sig (qw: SIGTERM SIGHUP SIGINT SIGKILL :) {
 	$dp->send("service.args	foo	perl	-e	kill $sig=>\$\$");
 	$dp->send("service.start	foo");
 	$dp->recv_ok( qr!^service.state\tfoo\tup!m, 'service started' );
-	$dp->recv_ok( qr!^service.state\tfoo\tdown\t.*\tsignal.*=${sig}\t!m, 'service signalled $sig' );
+	$dp->recv_ok( qr!^service.state\tfoo\tdown\t[^\t]+\t[^\t]+\tsignal\t$sig\t!m, "service signalled $sig" );
 }
 
 # Test uptime and timestamps
@@ -42,15 +42,15 @@ cmp_ok( $ts_up, '<=', $t_start, 'up ts valid' )
 
 $dp->recv_ok( qr!^(\d+)!m, 'service prints endtime' );
 my $ts_end= $dp->last_captures->[0];
-$dp->recv_ok( qr!^service.state\tfoo\tdown\t(\d+).*uptime\t(\d+)!m, 'service down' );
+$dp->recv_ok( qr!^service.state\tfoo\tdown\t(.*)$!m, 'service down' );
 my $t_finish= clock_gettime(CLOCK_MONOTONIC);
-my ($ts_down, $uptime)= @{$dp->last_captures}[0,1];
+my ($ts_down, $pid, $exreason, $exval, $uptime, $downtime)= split /\t/, $dp->last_captures->[0];
 cmp_ok( $ts_end, '<=', $ts_down, 'down ts valid' )
 	or diag "t_end: $ts_end, ts_down: $ts_down";
 cmp_ok( abs($uptime - ($t_finish - $t_start)), '<', 1, 'uptime near expected value' )
 	or diag "uptime: $uptime, t_end: $t_finish, t_start: $t_start";
 
-$dp->send("terminate");
-$dp->exit_is( 6 );
+$dp->send("terminate	0");
+$dp->exit_is( 0 );
 
 done_testing;
