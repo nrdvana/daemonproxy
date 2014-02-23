@@ -1,0 +1,13 @@
+=head1 BUGS
+
+Please report bugs in the issue tracker at L<http://github.com/silverdirk/daemonproxy>
+
+=head1 SEE ALSO
+
+The documentation distributed with the source code contains an informative
+README and a "api.ltw" which contains more detailed documentation for the
+command and event protocol.
+
+=head1 AUTHOR
+
+Michael Conrad <mike@nrdvana.net>

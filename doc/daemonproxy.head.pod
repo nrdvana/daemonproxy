@@ -1,0 +1,36 @@
+=head1 NAME
+
+daemonproxy - a proxy server for daemon/job management
+
+=head1 SYNOPSIS
+
+  # static configuration
+  daemonproxy [OPTIONS] -c CONFIG_FILE
+  
+  # for interactive experiments
+  daemonproxy --stdin
+
+=head1 DESCRIPTION
+
+Daemonproxy monitors other processes.  You might call it a job server,
+a daemon supervisor, or variety of similar names.  However, unlike
+most others in this category, daemonproxy doesn't restart services or
+have any conventions for how services should be run.  Instead, its
+goal is to deliver all supervision events to some external script,
+and execute actions on behalf of that script.  Thus, it is a "proxy"
+for process management.
+
+The purpose of the proxy design is to preserve file descriptors,
+process hierarchy, and monitoring state in the event that your control
+script crashes or locks up.  Daemonproxy acts as a watchdog for the
+control script and can restart it, and the control script can then
+re-sync with the state of daemonproxy.
+
+=head1 CONFIG FILE
+
+The daemonproxy config file is simply a list of commands that should
+be run on startup.  These commands are the same as the protocol used
+by the control script.  The only thing you really need in the config
+file are commands to create and start your controller script.
+
+=cut

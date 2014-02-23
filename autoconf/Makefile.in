@@ -1,6 +1,6 @@
 SHELL = /bin/sh
 
-all: daemonproxy
+all: daemonproxy daemonproxy.1
 
 .SUFFIXES:
 .SUFFIXES: .c .o
@@ -56,12 +56,22 @@ options.o: $(srcdir)/options_data.autogen.c
 $(srcdir)/options_data.autogen.c: $(srcdir)/options.c $(srcdir)/generate_options_data.pl
 	perl $(srcdir)/generate_options_data.pl < $< > $@.tmp && mv $@.tmp $@
 
-install:
-	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)
+daemonproxy.1: $(srcdir)/../doc/daemonproxy.head.pod $(srcdir)/options.c $(srcdir)/controller.c $(srcdir)/../doc/daemonproxy.tail.pod
+	cat $^ | pod2man --section=1 --center="System Administration tools" --name=DAEMONPROXY --release="daemonproxy "`git tag | tail -n 1 | sed -e s/\.[0-9]*$$//` > $@.tmp && mv $@.tmp $@
+
+daemonproxy.1.gz: daemonproxy.1
+	gzip < $< > $@.tmp && mv $@.tmp $@
+
+install: daemonproxy daemonproxy.1.gz
+	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)/
+	$(INSTALL) -m 644 daemonproxy.1.gz $(DESTDIR)$(mandir)/man1/
 
 clean:
-	rm *.autogen.c
-	rm *.o
-	rm *.d
+	rm -f *.autogen.c
+	rm -f *.o
+	rm -f *.d
+	rm -f daemonproxy
+	rm -f daemonproxy.1
+	rm -f *.tmp
 
 .PHONY: install test

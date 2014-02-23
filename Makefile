@@ -2,7 +2,7 @@ MAKE = make
 PROVE = prove
 
 all: build/Makefile
-	$(MAKE) -C build daemonproxy
+	$(MAKE) -C build all
 
 build/Makefile build/config.h: autoconf/configure autoconf/Makefile.in autoconf/config.h.in
 	mkdir -p build && cd build && ../autoconf/configure
