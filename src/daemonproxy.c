@@ -47,6 +47,9 @@ int main(int argc, char** argv) {
 	// parse arguments, overriding default values
 	parse_opts(argv+1);
 	
+	if (getpid() != 1 && !main_use_stdin && !main_cfgfile)
+		fatal(EXIT_BAD_OPTIONS, "require --stdin or -c, or run as PID 1");
+	
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
 	// Initialize file descriptor object pool and indexes

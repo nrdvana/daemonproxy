@@ -11,3 +11,5 @@ command and event protocol.
 =head1 AUTHOR
 
 Michael Conrad <mike@nrdvana.net>
+
+=cut
