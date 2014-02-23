@@ -1,6 +1,8 @@
 #include "config.h"
 #include "daemonproxy.h"
 
+bool opt_daemonize= false;
+
 static void parse_option(char shortname, char* longname, char ***argv);
 
 struct option_table_entry_s {
@@ -81,6 +83,24 @@ Use STDIN+STDOUT as a controller communication pipe.
 */
 void set_opt_stdin(char **argv) {
 	main_use_stdin= true;
+}
+
+/*
+=item -D
+
+=item --daemonize
+
+Fork into the background.  This prints the new PID on stdout, closes stdin,
+stdout, and stderr, and calls setsid() to become a session leader.
+
+This option cannot be used when running as PID 1, and is incompatible with
+--stdin, and suppresses all logging.  (until such time when I implement
+redirecting the error log)
+
+=cut
+*/
+void opt_set_daemonize(char **argv) {
+	opt_daemonize= true;
 }
 
 /*

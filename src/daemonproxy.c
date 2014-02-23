@@ -18,11 +18,9 @@ wake_t main_wake;
 wake_t *wake= &main_wake;
 
 // Parse options and apply to global vars; calls fatal() on failure.
-void parse_opts(char **argv);
-void parse_option(char shortname, char* longname, char ***argv);
-int parse_size(const char *str, char **endp);
 bool create_standard_handles(int dev_null);
 bool set_exec_on_exit(strseg_t arguments_tsv);
+static void daemonize();
 
 int main(int argc, char** argv) {
 	int wstat, f, ret;
@@ -47,11 +45,20 @@ int main(int argc, char** argv) {
 	// parse arguments, overriding default values
 	parse_opts(argv+1);
 	
-	if (getpid() != 1 && !main_use_stdin && !main_cfgfile)
-		fatal(EXIT_BAD_OPTIONS, "require --stdin or -c, or run as PID 1");
+	// Check for required options
+	if (!main_use_stdin && !main_cfgfile)
+		fatal(EXIT_BAD_OPTIONS, "require --stdin or -c");
 	
+	// fork and setsid if requested, but not if PID 1 or interactive
+	if (opt_daemonize) {
+		if (getpid() == 1 || main_use_stdin)
+			log_warn("Ignoring --daemonize (see manual)");
+		else
+			daemonize();
+	}
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
+	
 	// Initialize file descriptor object pool and indexes
 	fd_init();
 	if (main_fd_pool_count > 0 && main_fd_pool_size_each > 0)
@@ -94,7 +101,7 @@ int main(int argc, char** argv) {
 	
 	if (main_use_stdin || config_on_stdin) {
 		if (!(ctl= ctl_new(0, 1)))
-			fatal(3, "failed to initialize stdio controller client!");
+			fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to initialize stdio controller client!");
 		else
 			ctl_set_auto_final_newline(ctl, config_on_stdin);
 	}
@@ -170,6 +177,30 @@ int main(int argc, char** argv) {
 	if (main_exec_on_exit)
 		fatal(main_exitcode, "terminated normally");
 	return main_exitcode;
+}
+
+void daemonize() {
+	pid_t pid= fork();
+	if (pid < 0)
+		fatal(EXIT_INVALID_ENVIRONMENT, "fork: %s", strerror(errno));
+	// The parent writes PID to stdout, and exits immediately
+	else if (pid > 0) {
+		// print PID of daemon on stdout
+		printf("%d", (int) pid);
+		fflush(NULL);
+		// do not run any cleanup
+		_exit(0);
+	}
+	// The child closes all standard file handles, and becomes session leader.
+	// We don't need to do an additional fork (which prevents acquiring a controlling tty)
+	// because all further calls to 'open' are passed the "NOCTTY" flag.
+	else {
+		close(0);
+		close(1);
+		close(2);
+		if (setsid() == -1)
+			fatal(EXIT_INVALID_ENVIRONMENT, "setsid: %s", strerror(errno));
+	}
 }
 
 bool create_standard_handles(int dev_null) {

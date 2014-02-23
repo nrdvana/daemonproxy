@@ -58,7 +58,10 @@ bool log_level_by_name(strseg_t name, int *lev);
 #define log_trace(args...) do {} while (0)
 #endif
 
+extern bool opt_daemonize;
+
 void parse_opts(char **argv);
+
 extern const char *main_cfgfile;
 extern bool    main_use_stdin;
 extern bool    main_terminate;
