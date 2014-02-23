@@ -129,6 +129,19 @@ void svc_ctor(service_t *svc, strseg_t name) {
 		svc_check(svc);
 }
 
+void svc_dtor(service_t *svc) {
+	svc_set_active(svc, false);
+	if (svc->pid)
+		RBTreeNode_Prune( &svc->pid_index_node );
+	RBTreeNode_Prune( &svc->name_index_node );
+}
+
+void svc_delete(service_t *svc) {
+	svc_dtor(svc);
+	svc->next_free= svc_free_list;
+	svc_free_list= svc;
+}
+
 /** Get a named variable.
  *
  * Returns true if found or false if not.  If true, and value_out is given,
@@ -594,17 +607,6 @@ service_t * svc_iter_next(service_t *svc, const char *from_name) {
 			node= RBTreeNode_GetNext(s.Nearest);
 	}
 	return node? (service_t *) node->Object : NULL;
-}
-
-void svc_delete(service_t *svc) {
-	svc_set_active(svc, false);
-	if (svc->pid > 0) {
-		kill(svc->pid, SIGTERM);
-		RBTreeNode_Prune( &svc->pid_index_node );
-	}
-	RBTreeNode_Prune( &svc->name_index_node );
-	svc->next_free= svc_free_list;
-	svc_free_list= svc;
 }
 
 #ifndef NDEBUG

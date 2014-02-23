@@ -11,7 +11,7 @@ my $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
 
 $dp->send("blah\t" x 1000);
-$dp->recv_ok( qr/error:.*long/, 'long line causes error' );
+$dp->recv_ok( qr/error\t.*long/, 'long line causes error' );
 
 $dp->discard_response;
 $dp->send("# blah\t" x 1000);

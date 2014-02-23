@@ -55,6 +55,7 @@ COMMAND(ctl_cmd_svc_args,            "service.args");
 COMMAND(ctl_cmd_svc_fds,             "service.fds");
 COMMAND(ctl_cmd_svc_start,           "service.start");
 COMMAND(ctl_cmd_svc_signal,          "service.signal");
+COMMAND(ctl_cmd_svc_delete,          "service.delete");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
@@ -882,6 +883,29 @@ bool ctl_cmd_svc_signal(controller_t *ctl) {
 		ctl->command_error= ctl->command_error_buf;
 		return false;
 	}
+	return true;
+}
+
+/*
+=item service.delete NAME
+
+Delete a service.  The service can only be deleted if it is not currently
+running.  Once deleted, there is no trace of the service's state.
+
+=cut
+*/
+bool ctl_cmd_svc_delete(controller_t *ctl) {
+	service_t *svc;
+
+	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
+		return false;
+	if (svc_get_pid(svc) > 0) {
+		ctl->command_error= "service is running";
+		return false;
+	}
+
+	ctl_write(NULL, "service.state	%s	deleted	-	-	-	-	-	-\n", svc_get_name(svc));
+	svc_delete(svc);
 	return true;
 }
 
