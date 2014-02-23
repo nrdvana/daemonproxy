@@ -60,6 +60,7 @@ COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_exit,                "exit");
 COMMAND(ctl_cmd_log_filter,          "log.filter");
 COMMAND(ctl_cmd_event_pipe_timeout,  "conn.event_timeout");
+COMMAND(ctl_cmd_signal_clear,        "signal.clear");
 COMMAND(ctl_cmd_terminate_exec_args, "terminate.exec_args");
 COMMAND(ctl_cmd_terminate_guard,     "terminate.guard");
 COMMAND(ctl_cmd_terminate,           "terminate");
@@ -909,7 +910,31 @@ bool ctl_cmd_log_filter(controller_t *ctl) {
 }
 
 /*
-=item terminate [EXIT_CODE] [GUARD_CODE]
+=item signal.clear SIGNAL COUNT
+
+Decrements the count of one signal.  Daemonproxy increments the count each time
+a signal is received, and generates an event for any listening controllers.
+Statedumps will continue to show the signal while it has a nonzero count.
+This command decrements the count, allowing a controller to know that the signal
+has been dealt with.
+
+=cut
+*/
+bool ctl_cmd_signal_clear(controller_t *ctl) {
+	int sig;
+	int64_t count;
+
+	if (!ctl_get_arg_signal(ctl, &sig))
+		return false;
+	if (!ctl_get_arg_int(ctl, &count))
+		return false;
+
+	sig_mark_seen(sig, count);
+	return true;
+}
+
+/*
+=item terminate EXIT_CODE [GUARD_CODE]
 
 Terminate daemonproxy immediately.  No cleanup is performed, and all handles
 and child processes will be lost.  Graceful shutdown should be part of the
