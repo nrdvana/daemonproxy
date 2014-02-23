@@ -46,7 +46,7 @@ $(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c $(srcdir)/generate_c
 signal.o: $(srcdir)/signal_data.autogen.c
 
 $(srcdir)/sig_list.txt:
-	perl $(srcdir)/generate_signal_list.pl < $< > $@.tmp && mv $@.tmp $@
+	perl $(srcdir)/generate_signal_list.pl > $@.tmp && mv $@.tmp $@
 
 $(srcdir)/signal_data.autogen.c: $(srcdir)/sig_list.txt $(srcdir)/signal.c $(srcdir)/generate_signal_data.pl
 	$(CPP) - - < $< | perl $(srcdir)/generate_signal_data.pl > $@.tmp && mv $@.tmp $@
