@@ -28,6 +28,7 @@ sub temp_path {
 	$self->{temp_path} ||= do {
 		my $path= ($ENV{tempdir} || 'build');
 		-d $path or Test::More::BAIL_OUT("Cannot write tempdir \"$path\".  Set env 'tempdir' to correct directory");
+		$path;
 	};
 }
 

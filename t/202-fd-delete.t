@@ -11,7 +11,7 @@ my $dp;
 $dp= Test::DaemonProxy->new;
 $dp->run('--stdin');
 
-my $fname= $dp->temp_path . '200-testfile.txt';
+my $fname= $dp->temp_path . '/202-testfile.txt';
 unlink( $fname );
 ok( ! -f $fname, 'test file unlinked' );
 
@@ -42,3 +42,4 @@ $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 done_testing;
+unlink( $fname );
