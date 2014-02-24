@@ -20,7 +20,7 @@ SKIP: {
 	is( $?, 0, 'ps command' )
 		or skip 'ps output required for next tests', 3;
 
-	my ($sid, $pgid, $name)= split /\s+/, $ps_info;
+	my (undef, $sid, $pgid, $name)= split /\s+/, " $ps_info";
 	is( $name, 'daemonproxy', 'process name' );
 	is( $sid, $pid, 'session id' );
 	is( $pgid, $pid, 'process group id' );
