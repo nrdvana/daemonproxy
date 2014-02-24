@@ -22,8 +22,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define SERVICE_POOL_SIZE           256
-#define SERVICE_OBJ_SIZE            512
+#define SERVICE_POOL_SIZE           128
+#define SERVICE_OBJ_SIZE            768
 #define SERVICE_RESTART_INTERVAL  (   5LL << 32)
 #define FD_POOL_SIZE                256
 #define FD_POOL_SIZE_MIN              6

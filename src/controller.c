@@ -49,10 +49,11 @@ STATE(ctl_state_dump_services);
 STATE(ctl_state_dump_signals);
 
 #define COMMAND(name, ...) static bool name(controller_t *ctl)
-COMMAND(ctl_cmd_echo, "echo");
+COMMAND(ctl_cmd_echo,                "echo");
 COMMAND(ctl_cmd_statedump,           "statedump");
 COMMAND(ctl_cmd_svc_args,            "service.args");
 COMMAND(ctl_cmd_svc_fds,             "service.fds");
+COMMAND(ctl_cmd_svc_triggers,        "service.triggers");
 COMMAND(ctl_cmd_svc_start,           "service.start");
 COMMAND(ctl_cmd_svc_signal,          "service.signal");
 COMMAND(ctl_cmd_svc_delete,          "service.delete");
@@ -547,6 +548,8 @@ bool ctl_state_dump_fds(controller_t *ctl) {
 }
 
 bool ctl_state_dump_services(controller_t *ctl) {
+	int64_t delay;
+	sigset_t sigs;
 	service_t *svc= svc_by_name(STRSEG(ctl->statedump_current), false);
 	if (!svc) ctl->command_substate= 0;
 	/* Statedump command, part 2: iterate services and dump each one.
@@ -571,6 +574,10 @@ bool ctl_state_dump_services(controller_t *ctl) {
  case 4:
 		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 4; break; }
 		ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc));
+ case 5:
+		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 5; break; }
+		svc_get_triggers(svc, &delay, &sigs);
+		ctl_notify_svc_triggers(ctl, svc_get_name(svc), delay, &sigs);
 	}
  }//switch
 	if (svc) { // If we broke the loop early, record name of where to resume
@@ -800,6 +807,62 @@ bool ctl_cmd_svc_fds(controller_t *ctl) {
 	}
 	
 	ctl_notify_svc_fds(NULL, svc_get_name(svc), svc_get_fds(svc));
+	return true;
+}
+
+/*
+=item service.triggers NAME [auto[=INTERVAL]] [sig=SIGNAL,...]
+
+Set a list of triggers that cause the service to start.  A value of 'auto'
+causes the service to restart automatically.  The restart interval can optionally
+be specified, and is the minimum number of seconds between start events.  A value
+of "sig" may be used to cause this service to start in response to daemonproxy
+receiving a signal.  It is followed with a comma separated list of signal names.
+
+=cut
+*/
+bool ctl_cmd_svc_triggers(controller_t *ctl) {
+	service_t *svc;
+	strseg_t arg, arg2, sigtext;
+	int64_t autostart= 0, val;
+	sigset_t sigs;
+
+	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
+		return false;
+	
+	sigemptyset(&sigs);
+	while (ctl_get_arg(ctl, &arg)) {
+		if (strseg_tok_next(&arg, '=', &arg2)) {
+			log_trace("trigger arg \"%.*s\"", arg.len, arg.data);
+			if (0 == strseg_cmp(arg2, STRSEG("auto"))) {
+				autostart= SERVICE_RESTART_INTERVAL;
+				if (arg.len > 0) {
+					if (!strseg_atoi(&arg, &autostart) || arg.len > 0 || (autostart >> 32)) {
+						ctl_notify_error(ctl, "invalid auto= interval");
+						continue;
+					}
+					if (autostart < 1) autostart= 1;
+					autostart= autostart << 32;
+				}
+				continue;
+			}
+			else if (0 == strseg_cmp(arg2, STRSEG("sig"))) {
+				while (strseg_tok_next(&arg, ',', &arg2)) {
+					sigtext= arg2;
+					val= sig_num_by_name(sigtext);
+					if (!(val || (strseg_atoi(&sigtext, &val) && sigtext.len <= 0 && !(val >> 32)))
+						|| sigaddset(&sigs, (int) val) < 0)
+						ctl_notify_error(ctl, "Invalid signal name/number \"%.*s\"", arg2.len, arg2.data);
+				}
+				continue;
+			}
+		}
+		ctl_notify_error(ctl, "Unknown trigger %.*s", arg.len, arg.data);
+	}
+
+	log_trace("setting trigger %lld", autostart);
+	svc_set_triggers(svc, autostart, &sigs);
+	ctl_notify_svc_triggers(NULL, svc_get_name(svc), autostart, &sigs);
 	return true;
 }
 
@@ -1147,7 +1210,7 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 /*
 =item service.args NAME ARG_1 ARG_2 ... ARG_N
 
-Arguments for the service have changed
+Arguments for the service have changed.
 
 =cut
 */
@@ -1158,12 +1221,43 @@ bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fi
 /*
 =item service.fds NAME HANDLE_1 HANDLE_2 ... HANDLE_N
 
-File handles for the service have changed
+File handles for the service have changed.
 
 =cut
 */
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields) {
 	return ctl_write(ctl, "service.fds	%s	%s\n", name, tsv_fields);
+}
+
+/*
+=item service.triggers NAME [TRIGGER_1], [TRIGER_2] ...
+
+Triggers for auto-starting the service have changed.
+
+=cut
+*/
+bool ctl_notify_svc_triggers(controller_t *ctl, const char *name, int64_t interval, sigset_t *sigs) {
+	const char *signame;
+	int i;
+	bool first= true;
+	
+	ctl_write(ctl, "service.triggers	%s", name);
+	if (interval)
+		ctl_write(ctl, interval == SERVICE_RESTART_INTERVAL? "	auto":"	auto=%d", (int)(interval>>32));
+
+	if (sigs) {
+		for (i= 1; i < 255; i++) {
+			if (sigismember(sigs, i) == 1) {
+				if ((signame= sig_name_by_num(i)))
+					ctl_write(ctl, "%s%s", first? "	sig=SIG" : ",SIG", signame);
+				else
+					ctl_write(ctl, "%s%d", first? "	sig=" : ",", i);
+				first= false;
+			}
+		}
+	}
+	ctl_write(ctl, "\n");
+	return true;
 }
 
 /*
@@ -1324,16 +1418,29 @@ void create_missing_dirs(char *path) {
 // Try to flush the output buffer (nonblocking)
 // Return true if flushed completely.  false otherwise.
 static bool ctl_flush_outbuf(controller_t *ctl) {
-	int n;
+	int n, eol;
 	while (ctl->send_buf_pos) {
-		log_trace("controller write buffer %d bytes pending %s",
-			ctl->send_buf_pos, ctl->send_overflow? "(overflow flag set)" : "");
+		// find end of last line in buffer
+		for (eol= ctl->send_buf_pos-1; eol >= 0; eol--)
+			if (ctl->send_buf[eol] == '\n')
+				break;
+		log_trace("controller write buffer %d bytes pending, final eol at %d, %s",
+			ctl->send_buf_pos, eol, ctl->send_overflow? "(overflow flag set)" : "");
 		// if no send_fd, discard buffer
 		if (ctl->send_fd == -1)
 			ctl->send_buf_pos= 0;
+		// if no eol, can't continue
+		// This prevents partial lines from being written, which could get
+		// interrupted by an overflow condition and result in the controller
+		// script seeing a half-event.
+		else if (eol < 0) {
+			// if overflow is set, discard partial line.
+			if (ctl->send_overflow) ctl->send_buf_pos= 0;
+			else return false;
+		}
 		// else write as much as we can (on nonblocking fd)
 		else {
-			n= write(ctl->send_fd, ctl->send_buf, ctl->send_buf_pos);
+			n= write(ctl->send_fd, ctl->send_buf, eol+1);
 			if (n > 0) {
 				log_trace("controller flushed %d bytes", n);
 				ctl->send_buf_pos -= n;

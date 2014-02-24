@@ -111,6 +111,7 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
+bool ctl_notify_svc_triggers(controller_t *ctl, const char *name, int64_t interval, sigset_t *sigs);
 bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd);
 #define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error\t" msg "\n", ##__VA_ARGS__))
 
@@ -139,14 +140,13 @@ int64_t svc_get_reap_ts(service_t *svc);
 bool svc_set_argv(service_t *svc, strseg_t tsv_fields);
 const char * svc_get_argv(service_t *svc);
 
-// Set env for a service.  Created the service if it doesn't exist.
-// Fails if the metadata + env + argv + fd is longer than the allocated buffer.
-//bool svc_set_env(const char *name, const char *tsv_fields);
-
 // Set file descriptors for a service.  Create the service if it doesn't exist.
 // Fails if the metadata + env + argv + fd is longer than the allocated buffer.
 bool svc_set_fds(service_t *svc, strseg_t tsv_fields);
 const char * svc_get_fds(service_t *svc);
+
+void svc_get_triggers(service_t *svc, int64_t *autostart_interval, sigset_t *sigs);
+void svc_set_triggers(service_t *svc, int64_t autostart_interval, sigset_t *sigs);
 
 // update service state machine when requested to start
 bool svc_handle_start(service_t *svc, int64_t when);

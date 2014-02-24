@@ -20,35 +20,43 @@ struct service_s {
 	int name_len, vars_len;
 	RBTreeNode name_index_node;
 	RBTreeNode pid_index_node;
-	struct service_s **active_prev_ptr;
+	struct service_s **active_prev_ptr, **sigwake_prev_ptr;
+	struct service_s *sigwake_next;
 	union {
 		struct service_s *active_next;
 		struct service_s *next_free;
 	};
 	pid_t pid;
 	bool auto_restart: 1,
+		sigwake: 1,
 		uses_control_event: 1,
 		uses_control_cmd: 1;
 	int wait_status;
-	int64_t start_time;
-	int64_t reap_time;
+	int64_t  restart_interval;
+	sigset_t autostart_signals;
+	int64_t  start_time;
+	int64_t  reap_time;
 	char buffer[]; // holds name and vars.  length is "svc->size - sizeof(struct service_s)"
 };
 
 // Define a sensible minimum for service size.
 // Want at least struct size, plus room for name, small argv list, and short names of file descriptors
 const int min_service_obj_size= sizeof(service_t) + NAME_LIMIT + 128;
+const int max_service_obj_size= sizeof(service_t) + NAME_LIMIT + 4096 + 255 * NAME_LIMIT;
 
 void *svc_pool= NULL;
 RBTree svc_by_name_index;
 RBTree svc_by_pid_index;
-service_t *svc_active_list= NULL; // linked list of active services
-service_t *svc_free_list= NULL; // linked list re-using next_active and prev_active
+service_t *svc_active_list= NULL;   // linked list of active services
+service_t *svc_sigwake_list= NULL;  // linked list of services that can wake via signals
+service_t *svc_free_list= NULL;     // linked list re-using next_active and prev_active
+int64_t svc_last_signal_ts= 0;      // last signal we saw, for triggering services.
 
 void svc_notify_state(service_t *svc);
 void svc_change_pid(service_t *svc, pid_t pid);
 void svc_do_exec(service_t *svc);
 void svc_set_active(service_t *svc, bool activate);
+static bool svc_check_sigwake(service_t *svc);
 
 int  svc_by_name_compare(void *data, RBTreeNode *node) {
 	strseg_t *name= (strseg_t*) data;
@@ -65,6 +73,8 @@ int  svc_by_pid_compare(void *key, RBTreeNode *node) {
 void svc_init(int service_count, int size_each) {
 	service_t *svc;
 	int i;
+	log_debug("service buf size: %d - %d = %d (sigset_t = %d, __sigset_t = %d)",
+		size_each, sizeof(service_t), size_each - sizeof(service_t), sizeof(sigset_t), sizeof(__sigset_t));
 	svc_pool= malloc(service_count * size_each);
 	if (!svc_pool)
 		abort();
@@ -113,6 +123,8 @@ void svc_ctor(service_t *svc, strseg_t name) {
 	svc->size= size;
 	svc->state= SVC_STATE_DOWN;
 	
+	sigemptyset(&svc->autostart_signals);
+	
 	// This relies on svc_check_name having been called already
 	assert(name.len+1 < svc->size - sizeof(service_t));
 	memcpy(svc->buffer, name.data, name.len);
@@ -131,6 +143,7 @@ void svc_ctor(service_t *svc, strseg_t name) {
 
 void svc_dtor(service_t *svc) {
 	svc_set_active(svc, false);
+	svc_set_triggers(svc, 0, NULL);
 	if (svc->pid)
 		RBTreeNode_Prune( &svc->pid_index_node );
 	RBTreeNode_Prune( &svc->name_index_node );
@@ -260,6 +273,65 @@ bool svc_set_fds(service_t *svc, strseg_t new_fds) {
 	return true;
 }
 
+void svc_get_triggers(service_t *svc, int64_t *autostart_interval, sigset_t *sigs) {
+	if (autostart_interval) *autostart_interval= svc->auto_restart? svc->restart_interval : 0;
+	if (sigs) memcpy(sigs, &svc->autostart_signals, sizeof(sigset_t));
+}
+
+void svc_set_triggers(service_t *svc, int64_t autostart_interval, sigset_t *sigs) {
+	int i;
+	svc->auto_restart= (bool) autostart_interval;
+	svc->restart_interval= autostart_interval? autostart_interval : SERVICE_RESTART_INTERVAL;
+	svc->sigwake= false;
+	if (sigs) {
+		memcpy(&svc->autostart_signals, sigs, sizeof(sigset_t));
+		// Check for any signals in set.  Unfortunately posix doesn't give us much to work with.
+		for (i= 0; i < 1024; i++)
+			if (sigismember(sigs, i) == 1) {
+				log_trace("signal set is not empty");
+				svc->sigwake= true;
+				break;
+			}
+	}
+	else sigemptyset(&svc->autostart_signals);
+
+	// Add or remove this service from the sigwake list, as needed.
+	if (svc->sigwake && !svc->sigwake_prev_ptr) {
+		log_trace("Adding service to sigwake_list");
+		svc->sigwake_next= svc_sigwake_list;
+		if (svc_sigwake_list)
+			svc_sigwake_list->sigwake_prev_ptr= &svc->sigwake_next;
+		svc_sigwake_list= svc;
+		svc->sigwake_prev_ptr= &svc_sigwake_list;
+	}
+	else if (!svc->sigwake && svc->sigwake_prev_ptr) {
+		log_trace("Removing service from sigwake_list");
+		if (svc->sigwake_next)
+			svc->sigwake_next->sigwake_prev_ptr= svc->sigwake_prev_ptr;
+		*svc->sigwake_prev_ptr= svc->sigwake_next;
+		svc->sigwake_prev_ptr= NULL;
+	}
+	
+	// finally, if a relevant signal is un-cleared, start the service.
+	if (svc->auto_restart || svc_check_sigwake(svc)) {
+		log_trace("Service needs started now");
+		svc_handle_start(svc, wake->now);
+	}
+}
+
+bool svc_check_sigwake(service_t *svc) {
+	int signum, sig_count;
+	int64_t sig_ts;
+
+	if (!svc->sigwake) return false;
+
+	sig_ts= 0;
+	while (sig_get_new_events(sig_ts, &signum, &sig_ts, &sig_count))
+		if (sigismember(&svc->autostart_signals, signum))
+			return true;
+	return false;
+}
+
 bool svc_handle_start(service_t *svc, int64_t when) {
 	if (svc->state != SVC_STATE_DOWN && svc->state != SVC_STATE_START_PENDING) {
 		log_debug("Can't start service \"%s\": state is %d", svc_get_name(svc), svc->state);
@@ -339,9 +411,27 @@ void svc_set_active(service_t *svc, bool activate) {
  * Services might set themselves back to inactive during this loop.
  */
 void svc_run_active(wake_t *wake) {
-	service_t *svc= svc_active_list;
+	service_t *svc, *next;
+	int signum, sig_count;
+	int64_t sig_ts;
+
+	// For any new signal received, check if it wakes any services
+	if (svc_sigwake_list)
+		while (sig_get_new_events(svc_last_signal_ts, &signum, &sig_ts, &sig_count)) {
+			svc= svc_sigwake_list;
+			while (svc) {
+				next= svc->sigwake_next;
+				if (sigismember(&svc->autostart_signals, signum))
+					svc_handle_start(svc, wake->now);
+				svc= next;
+			}
+			svc_last_signal_ts= sig_ts;
+		}
+
+	// run state machine for any active service
+	svc= svc_active_list;
 	while (svc) {
-		service_t *next= svc->active_next;
+		next= svc->active_next;
 		svc_run(svc, wake);
 		svc= next;
 	}
@@ -437,11 +527,11 @@ void svc_run(service_t *svc, wake_t *wake) {
 	case SVC_STATE_REAPED:
 		svc_notify_state(svc);
 		svc->state= SVC_STATE_DOWN;
-		if (svc->auto_restart) {
+		if (svc->auto_restart || svc_check_sigwake(svc)) {
 			// if restarting too fast, delay til future
 			svc_handle_start(svc, 
-				(svc->reap_time - svc->start_time < SERVICE_RESTART_INTERVAL)?
-				wake->now + SERVICE_RESTART_INTERVAL : wake->now);
+				(svc->reap_time - svc->start_time < svc->restart_interval)?
+				wake->now + svc->restart_interval : wake->now);
 			svc_notify_state(svc);
 		}
 		goto re_switch_state;
