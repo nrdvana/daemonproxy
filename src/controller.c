@@ -29,7 +29,7 @@ struct controller_s {
 	char     command_error_buf[64];// buffer in case we want to write a custom error msg
 	
 	int     command_substate;
-	char    statedump_current[NAME_LIMIT];
+	char    statedump_current[NAME_BUF_SIZE];
 	int64_t statedump_ts;
 };
 

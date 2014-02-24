@@ -29,7 +29,7 @@
 #define FD_POOL_SIZE_MIN              6
 #define FD_POOL_SIZE_MAX             FD_SETSIZE
 #define FD_OBJ_SIZE                  96
-#define NAME_LIMIT                   63
+#define NAME_BUF_SIZE                64
 #define FORK_RETRY_DELAY          (   3LL << 32)
 #define CONTROLLER_WRITE_TIMEOUT  (  30LL << 32)
 

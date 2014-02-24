@@ -70,6 +70,8 @@ extern int64_t main_terminate_guard;
 extern bool    main_exec_on_exit;
 extern int     main_fd_pool_count;
 extern int     main_fd_pool_size_each;
+extern int     main_svc_pool_count;
+extern int     main_svc_pool_size_each;
 extern bool    main_mlockall;
 extern wake_t *wake;
 
@@ -124,8 +126,9 @@ void ctl_flush(wake_t *wake);
 
 extern const int min_service_obj_size, max_service_obj_size;
 
+void svc_init();
 // Initialize the service pool
-void svc_init(int service_count, int size_each);
+bool svc_preallocate(int service_count, int size_each);
 
 const char * svc_get_name(service_t *svc);
 bool svc_check_name(strseg_t name);

@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't allocate standard handle objects");
 
 	// Initialize service object pool and indexes
-	svc_init(SERVICE_POOL_SIZE, SERVICE_OBJ_SIZE);
+	svc_init();
 	// Initialize controller object pool
 	ctl_init();
 	

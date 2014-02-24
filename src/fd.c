@@ -34,8 +34,8 @@ void *fd_obj_pool= NULL;
 int fd_obj_pool_size_each= 0;
 
 // Set minimum FD size of struct + fd name + 31 chars for partial file name
-const int min_fd_obj_size= sizeof(fd_t) + NAME_LIMIT + 32;
-const int max_fd_obj_size= ((sizeof(fd_t) + NAME_LIMIT + PATH_MAX)|0xF)+1;
+const int min_fd_obj_size= sizeof(fd_t) + NAME_BUF_SIZE + 32;
+const int max_fd_obj_size= ((sizeof(fd_t) + NAME_BUF_SIZE + PATH_MAX)|0xF)+1;
 
 bool fd_list_resize(int new_limit);
 void add_fd_by_name(fd_t *fd);
@@ -82,6 +82,7 @@ bool fd_list_resize(int new_limit) {
 fd_t * fd_new(int size, strseg_t name) {
 	fd_t *obj;
 	assert(size >= sizeof(fd_t) + name.len + 1);
+	assert(name.len < NAME_BUF_SIZE);
 	// enlarge the container if needed (and not using a pool)
 	if (fd_list_count >= fd_list_limit)
 		if (fd_obj_pool || !fd_list_resize(fd_list_limit + 32))
@@ -95,7 +96,7 @@ fd_t * fd_new(int size, strseg_t name) {
 	}
 	else {
 		if (!(obj= (fd_t*) malloc(size)))
-			return false;
+			return NULL;
 		fd_list[fd_list_count++]= obj;
 	}
 	memset(obj, 0, size);
@@ -248,7 +249,7 @@ const char* append_elipses(char *buffer, int bufsize, strseg_t source) {
 }
 
 fd_t * fd_by_name(strseg_t name) {
-	assert(name.len < NAME_LIMIT);
+	assert(name.len < NAME_BUF_SIZE);
 	RBTreeSearch s= RBTree_Find( &fd_by_name_index, &name );
 	if (s.Relation == 0)
 		return (fd_t*) s.Nearest->Object;
