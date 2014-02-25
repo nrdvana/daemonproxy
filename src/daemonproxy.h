@@ -58,7 +58,11 @@ bool log_level_by_name(strseg_t name, int *lev);
 #define log_trace(args...) do {} while (0)
 #endif
 
-extern bool opt_daemonize;
+extern bool    opt_daemonize;
+extern int     opt_fd_pool_count;
+extern int     opt_fd_pool_size_each;
+extern int     opt_svc_pool_count;
+extern int     opt_svc_pool_size_each;
 
 void parse_opts(char **argv);
 
@@ -68,10 +72,6 @@ extern bool    main_terminate;
 extern int     main_exitcode;
 extern int64_t main_terminate_guard;
 extern bool    main_exec_on_exit;
-extern int     main_fd_pool_count;
-extern int     main_fd_pool_size_each;
-extern int     main_svc_pool_count;
-extern int     main_svc_pool_size_each;
 extern bool    main_mlockall;
 extern wake_t *wake;
 
@@ -124,7 +124,7 @@ void ctl_flush(wake_t *wake);
 //----------------------------------------------------------------------------
 // service.c interface
 
-extern const int min_service_obj_size, max_service_obj_size;
+extern const int svc_min_obj_size, svc_max_obj_size;
 
 void svc_init();
 // Initialize the service pool
@@ -187,7 +187,7 @@ typedef struct fd_flags_s {
 		is_const: 1;
 } fd_flags_t;
 
-extern const int min_fd_obj_size, max_fd_obj_size;
+extern const int fd_min_obj_size, fd_max_obj_size;
 
 // Initialize the fd pool from a static chunk of memory
 void fd_init();

@@ -22,14 +22,22 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define SERVICE_POOL_SIZE           128
-#define SERVICE_OBJ_SIZE            768
-#define SERVICE_RESTART_INTERVAL  (   5LL << 32)
-#define FD_POOL_SIZE                256
+// Sensible min/max for allocating a service pool
+#define SERVICE_POOL_SIZE_MIN         1
+#define SERVICE_POOL_SIZE_MAX     65535
+
+// Sensible min/max for allocating fd pool
 #define FD_POOL_SIZE_MIN              6
-#define FD_POOL_SIZE_MAX             FD_SETSIZE
-#define FD_OBJ_SIZE                  96
+#define FD_POOL_SIZE_MAX     FD_SETSIZE
+
+// default obj size in pool if none specified
+#define SERVICE_POOL_OBJ_SIZE       512
+#define FD_POOL_OBJ_SIZE             96
+
+// Maximum length for service or fd names
 #define NAME_BUF_SIZE                64
+
+#define SERVICE_RESTART_INTERVAL  (   5LL << 32)
 #define FORK_RETRY_DELAY          (   3LL << 32)
 #define CONTROLLER_WRITE_TIMEOUT  (  30LL << 32)
 

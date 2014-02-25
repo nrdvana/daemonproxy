@@ -724,7 +724,7 @@ bool ctl_cmd_fd_open(controller_t *ctl) {
 	fd= fd_new_file(fdname, f, flags, path);
 	if (!fd) {
 		close(f);
-		ctl->command_error= "no room for new fd object";
+		ctl->command_error= "Unable to allocate new file descriptor object";
 		return false;
 	}
 
@@ -1525,7 +1525,7 @@ bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, s
 	}
 	svc= svc_by_name(name, !existing);
 	if (!svc) {
-		ctl->command_error= existing? "No such service" : "Unable to create new service";
+		ctl->command_error= existing? "No such service" : "Unable to allocate new service";
 		return false;
 	}
 	if (name_out) *name_out= name;

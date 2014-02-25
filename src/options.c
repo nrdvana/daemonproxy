@@ -1,7 +1,11 @@
 #include "config.h"
 #include "daemonproxy.h"
 
-bool opt_daemonize= false;
+bool    opt_daemonize= false;
+int     opt_fd_pool_count= 0;
+int     opt_fd_pool_size_each= 0;
+int     opt_svc_pool_count= 0;
+int     opt_svc_pool_size_each= 0;
 
 static void parse_option(char shortname, char* longname, char ***argv);
 
@@ -141,6 +145,19 @@ void set_opt_exec_on_exit(char **argv) {
 		fatal(EXIT_BAD_OPTIONS, "exec-on-exit arguments exceed buffer size");
 }
 
+static void parse_NxM(strseg_t arg, int64_t *count, int64_t *size) {
+	strseg_t count_str;
+
+	if (!strseg_tok_next(&arg, 'x', &count_str)
+		|| !strseg_atoi(&count_str, count)
+		|| count_str.len > 0
+		|| !(
+			arg.len <= 0
+			|| (strseg_parse_size(&arg, size) && arg.len == 0)
+		))
+		fatal(EXIT_BAD_OPTIONS, "Expected 'N' or 'NxM' where N and M are integers and M has an optional size suffix");
+}
+
 /*
 =item --fd-pool N[xM]
 
@@ -152,16 +169,9 @@ size that might not be large enough for long filenames.
 =cut
 */
 void set_opt_fd_prealloc(char **argv) {
-	int64_t val_n, val_m= FD_OBJ_SIZE;
-	strseg_t arg= STRSEG(argv[0]), arg_n;
+	int64_t val_n, val_m= FD_POOL_OBJ_SIZE;
 
-	if (strseg_tok_next(&arg, 'x', &arg_n)?
-		!(strseg_atoi(&arg_n, &val_n) && arg_n.len == 0
-			&& strseg_parse_size(&arg, &val_m) && arg.len == 0)
-		: !(strseg_atoi(&arg_n, &val_n) && arg_n.len == 0)
-	) {
-		fatal(EXIT_BAD_OPTIONS, "Expected 'N' or 'NxM' where N and M are integers and M has an optional size suffix");
-	}
+	parse_NxM(STRSEG(argv[0]), &val_n, &val_m);
 
 	if (val_n < FD_POOL_SIZE_MIN) {
 		log_warn("At least %d fd objects required; using minimum", FD_POOL_SIZE_MIN);
@@ -171,16 +181,51 @@ void set_opt_fd_prealloc(char **argv) {
 		val_n= FD_POOL_SIZE_MAX;
 	}
 
-	if (val_m < min_fd_obj_size) {
-		log_warn("fd obj size increased to minimum of %d", min_fd_obj_size);
-		val_m= min_fd_obj_size;
-	} else if (val_m > max_fd_obj_size) {
-		log_warn("fd obj size limited to maximum of %d", max_fd_obj_size);
-		val_m= max_fd_obj_size;
+	if (val_m < fd_min_obj_size) {
+		log_warn("fd obj size increased to minimum of %d", fd_min_obj_size);
+		val_m= fd_min_obj_size;
+	} else if (val_m > fd_max_obj_size) {
+		log_warn("fd obj size limited to maximum of %d", fd_max_obj_size);
+		val_m= fd_max_obj_size;
 	}
 
-	main_fd_pool_count= (int) val_n;
-	main_fd_pool_size_each= (int) val_m;
+	opt_fd_pool_count= (int) val_n;
+	opt_fd_pool_size_each= (int) val_m;
+}
+
+/*
+=item --service-pool N[xM]
+
+Pre-allocate N services [of M bytes each].  This sets the total allocation
+size for service objects, and prevents further dynamic allocations.
+It also restricts you to a fixed number of total services, each of a fixed
+size that might not be large enough for long argument lists.
+
+=cut
+*/
+void set_opt_svc_prealloc(char **argv) {
+	int64_t val_n, val_m= SERVICE_POOL_OBJ_SIZE;
+
+	parse_NxM(STRSEG(argv[0]), &val_n, &val_m);
+
+	if (val_n < SERVICE_POOL_SIZE_MIN) {
+		log_warn("At least %d service objects required; using minimum", SERVICE_POOL_SIZE_MIN);
+		val_n= SERVICE_POOL_SIZE_MIN;
+	} else if (val_n > SERVICE_POOL_SIZE_MAX) {
+		log_warn("service pool size exceeds maximum; limiting to %d", SERVICE_POOL_SIZE_MAX);
+		val_n= SERVICE_POOL_SIZE_MAX;
+	}
+
+	if (val_m < svc_min_obj_size) {
+		log_warn("servce obj size increased to minimum of %d", svc_min_obj_size);
+		val_m= svc_min_obj_size;
+	} else if (val_m > svc_max_obj_size) {
+		log_warn("service obj size limited to maximum of %d", svc_max_obj_size);
+		val_m= svc_max_obj_size;
+	}
+
+	opt_svc_pool_count= (int) val_n;
+	opt_svc_pool_size_each= (int) val_m;
 }
 
 /*

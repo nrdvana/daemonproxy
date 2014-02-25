@@ -37,8 +37,8 @@ struct service_s {
 
 // Define a sensible minimum for service size.
 // Want at least struct size, plus room for name, small argv list, and short names of file descriptors
-const int min_service_obj_size= sizeof(service_t) + NAME_BUF_SIZE + 128;
-const int max_service_obj_size= sizeof(service_t) + NAME_BUF_SIZE + 4096 + 255 * NAME_BUF_SIZE;
+const int svc_min_obj_size= sizeof(service_t) + NAME_BUF_SIZE + 128;
+const int svc_max_obj_size= sizeof(service_t) + NAME_BUF_SIZE + 4096 + 255 * NAME_BUF_SIZE;
 
 service_t **svc_list= NULL;
 int svc_list_count= 0, svc_list_limit= 0;
@@ -761,7 +761,7 @@ service_t *svc_by_name(strseg_t name, bool create) {
 	// if create requested, create a new service by this name
 	// (if name is valid)
 	if (create && svc_check_name(name))
-		return svc_new(svc_pool_size_each? svc_pool_size_each : min_service_obj_size, name);
+		return svc_new(svc_pool_size_each? svc_pool_size_each : svc_min_obj_size, name);
 
 	return NULL;
 }
@@ -810,7 +810,7 @@ service_t * svc_iter_next(service_t *svc, const char *from_name) {
 void svc_check(service_t *svc) {
 	int buf_len;
 	assert(svc != NULL);
-	assert(svc->size >= min_service_obj_size);
+	assert(svc->size >= svc_min_obj_size);
 	buf_len= svc->size - sizeof(service_t);
 	assert(svc->name_len >= 0 && svc->name_len < buf_len);
 	assert(svc->vars_len >= 0 && svc->vars_len < buf_len);

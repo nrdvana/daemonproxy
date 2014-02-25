@@ -10,8 +10,6 @@ char     main_exec_on_exit_buf[256];
 strseg_t main_exec_on_exit_args;
 bool     main_use_stdin= false;
 bool     main_mlockall= false;
-int      main_fd_pool_count= -1;
-int      main_fd_pool_size_each= -1;
 
 wake_t main_wake;
 
@@ -61,8 +59,8 @@ int main(int argc, char** argv) {
 	
 	// Initialize file descriptor object pool and indexes
 	fd_init();
-	if (main_fd_pool_count > 0 && main_fd_pool_size_each > 0)
-		if (!fd_preallocate(main_fd_pool_count, main_fd_pool_size_each))
+	if (opt_fd_pool_count > 0 && opt_fd_pool_size_each > 0)
+		if (!fd_preallocate(opt_fd_pool_count, opt_fd_pool_size_each))
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
 
 	// A handle to dev/null is mandatory...
@@ -79,6 +77,10 @@ int main(int argc, char** argv) {
 
 	// Initialize service object pool and indexes
 	svc_init();
+	if (opt_svc_pool_count > 0 && opt_svc_pool_size_each > 0)
+		if (!svc_preallocate(opt_svc_pool_count, opt_svc_pool_size_each))
+			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate service objects");
+
 	// Initialize controller object pool
 	ctl_init();
 	
