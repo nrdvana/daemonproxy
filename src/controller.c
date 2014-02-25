@@ -1073,19 +1073,19 @@ bool ctl_cmd_terminate(controller_t *ctl) {
 	exitcode= (int) x;
 
 	// Next argument is optional guard code
-	if (main_terminate_guard) {
+	if (opt_terminate_guard) {
 		if (!ctl_get_arg_int(ctl, &x)) {
 			ctl->command_error= "terminate guard code required";
 			return false;
 		}
-		if (main_terminate_guard != x) {
+		if (opt_terminate_guard != x) {
 			ctl->command_error= "incorrect terminate guard code";
 			return false;
 		}
 	}
 	
 	// Can't exit if running as pid 1
-	if (main_terminate_guard && !main_exec_on_exit) {
+	if (opt_terminate_guard && !opt_exec_on_exit) {
 		ctl->command_error= "cannot exit, and exec-on-exit is not configured";
 		return false;
 	}
@@ -1142,23 +1142,23 @@ bool ctl_cmd_terminate_guard(controller_t *ctl) {
 	}
 	
 	if (arg.data[0] == '+') {
-		if (main_terminate_guard) {
+		if (opt_terminate_guard) {
 			ctl->command_error= "terminate guard code is already set";
 			return false;
 		}
-		main_terminate_guard= code;
+		opt_terminate_guard= code;
 		return true;
 	}
 	else {
-		if (!main_terminate_guard) {
+		if (!opt_terminate_guard) {
 			ctl->command_error= "terminate guard was not set";
 			return false;
 		}
-		if (code != main_terminate_guard) {
+		if (code != opt_terminate_guard) {
 			ctl->command_error= "incorrect guard code";
 			return false;
 		}
-		main_terminate_guard= 0;
+		opt_terminate_guard= 0;
 		return true;
 	}
 

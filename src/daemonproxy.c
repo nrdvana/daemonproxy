@@ -8,13 +8,6 @@
 
 bool     main_terminate= false;
 int      main_exitcode= 0;
-int64_t  main_terminate_guard= 0;
-const char *main_cfgfile= NULL;
-bool     main_exec_on_exit= false;
-char     main_exec_on_exit_buf[256];
-strseg_t main_exec_on_exit_args;
-bool     main_use_stdin= false;
-bool     main_mlockall= false;
 
 wake_t main_wake;
 
@@ -39,8 +32,8 @@ int main(int argc, char** argv) {
 	
 	// Special defaults when running as init
 	if (getpid() == 1) {
-		main_cfgfile= CONFIG_FILE_DEFAULT_PATH;
-		main_terminate_guard= 1;
+		opt_config_file= CONFIG_FILE_DEFAULT_PATH;
+		opt_terminate_guard= 1;
 	}
 	
 	umask(077);
@@ -51,7 +44,7 @@ int main(int argc, char** argv) {
 	parse_opts(argv+1);
 	
 	// Check for required options
-	if (!main_use_stdin && !main_cfgfile && !opt_socket_path)
+	if (!opt_interactive && !opt_config_file && !opt_socket_path)
 		fatal(EXIT_BAD_OPTIONS, "require -i or -c or -S");
 	
 	// Set up signal handlers and signal mask and signal self-pipe
@@ -88,14 +81,14 @@ int main(int argc, char** argv) {
 	if (opt_socket_path && !control_socket_start(opt_socket_path))
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't create controller socket");
 	
-	if (main_cfgfile) {
-		if (0 == strcmp(main_cfgfile, "-"))
+	if (opt_config_file) {
+		if (0 == strcmp(opt_config_file, "-"))
 			config_on_stdin= true;
 		else {
-			f= open(main_cfgfile, O_RDONLY|O_NONBLOCK|O_NOCTTY);
+			f= open(opt_config_file, O_RDONLY|O_NONBLOCK|O_NOCTTY);
 			if (f == -1)
 				fatal(EXIT_INVALID_ENVIRONMENT, "failed to open config file \"%s\": %s (%d)",
-					main_cfgfile, strerror(errno), errno);
+					opt_config_file, strerror(errno), errno);
 			else if (!(ctl= ctl_new(f, -1))) {
 				close(f);
 				fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to allocate controller for config file!");
@@ -105,22 +98,22 @@ int main(int argc, char** argv) {
 		}
 	}
 	
-	if (main_use_stdin || config_on_stdin) {
+	if (opt_interactive || config_on_stdin) {
 		if (!(ctl= ctl_new(0, 1)))
 			fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to initialize stdio controller client!");
 		else
 			ctl_set_auto_final_newline(ctl, config_on_stdin);
 	}
 	
-	if (main_mlockall) {
+	if (opt_mlockall) {
 		// Lock all memory into ram. init should never be "swapped out".
 		if (mlockall(MCL_CURRENT | MCL_FUTURE))
-			perror("mlockall");
+			log_error("mlockall: %s", strerror(errno));
 	}
 	
 	// fork and setsid if requested, but not if PID 1 or interactive
 	if (opt_daemonize) {
-		if (getpid() == 1 || main_use_stdin)
+		if (getpid() == 1 || opt_interactive || config_on_stdin)
 			log_warn("Ignoring --daemonize (see manual)");
 		else
 			daemonize();
@@ -191,7 +184,7 @@ int main(int argc, char** argv) {
 		wake->now= gettime_mon_frac();
 	}
 	
-	if (main_exec_on_exit)
+	if (opt_exec_on_exit)
 		fatal(main_exitcode, "terminated normally");
 	return main_exitcode;
 }
@@ -260,32 +253,6 @@ int64_t gettime_mon_frac() {
 	);
 }
 
-bool set_exec_on_exit(strseg_t args) {
-	int i;
-	
-	// empty string disables the feature
-	if (args.len <= 0) {
-		main_exec_on_exit= false;
-		return true;
-	}
-	
-	// Stored in a fixed-size buffer...
-	if (args.len >= sizeof(main_exec_on_exit_buf))
-		return false;
-
-	memcpy(main_exec_on_exit_buf, args.data, args.len);
-	main_exec_on_exit_buf[args.len]= '\0';
-	
-	// convert tab-delimited arguments to NUL-delimited
-	for (i= 0; i < args.len; i++)
-		if (main_exec_on_exit_buf[i] == '\t')
-			main_exec_on_exit_buf[i]= '\0';
-	
-	main_exec_on_exit= true;
-	main_exec_on_exit_args= (strseg_t){ main_exec_on_exit_buf, args.len };
-	return true;
-}
-
 /** Exit (or not) from a fatal condition
  *
  * If exec-on-exit is set, this will exec into (what we expect to be) the
@@ -313,18 +280,18 @@ void fatal(int exitcode, const char *msg, ...) {
 		buffer[0]= '\0';
 	}
 	
-	if (main_exec_on_exit) {
+	if (opt_exec_on_exit) {
 		// Pass params to child as environment vars
 		setenv("INIT_FRAME_ERROR", buffer, 1);
 		sprintf(buffer, "%d", exitcode);
 		setenv("INIT_FRAME_EXITCODE", buffer, 1);
 		// count argument list
-		args= main_exec_on_exit_args;
+		args= opt_exec_on_exit_args;
 		for (i= 0; strseg_tok_next(&args, '\0', NULL); i++);
 		log_debug("%d arguments to exec", i);
 		// build argv
 		argv= alloca(sizeof(char*) * (i+1));
-		args= main_exec_on_exit_args;
+		args= opt_exec_on_exit_args;
 		for (i= 0; strseg_tok_next(&args, '\0', &arg); i++)
 			argv[i]= (char*) arg.data;
 		argv[i]= NULL; // required by spec
@@ -337,7 +304,7 @@ void fatal(int exitcode, const char *msg, ...) {
 	}
 	
 	if (buffer[0])
-		log_write(LOG_LEVEL_FATAL, "%s%s", main_terminate_guard? "(attempting to continue) ":"", buffer);
-	if (!main_terminate_guard)
+		log_write(LOG_LEVEL_FATAL, "%s%s", opt_terminate_guard? "(attempting to continue) ":"", buffer);
+	if (!opt_terminate_guard)
 		exit(exitcode);
 }

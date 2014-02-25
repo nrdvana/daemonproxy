@@ -12,6 +12,13 @@ int     opt_fd_pool_size_each= 0;
 int     opt_svc_pool_count= 0;
 int     opt_svc_pool_size_each= 0;
 const char *opt_socket_path= NULL;
+const char *opt_config_file= NULL;
+bool     opt_exec_on_exit= false;
+char     opt_exec_on_exit_buf[256];
+strseg_t opt_exec_on_exit_args;
+bool     opt_interactive= false;
+bool     opt_mlockall= false;
+int64_t  opt_terminate_guard= 0;
 
 static void parse_option(char shortname, char* longname, char ***argv);
 
@@ -81,7 +88,7 @@ void set_opt_configfile(char** argv ) {
 	struct stat st;
 	if (stat(argv[0], &st))
 		fatal(EXIT_BAD_OPTIONS, "Cannot stat configfile \"%s\"", argv[0]);
-	main_cfgfile= argv[0];
+	opt_config_file= argv[0];
 }
 
 /*
@@ -94,7 +101,7 @@ Use STDIN+STDOUT as a controller communication pipe.
 =cut
 */
 void set_opt_stdin(char **argv) {
-	main_use_stdin= true;
+	opt_interactive= true;
 }
 
 /*
@@ -145,7 +152,7 @@ void set_opt_failsafe(char **argv) {
 	if (*end)
 		fatal(EXIT_BAD_OPTIONS, "Terminate guard must be an integer");
 
-	main_terminate_guard= n;
+	opt_terminate_guard= n;
 }
 
 /*
@@ -164,6 +171,32 @@ program termination to fatal signals like SIGSEGV.
 void set_opt_exec_on_exit(char **argv) {
 	if (!set_exec_on_exit(STRSEG(argv[0])))
 		fatal(EXIT_BAD_OPTIONS, "exec-on-exit arguments exceed buffer size");
+}
+
+bool set_exec_on_exit(strseg_t args) {
+	int i;
+	
+	// empty string disables the feature
+	if (args.len <= 0) {
+		opt_exec_on_exit= false;
+		return true;
+	}
+	
+	// Stored in a fixed-size buffer...
+	if (args.len >= sizeof(opt_exec_on_exit_buf))
+		return false;
+
+	memcpy(opt_exec_on_exit_buf, args.data, args.len);
+	opt_exec_on_exit_buf[args.len]= '\0';
+	
+	// convert tab-delimited arguments to NUL-delimited
+	for (i= 0; i < args.len; i++)
+		if (opt_exec_on_exit_buf[i] == '\t')
+			opt_exec_on_exit_buf[i]= '\0';
+	
+	opt_exec_on_exit= true;
+	opt_exec_on_exit_args= (strseg_t){ opt_exec_on_exit_buf, args.len };
+	return true;
 }
 
 static void parse_NxM(strseg_t arg, int64_t *count, int64_t *size) {
@@ -262,7 +295,7 @@ services and file handles when running as process 1.
 =cut
 */
 void set_opt_mlockall(char **argv) {
-	main_mlockall= true;
+	opt_mlockall= true;
 }
 
 /*

@@ -64,25 +64,25 @@ bool log_level_by_name(strseg_t name, int *lev);
 #define log_trace(args...) do {} while (0)
 #endif
 
-extern bool    opt_daemonize;
-extern int     opt_fd_pool_count;
-extern int     opt_fd_pool_size_each;
-extern int     opt_svc_pool_count;
-extern int     opt_svc_pool_size_each;
+extern bool     opt_daemonize;
+extern int      opt_fd_pool_count;
+extern int      opt_fd_pool_size_each;
+extern int      opt_svc_pool_count;
+extern int      opt_svc_pool_size_each;
 extern const char * opt_socket_path;
+extern const char * opt_config_file;
+extern bool     opt_interactive;
+extern bool     opt_exec_on_exit;
+extern strseg_t opt_exec_on_exit_args;
+extern bool     opt_mlockall;
+extern int64_t  opt_terminate_guard;
 
 void parse_opts(char **argv);
+bool set_exec_on_exit(strseg_t args);
 
-extern const char *main_cfgfile;
-extern bool    main_use_stdin;
 extern bool    main_terminate;
 extern int     main_exitcode;
-extern int64_t main_terminate_guard;
-extern bool    main_exec_on_exit;
-extern bool    main_mlockall;
 extern wake_t *wake;
-
-bool set_exec_on_exit(strseg_t args);
 
 extern const char *  version_git_tag;
 extern const int64_t version_build_ts;
