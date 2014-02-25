@@ -13,11 +13,11 @@ autoconf/configure: autoconf/configure.ac
 clean:
 	$(MAKE) -C build clean
 
-distclean:
-	rm -r build
+dist:
+	make -C build dist
 
 test:
-	$(MAKE) -C build daemonproxy test
+	$(MAKE) -C build daemonproxy
 	$(PROVE) -j4
 
 install:

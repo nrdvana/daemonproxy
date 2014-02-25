@@ -1,4 +1,7 @@
 SHELL = /bin/sh
+PERL = perl
+POD2MAN = pod2man
+GZIP = gzip
 
 all: daemonproxy daemonproxy.1
 
@@ -9,6 +12,8 @@ prefix = @prefix@
 exec_prefix = @exec_prefix@
 bindir = @bindir@
 srcdir = @srcdir@/../src
+scriptdir = @srcdir@/../scripts
+docdir = @srcdir@/../doc
 datarootdir = @datarootdir@
 sysconfdir = @sysconfdir@
 localstatedir = @localstatedir@
@@ -40,31 +45,34 @@ daemonproxy: $(daemonproxy_src:.c=.o)
 
 controller.o: $(srcdir)/controller_data.autogen.c
 
-$(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c $(srcdir)/generate_controller_data.pl
-	perl $(srcdir)/generate_controller_data.pl < $< > $@.tmp && mv $@.tmp $@
+$(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c $(scriptdir)/generate_controller_data.pl
+	perl $(scriptdir)/generate_controller_data.pl < $< > $@.tmp && mv $@.tmp $@
 
 signal.o: $(srcdir)/signal_data.autogen.c
 
 $(srcdir)/sig_list.txt:
-	perl $(srcdir)/generate_signal_list.pl > $@.tmp && mv $@.tmp $@
+	$(PERL) $(scriptdir)/generate_signal_list.pl > $@.tmp && mv $@.tmp $@
 
-$(srcdir)/signal_data.autogen.c: $(srcdir)/sig_list.txt $(srcdir)/signal.c $(srcdir)/generate_signal_data.pl
-	$(CPP) - - < $< | perl $(srcdir)/generate_signal_data.pl > $@.tmp && mv $@.tmp $@
+$(srcdir)/signal_data.autogen.c: $(srcdir)/sig_list.txt $(srcdir)/signal.c $(scriptdir)/generate_signal_data.pl
+	$(CPP) - - < $< | $(PERL) $(scriptdir)/generate_signal_data.pl > $@.tmp && mv $@.tmp $@
 
 options.o: $(srcdir)/options_data.autogen.c
 
-$(srcdir)/options_data.autogen.c: $(srcdir)/options.c $(srcdir)/generate_options_data.pl
-	perl $(srcdir)/generate_options_data.pl < $< > $@.tmp && mv $@.tmp $@
+$(srcdir)/options_data.autogen.c: $(srcdir)/options.c $(scriptdir)/generate_options_data.pl
+	$(PERL) $(scriptdir)/generate_options_data.pl < $< > $@.tmp && mv $@.tmp $@
 
-daemonproxy.1: $(srcdir)/../doc/daemonproxy.head.pod $(srcdir)/options.c $(srcdir)/controller.c $(srcdir)/../doc/daemonproxy.tail.pod
-	cat $^ | pod2man --section=1 --center="System Administration tools" --name=DAEMONPROXY --release="daemonproxy "`git tag | tail -n 1 | sed -e s/\.[0-9]*$$//` > $@.tmp && mv $@.tmp $@
+daemonproxy.1: $(docdir)/daemonproxy.head.pod $(srcdir)/options.c $(srcdir)/controller.c $(docdir)/daemonproxy.tail.pod
+	cat $^ | $(POD2MAN) --section=1 --center="System Administration tools" --name=DAEMONPROXY --release="daemonproxy "`git tag | tail -n 1 | sed -e s/\.[0-9]*$$//` > $@.tmp && mv $@.tmp $@
 
 daemonproxy.1.gz: daemonproxy.1
-	gzip < $< > $@.tmp && mv $@.tmp $@
+	$(GZIP) < $< > $@.tmp && mv $@.tmp $@
 
 install: daemonproxy daemonproxy.1.gz
 	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)/
 	$(INSTALL) -m 644 daemonproxy.1.gz $(DESTDIR)$(mandir)/man1/
+
+dist:
+	$(PERL) $(scriptdir)/build_dist_tarball.pl
 
 clean:
 	rm -f *.autogen.c
