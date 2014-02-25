@@ -6,21 +6,32 @@
 #include "config.h"
 #include "daemonproxy.h"
 
-bool    opt_daemonize= false;
-int     opt_fd_pool_count= 0;
-int     opt_fd_pool_size_each= 0;
-int     opt_svc_pool_count= 0;
-int     opt_svc_pool_size_each= 0;
+/* The following global variables can be set by option processing.
+ * Some can also be altered by controller commands.
+ */
+
+bool        opt_daemonize= false;
+int         opt_fd_pool_count= 0;
+int         opt_fd_pool_size_each= 0;
+int         opt_svc_pool_count= 0;
+int         opt_svc_pool_size_each= 0;
 const char *opt_socket_path= NULL;
 const char *opt_config_file= NULL;
-bool     opt_exec_on_exit= false;
-char     opt_exec_on_exit_buf[256];
-strseg_t opt_exec_on_exit_args;
-bool     opt_interactive= false;
-bool     opt_mlockall= false;
-int64_t  opt_terminate_guard= 0;
+bool        opt_exec_on_exit= false;
+char        opt_exec_on_exit_buf[256];
+strseg_t    opt_exec_on_exit_args;
+bool        opt_interactive= false;
+bool        opt_mlockall= false;
+int64_t     opt_terminate_guard= 0;
 
 static void parse_option(char shortname, char* longname, char ***argv);
+
+/* The script generate_options_data.pl reads this source file to generate the
+ * options table.  It parses the POD to determine short, long, argname, and
+ * usage text.
+ *
+ * The manual page is also generated from this POD.
+ */
 
 struct option_table_entry_s {
 	char shortname;
@@ -32,6 +43,8 @@ struct option_table_entry_s {
 
 #include "options_data.autogen.c"
 
+/** Parse options from main's argv.
+ */
 void parse_opts(char **argv) {
 	char *current;
 	
