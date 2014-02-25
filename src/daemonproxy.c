@@ -43,22 +43,17 @@ int main(int argc, char** argv) {
 		main_terminate_guard= 1;
 	}
 	
+	umask(077);
+
 	log_init();
 	
 	// parse arguments, overriding default values
 	parse_opts(argv+1);
 	
 	// Check for required options
-	if (!main_use_stdin && !main_cfgfile)
-		fatal(EXIT_BAD_OPTIONS, "require --stdin or -c");
+	if (!main_use_stdin && !main_cfgfile && !opt_socket_path)
+		fatal(EXIT_BAD_OPTIONS, "require --stdin or -c or -S");
 	
-	// fork and setsid if requested, but not if PID 1 or interactive
-	if (opt_daemonize) {
-		if (getpid() == 1 || main_use_stdin)
-			log_warn("Ignoring --daemonize (see manual)");
-		else
-			daemonize();
-	}
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
 	
@@ -88,6 +83,10 @@ int main(int argc, char** argv) {
 
 	// Initialize controller object pool
 	ctl_init();
+	control_socket_init();
+
+	if (opt_socket_path && !control_socket_start(opt_socket_path))
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't create controller socket");
 	
 	if (main_cfgfile) {
 		if (0 == strcmp(main_cfgfile, "-"))
@@ -119,6 +118,14 @@ int main(int argc, char** argv) {
 			perror("mlockall");
 	}
 	
+	// fork and setsid if requested, but not if PID 1 or interactive
+	if (opt_daemonize) {
+		if (getpid() == 1 || main_use_stdin)
+			log_warn("Ignoring --daemonize (see manual)");
+		else
+			daemonize();
+	}
+
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
 	wake->now= gettime_mon_frac();
@@ -148,6 +155,9 @@ int main(int argc, char** argv) {
 		
 		// run state machine of each service that is active.
 		svc_run_active(wake);
+		
+		// possibly accept new controller connections
+		control_socket_run();
 		
 		// run controller state machines
 		ctl_run(wake);

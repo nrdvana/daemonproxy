@@ -7,6 +7,9 @@ daemonproxy - a proxy server for daemon/job management
   # static configuration
   daemonproxy [OPTIONS] -c CONFIG_FILE
   
+  # control via unix socket
+  daemonproxy [OPTIONS] -S PATH
+  
   # for interactive experiments
   daemonproxy --stdin
 

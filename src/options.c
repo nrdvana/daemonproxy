@@ -11,6 +11,7 @@ int     opt_fd_pool_count= 0;
 int     opt_fd_pool_size_each= 0;
 int     opt_svc_pool_count= 0;
 int     opt_svc_pool_size_each= 0;
+const char *opt_socket_path= NULL;
 
 static void parse_option(char shortname, char* longname, char ***argv);
 
@@ -92,6 +93,19 @@ Use STDIN+STDOUT as a controller communication pipe.
 */
 void set_opt_stdin(char **argv) {
 	main_use_stdin= true;
+}
+
+/*
+=item -S
+
+=item --socket PATH
+
+Listen on PATH for controller connections.
+
+=cut
+*/
+void opt_set_socket_path(char **argv) {
+	opt_socket_path= argv[0];
 }
 
 /*

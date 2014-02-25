@@ -60,6 +60,5 @@
 // be processed simultaneously, and later a controller script
 // and signal handler script to run simultaneously.
 #define CONTROLLER_MAX_CLIENTS        2
-#define CONTROLLER_SOCKET_NAME	"controller.sock"
 
 #define CONFIG_FILE_DEFAULT_PATH "/etc/daemonproxy.conf"

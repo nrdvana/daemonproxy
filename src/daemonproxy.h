@@ -69,6 +69,7 @@ extern int     opt_fd_pool_count;
 extern int     opt_fd_pool_size_each;
 extern int     opt_svc_pool_count;
 extern int     opt_svc_pool_size_each;
+extern const char * opt_socket_path;
 
 void parse_opts(char **argv);
 
@@ -93,6 +94,11 @@ struct service_s;
 typedef struct service_s service_t;
 
 void create_missing_dirs(char *path);
+
+void control_socket_init();
+void control_socket_run();
+bool control_socket_start(const char *path);
+void control_socket_stop();
 
 //----------------------------------------------------------------------------
 // controller.c interface
