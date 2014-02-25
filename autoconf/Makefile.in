@@ -21,6 +21,7 @@ runstatedir = $(localstatedir)/run
 mandir = @mandir@
 
 daemonproxy_src := fd.c service.c signal.c controller.c Contained_RBTree.c daemonproxy.c log.c strseg.c options.c control-socket.c
+autogen_src := $(srcdir)/signal_data.autogen.c $(srcdir)/options_data.autogen.c $(srcdir)/controller_data.autogen.c
 
 CFLAGS = @CFLAGS@ -MMD -MP -O2 -g3 -Wall
 CPPFLAGS = @CPPFLAGS@ -I. -I$(srcdir)
@@ -51,10 +52,10 @@ $(srcdir)/controller_data.autogen.c: $(srcdir)/controller.c $(scriptdir)/generat
 signal.o: $(srcdir)/signal_data.autogen.c
 
 $(srcdir)/sig_list.txt:
-	$(PERL) $(scriptdir)/generate_signal_list.pl > $@.tmp && mv $@.tmp $@
+	man 7 signal | perl -e 'while (<>) { print "$$_\n" for /(SIG\w+)/g }' | sort -u > $@.tmp && mv $@.tmp $@
 
 $(srcdir)/signal_data.autogen.c: $(srcdir)/sig_list.txt $(srcdir)/signal.c $(scriptdir)/generate_signal_data.pl
-	$(CPP) - - < $< | $(PERL) $(scriptdir)/generate_signal_data.pl > $@.tmp && mv $@.tmp $@
+	$(PERL) $(scriptdir)/generate_signal_data.pl < $(srcdir)/sig_list.txt > $@.tmp && mv $@.tmp $@
 
 options.o: $(srcdir)/options_data.autogen.c
 
@@ -71,7 +72,7 @@ install: daemonproxy daemonproxy.1.gz
 	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)/
 	$(INSTALL) -m 644 daemonproxy.1.gz $(DESTDIR)$(mandir)/man1/
 
-dist:
+dist: $(autogen_src)
 	$(PERL) $(scriptdir)/build_dist_tarball.pl
 
 clean:
