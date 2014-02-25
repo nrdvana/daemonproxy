@@ -9,7 +9,7 @@ use Time::HiRes 'sleep';
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin');
+$dp->run('-i');
 
 $dp->send("echo\tfoo");
 $dp->recv_ok( qr/^foo/m, 'test comm' );

@@ -8,7 +8,7 @@ use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
 
-$dp->run('--stdin');
+$dp->run('-i');
 
 $dp->send("typo");
 $dp->response_like(qr/^error\t.*typo/);

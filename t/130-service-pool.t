@@ -9,23 +9,23 @@ use Time::HiRes 'sleep';
 my $dp;
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--service-pool', '20x1K');
+$dp->run('-i', '--service-pool', '20x1K');
 $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--service-pool', '5x200');
+$dp->run('-i', '--service-pool', '5x200');
 $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--service-pool', '5x1G');
+$dp->run('-i', '--service-pool', '5x1G');
 $dp->recv_ok( qr/^warn.*maximum/, '1GB object gets truncated' );
 $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--service-pool', '6');
+$dp->run('-i', '--service-pool', '6');
 $dp->timeout(0.5);
 
 # Allocate 6 services.

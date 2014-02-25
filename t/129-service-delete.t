@@ -9,7 +9,7 @@ use Time::HiRes 'sleep';
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin');
+$dp->run('-i');
 $dp->timeout(0.5);
 
 $dp->send('service.args	foo	perl	-e	setpgrp;$|=1;print "ready\n";sleep 1000;');

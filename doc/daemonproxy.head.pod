@@ -11,7 +11,7 @@ daemonproxy - a proxy server for daemon/job management
   daemonproxy [OPTIONS] -S PATH
   
   # for interactive experiments
-  daemonproxy --stdin
+  daemonproxy [OPTIONS] -i
 
 =head1 DESCRIPTION
 

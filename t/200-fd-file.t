@@ -8,7 +8,7 @@ use Test::DaemonProxy;
 use Time::HiRes 'sleep';
 
 my $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '-v');
+$dp->run('-i', '-v');
 
 my $fname= $dp->temp_path . '/200-testfile.txt';
 

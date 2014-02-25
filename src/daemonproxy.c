@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
 	
 	// Check for required options
 	if (!main_use_stdin && !main_cfgfile && !opt_socket_path)
-		fatal(EXIT_BAD_OPTIONS, "require --stdin or -c or -S");
+		fatal(EXIT_BAD_OPTIONS, "require -i or -c or -S");
 	
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();

@@ -9,7 +9,7 @@ use Time::HiRes 'sleep';
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin');
+$dp->run('-i');
 
 my $fname= $dp->temp_path . '/202-testfile.txt';
 unlink( $fname );

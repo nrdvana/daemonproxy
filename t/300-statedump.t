@@ -9,7 +9,7 @@ use Time::HiRes 'sleep';
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin');
+$dp->run('-i');
 
 $dp->send("service.fds	foo	null	null	null");
 $dp->send("service.args	bar	a	b	c");

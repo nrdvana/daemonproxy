@@ -8,7 +8,7 @@ use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
 
-$dp->run('--stdin');
+$dp->run('-i');
 
 $dp->send("log.filter");
 $dp->recv_ok( qr/^log.filter	debug$/m, 'default filter is debug' );

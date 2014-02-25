@@ -8,7 +8,7 @@ use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
 
-$dp->run('--stdin');
+$dp->run('-i');
 
 $dp->send("blah\t" x 1000);
 $dp->recv_ok( qr/error\t.*long/, 'long line causes error' );

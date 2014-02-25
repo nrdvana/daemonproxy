@@ -9,23 +9,23 @@ use Time::HiRes 'sleep';
 my $dp;
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--fd-pool', '20x1K');
+$dp->run('-i', '--fd-pool', '20x1K');
 $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--fd-pool', '5x200');
+$dp->run('-i', '--fd-pool', '5x200');
 $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--fd-pool', '5x50M');
+$dp->run('-i', '--fd-pool', '5x50M');
 $dp->recv_ok( qr/^warn.*maximum/m, '50MB object gets truncated' );
 $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin', '--fd-pool', '1');
+$dp->run('-i', '--fd-pool', '1');
 $dp->recv_ok( qr/^warn.*minimum/m, 'increased to minimum file handle count' );
 
 # count handles

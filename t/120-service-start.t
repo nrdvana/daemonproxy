@@ -9,7 +9,7 @@ use Time::HiRes 'sleep', 'clock_gettime', 'CLOCK_MONOTONIC';
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin');
+$dp->run('-i');
 
 # Test return values
 for my $ret (0, 42, 255) {

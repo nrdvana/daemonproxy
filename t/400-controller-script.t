@@ -8,7 +8,7 @@ use Test::DaemonProxy;
 
 my $dp;
 $dp= Test::DaemonProxy->new;
-$dp->run('--stdin');
+$dp->run('-i');
 
 my $script= 'print STDERR ">>>> STARTING\n";'
 	.'$|=1; print "echo\ttest\n";'

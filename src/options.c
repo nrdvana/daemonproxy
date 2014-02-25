@@ -85,7 +85,9 @@ void set_opt_configfile(char** argv ) {
 }
 
 /*
-=item --stdin
+=item -i
+
+=item --interactive
 
 Use STDIN+STDOUT as a controller communication pipe.
 
@@ -117,7 +119,7 @@ Fork into the background.  This prints the new PID on stdout, closes stdin,
 stdout, and stderr, and calls setsid() to become a session leader.
 
 This option cannot be used when running as PID 1, and is incompatible with
---stdin, and suppresses all logging.  (until such time when I implement
+--interactive, and suppresses all logging.  (until such time when I implement
 redirecting the error log)
 
 =cut

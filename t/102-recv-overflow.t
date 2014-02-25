@@ -8,7 +8,7 @@ use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
 $dp->timeout(0.1);
-$dp->run('--stdin');
+$dp->run('-i');
 
 # Set short timeouts so that this test doesn't take too long to run
 $dp->send("conn.event_timeout	2	8");
