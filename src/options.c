@@ -1,3 +1,8 @@
+/* options.c - routines for parsing daemonproxy commandline options
+ * Copyright (C) 2014  Michael Conrad
+ * Distributed under GPLv2, see LICENSE
+ */
+
 #include "config.h"
 #include "daemonproxy.h"
 

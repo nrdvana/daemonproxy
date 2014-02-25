@@ -1,3 +1,8 @@
+/* daemonproxy.h - unified header for entire project
+ * Copyright (C) 2014  Michael Conrad
+ * Distributed under GPLv2, see LICENSE
+ */
+
 #ifndef DAEMONPROXY_H
 #define DAEMONPROXY_H
 

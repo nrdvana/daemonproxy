@@ -1,3 +1,8 @@
+/* service.c - routines for service objects
+ * Copyright (C) 2014  Michael Conrad
+ * Distributed under GPLv2, see LICENSE
+ */
+
 #include "config.h"
 #include "daemonproxy.h"
 #include "Contained_RBTree.h"

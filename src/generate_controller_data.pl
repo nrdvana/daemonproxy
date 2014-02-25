@@ -1,5 +1,18 @@
 #! /usr/bin/env perl
 
+=head1 DESCRIPTION
+
+Generates tables of commands and states for controller module, by
+parsing C source.
+
+=head1 COPYRIGHT
+
+Copyright (C) 2014 Michael Conrad <mike@nrdvana.net>
+
+Distributed under GPLv2, see LICENSE
+
+=cut
+
 use strict;
 use warnings;
 

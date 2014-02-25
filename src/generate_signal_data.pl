@@ -1,4 +1,18 @@
 #! /usr/bin/env perl
+
+=head1 DESCRIPTION
+
+Generates tables of signal names and numbers using output of C preprocessor
+on a specially crafted header containing a list of all signals.
+
+=head1 COPYRIGHT
+
+Copyright (C) 2014 Michael Conrad <mike@nrdvana.net>
+
+Distributed under GPLv2, see LICENSE
+
+=cut
+
 use strict;
 use warnings;
 
