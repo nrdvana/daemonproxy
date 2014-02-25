@@ -145,12 +145,12 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	// file descriptors must be nonblocking
 	if (recv_fd != -1)
 		if (fcntl(recv_fd, F_SETFL, O_NONBLOCK)) {
-			log_error("fcntl(O_NONBLOCK): errno = %s (%d)", strerror(errno), errno);
+			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
 	if (send_fd != -1 && send_fd != recv_fd)
 		if (fcntl(send_fd, F_SETFL, O_NONBLOCK)) {
-			log_error("fcntl(O_NONBLOCK): errno = %s (%d)", strerror(errno), errno);
+			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
 	// initialize object
@@ -189,10 +189,22 @@ void ctl_run(wake_t *wake) {
 		if (!ctl->state_fn)
 			continue;
 
-		// if input buffer not full, try reading more (in case script is blocking on output)
-		if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE)
-			ctl_read_more(ctl);
-		
+		if (ctl->recv_fd >= 0) {
+			// if waiting on input buffer, try reading more now
+			if (FD_ISSET(ctl->recv_fd, &wake->fd_read) || FD_ISSET(ctl->recv_fd, &wake->fd_err)) {
+				FD_CLR(ctl->recv_fd, &wake->fd_read);
+				FD_CLR(ctl->recv_fd, &wake->fd_err);
+				ctl_read_more(ctl);
+			}
+		}
+		if (ctl->send_fd >= 0) {
+			// if waiting on output buffer, try flushing now
+			if (FD_ISSET(ctl->send_fd, &wake->fd_write) || FD_ISSET(ctl->send_fd, &wake->fd_err)) {
+				FD_CLR(ctl->send_fd, &wake->fd_write);
+				FD_CLR(ctl->send_fd, &wake->fd_err);
+				ctl_flush_outbuf(ctl);
+			}
+		}
 		// Run (max 10) iterations of state machine while state returns true.
 		// The arbitrary limit of 10 helps keep our timestamps and signal
 		// delivery and reaped procs current.  (also mitigates infinite loops)
@@ -223,7 +235,7 @@ void ctl_run(wake_t *wake) {
 		// If anything was left un-written, wake on writable pipe
 		// Also, set/check timeout for writes
 		if (ctl->send_fd >= 0 && ctl->send_buf_pos > 0) {
-			if (!ctl_flush_outbuf(ctl)) {
+			if (!ctl_flush_outbuf(ctl) && ctl->send_fd >= 0) {
 				lateness= wake->now - ctl->send_blocked_ts;
 				
 				// If the controller script doesn't read its events before timeout,
@@ -1174,7 +1186,7 @@ due to the nature of signals)
 */
 bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count) {
 	const char *signame= sig_name_by_num(sig_num);
-	return ctl_write(NULL, "signal	SIG%s	%d	%d\n", signame? signame : "-?", (int)(sig_ts>>32), count);
+	return ctl_write(ctl, "signal	SIG%s	%d	%d\n", signame? signame : "-?", (int)(sig_ts>>32), count);
 }
 
 /*

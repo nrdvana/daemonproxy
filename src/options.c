@@ -67,7 +67,7 @@ void parse_option(char shortname, char* longname, char ***argv) {
 
 =over 24
 
-=item -c FILENAME
+=item -c
 
 =item --config FILENAME
 
@@ -133,7 +133,7 @@ void set_opt_failsafe(char **argv) {
 }
 
 /*
-=item -E TSV_ARGS
+=item -E
 
 =item --exit-exec TSV_ARGS
 

@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
 
 	// A handle to dev/null is mandatory...
-	f= open("/dev/null", O_RDWR);
+	f= open("/dev/null", O_RDWR|O_NOCTTY);
 	log_trace("open(/dev/null) => %d", f);
 	if (f < 0) {
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %s (%d)", strerror(errno), errno);
@@ -122,13 +122,13 @@ int main(int argc, char** argv) {
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
 	wake->now= gettime_mon_frac();
+	FD_ZERO(&wake->fd_read);
+	FD_ZERO(&wake->fd_write);
+	FD_ZERO(&wake->fd_err);
 	while (!main_terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
 		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
 		wake->max_fd= -1;
-		FD_ZERO(&wake->fd_read);
-		FD_ZERO(&wake->fd_write);
-		FD_ZERO(&wake->fd_err);
 		
 		sig_enable(false);
 		
@@ -152,33 +152,33 @@ int main(int argc, char** argv) {
 		// run controller state machines
 		ctl_run(wake);
 		
-		log_flush();
+		log_run();
 		
 		sig_enable(true);
 
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)
-		// If we don't need to wait, don't.  (we don't care about select() return code)
 		wake->now= gettime_mon_frac();
 		if (wake->next - wake->now > 0) {
 			tv.tv_sec= (long)((wake->next - wake->now) >> 32);
 			tv.tv_usec= (long)((((wake->next - wake->now)&0xFFFFFFFFLL) * 1000000) >> 32);
 			log_trace("wait up to %d.%d sec", tv.tv_sec, tv.tv_usec);
-			
-			ret= select(wake->max_fd+1, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv);
-			if (ret < 0) {
-				// shouldn't ever fail, but if not EINTR, at least log it and prevent
-				// looping too fast
-				if (errno != EINTR) {
-					log_error("select: %s", strerror(errno));
-					tv.tv_usec= 500000;
-					tv.tv_sec= 0;
-					select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
-				}
-			}
-			wake->now= gettime_mon_frac();
 		}
-		else log_trace("no wait at main loop");
+		else
+			tv.tv_sec= tv.tv_usec= 0;
+		
+		ret= select(wake->max_fd+1, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv);
+		if (ret < 0) {
+			// shouldn't ever fail, but if not EINTR, at least log it and prevent
+			// looping too fast
+			if (errno != EINTR) {
+				log_error("select: %s", strerror(errno));
+				tv.tv_usec= 500000;
+				tv.tv_sec= 0;
+				select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
+			}
+		}
+		wake->now= gettime_mon_frac();
 	}
 	
 	if (main_exec_on_exit)

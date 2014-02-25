@@ -167,11 +167,11 @@ void sig_run() {
 	}
 	
 	// Empty the signal pipe
-	while (read(sig_wake_rd, tmp, sizeof(tmp)) > 0);
+	if (FD_ISSET(sig_wake_rd, &wake->fd_read))
+		while (read(sig_wake_rd, tmp, sizeof(tmp)) > 0);
 	
 	// Wake on the signal pipe
 	FD_SET(sig_wake_rd, &wake->fd_read);
-	FD_SET(sig_wake_rd, &wake->fd_err);
 	if (sig_wake_rd > wake->max_fd)
 		wake->max_fd= sig_wake_rd;
 }

@@ -48,6 +48,7 @@ bool strseg_parse_size(strseg_t *string, int64_t *val);
 void log_init();
 bool log_write(int level, const char * msg, ...);
 bool log_flush();
+void log_run();
 extern int log_filter;
 void log_set_filter(int level);
 const char * log_level_name(int level);

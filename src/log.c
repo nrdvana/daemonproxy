@@ -77,6 +77,13 @@ void log_set_filter(int value) {
 		: value;
 }
 
+void log_run() {
+	if (FD_ISSET(log_fd, &wake->fd_write)) {
+		FD_CLR(log_fd, &wake->fd_write);
+		log_flush();
+	}
+}
+
 bool log_flush() {
 	int n;
 	
