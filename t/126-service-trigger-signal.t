@@ -14,8 +14,8 @@ $dp->timeout(2);
 
 $dp->send('service.args	foo	perl	-e	print "signal.clear\tSIGINT\t1\n";');
 $dp->send('service.fds	foo	control.event	control.cmd	stderr');
-$dp->send('service.triggers	foo	sig=SIGINT');
-$dp->recv_ok( qr/^service.triggers	foo	sig=SIGINT/m, 'trigger set' );
+$dp->send('service.autostart	foo	1	SIGINT');
+$dp->recv_ok( qr/^service.autostart	foo	1	SIGINT/m, 'trigger set' );
 
 kill INT => $dp->pid;
 $dp->recv_ok( qr/^service.state	foo	up/m, 'service started from sigint' );

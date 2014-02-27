@@ -58,7 +58,7 @@ COMMAND(ctl_cmd_echo,                "echo");
 COMMAND(ctl_cmd_statedump,           "statedump");
 COMMAND(ctl_cmd_svc_args,            "service.args");
 COMMAND(ctl_cmd_svc_fds,             "service.fds");
-COMMAND(ctl_cmd_svc_triggers,        "service.triggers");
+COMMAND(ctl_cmd_svc_autostart,       "service.autostart");
 COMMAND(ctl_cmd_svc_start,           "service.start");
 COMMAND(ctl_cmd_svc_signal,          "service.signal");
 COMMAND(ctl_cmd_svc_delete,          "service.delete");
@@ -851,26 +851,33 @@ to reset the count to zero, to prevent being started again)
 bool ctl_cmd_svc_autostart(controller_t *ctl) {
 	service_t *svc;
 	int64_t interval;
+	strseg_t tmp;
 
 	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
 		return false;
 
-	if (!ctl_get_arg_int(ctl, &interval))
-		return false;
-
-	if (interval < 1 || (interval >> 31)) {
+	tmp= ctl->command;
+	if (!ctl_get_arg_int(ctl, &interval)) {
+		// '-' means re-use old value
+		if (tmp.len >= 1 && tmp.data[0] == '-' && (tmp.len == 1 || tmp.data[1] == '\t')) {}
+		else
+			return false;
+	}
+	else if (interval < 1 || (interval >> 31)) {
 		ctl->command_error= "invalid interval";
 		return false;
 	}
-	interval <<= 32;
+	else {
+		interval <<= 32;
+		svc_set_restart_interval(svc, interval);
+	}
 
-	svc_set_restart_interval(svc, interval);
 	if (!svc_set_triggers(svc, ctl->command.len > 0? ctl->command : STRSEG(""))) {
 		ctl->command_error= "unable to set autostart triggers";
 		return false;
 	}
 	
-	ctl_notify_svc_autostart(NULL, svc_get_name(svc), interval, svc_get_triggers(svc));
+	ctl_notify_svc_autostart(NULL, svc_get_name(svc), svc_get_restart_interval(svc), svc_get_triggers(svc));
 	return true;
 }
 
@@ -1246,9 +1253,9 @@ Triggers for auto-starting the service have changed.
 */
 bool ctl_notify_svc_autostart(controller_t *ctl, const char *name, int64_t interval, const char *triggers_tsv) {
 	if (triggers_tsv && triggers_tsv[0])
-		ctl_write(ctl, "service.autostart	%s	%d	%s", name, (int)(interval>>32), triggers_tsv);
+		ctl_write(ctl, "service.autostart	%s	%d	%s\n", name, (int)(interval>>32), triggers_tsv);
 	else
-		ctl_write(ctl, "service.autostart	%s	-", name);
+		ctl_write(ctl, "service.autostart	%s	-\n", name);
 	return true;
 }
 

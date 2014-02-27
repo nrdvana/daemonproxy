@@ -415,7 +415,7 @@ bool svc_set_triggers(service_t *svc, strseg_t triggers_tsv) {
 	
 	// convert triggers to bit flags
 	sigemptyset(&sigs);
-	while (strseg_tok_next(&list, '\t', &trigger)) {
+	while (strseg_tok_next(&list, '\t', &trigger) && trigger.len > 0) {
 		if (0 == strseg_cmp(trigger, STRSEG("always")))
 			autostart= true;
 		else if ((signum= sig_num_by_name(trigger)) > 0) {
