@@ -125,7 +125,7 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
-bool ctl_notify_svc_triggers(controller_t *ctl, const char *name, int64_t interval, sigset_t *sigs);
+bool ctl_notify_svc_autostart(controller_t *ctl, const char *name, int64_t interval, const char *tsv_triggers);
 bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd);
 #define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error\t" msg "\n", ##__VA_ARGS__))
 
@@ -160,8 +160,11 @@ const char * svc_get_argv(service_t *svc);
 bool svc_set_fds(service_t *svc, strseg_t tsv_fields);
 const char * svc_get_fds(service_t *svc);
 
-void svc_get_triggers(service_t *svc, int64_t *autostart_interval, sigset_t *sigs);
-void svc_set_triggers(service_t *svc, int64_t autostart_interval, sigset_t *sigs);
+int64_t svc_get_restart_interval(service_t *svc);
+bool svc_set_restart_interval(service_t *svc, int64_t interval);
+
+const char * svc_get_triggers(service_t *svc);
+bool svc_set_triggers(service_t *svc, strseg_t triggers_tsv);
 
 // update service state machine when requested to start
 bool svc_handle_start(service_t *svc, int64_t when);

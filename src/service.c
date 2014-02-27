@@ -55,11 +55,12 @@ service_t *svc_active_list= NULL;   // linked list of active services
 service_t *svc_sigwake_list= NULL;  // linked list of services that can wake via signals
 int64_t svc_last_signal_ts= 0;      // last signal we saw, for triggering services.
 
-bool svc_list_resize(int new_limit);
-void svc_notify_state(service_t *svc);
-void svc_change_pid(service_t *svc, pid_t pid);
-void svc_do_exec(service_t *svc);
-void svc_set_active(service_t *svc, bool activate);
+static bool svc_list_resize(int new_limit);
+static void svc_notify_state(service_t *svc);
+static void svc_change_pid(service_t *svc, pid_t pid);
+static void svc_do_exec(service_t *svc);
+static void svc_set_active(service_t *svc, bool activate);
+static void svc_set_sigwake(service_t *svc, bool sigwake);
 static bool svc_check_sigwake(service_t *svc);
 static void svc_ctor(service_t *svc, int size, strseg_t name);
 static void svc_dtor(service_t *svc);
@@ -235,8 +236,8 @@ void svc_ctor(service_t *svc, int size, strseg_t name) {
 }
 
 void svc_dtor(service_t *svc) {
-	svc_set_active(svc, false);
-	svc_set_triggers(svc, 0, NULL);
+	svc_set_active(svc, false); // remove from 'active' linked list
+	svc_set_sigwake(svc, false); // remove from 'sigwake' linked list
 	if (svc->pid)
 		RBTreeNode_Prune( &svc->pid_index_node );
 	RBTreeNode_Prune( &svc->name_index_node );
@@ -390,30 +391,62 @@ bool svc_set_fds(service_t *svc, strseg_t new_fds) {
 	return true;
 }
 
-void svc_get_triggers(service_t *svc, int64_t *autostart_interval, sigset_t *sigs) {
-	if (autostart_interval) *autostart_interval= svc->auto_restart? svc->restart_interval : 0;
-	if (sigs) memcpy(sigs, &svc->autostart_signals, sizeof(sigset_t));
+int64_t svc_get_restart_interval(service_t *svc) {
+	return svc->restart_interval;
 }
 
-void svc_set_triggers(service_t *svc, int64_t autostart_interval, sigset_t *sigs) {
-	int i;
-	svc->auto_restart= (bool) autostart_interval;
-	svc->restart_interval= autostart_interval? autostart_interval : SERVICE_RESTART_INTERVAL;
-	svc->sigwake= false;
-	if (sigs) {
-		memcpy(&svc->autostart_signals, sigs, sizeof(sigset_t));
-		// Check for any signals in set.  Unfortunately posix doesn't give us much to work with.
-		for (i= 0; i < 1024; i++)
-			if (sigismember(sigs, i) == 1) {
-				log_trace("signal set is not empty");
-				svc->sigwake= true;
-				break;
-			}
-	}
-	else sigemptyset(&svc->autostart_signals);
+bool svc_set_restart_interval(service_t *svc, int64_t interval) {
+	if ((interval >> 32) < 1)
+		return false;
+	svc->restart_interval= interval;
+	return true;
+}
 
+const char * svc_get_triggers(service_t *svc) {
+	strseg_t val;
+	return svc_get_var(svc, STRSEG("triggers"), &val)? val.data : "";
+}
+
+bool svc_set_triggers(service_t *svc, strseg_t triggers_tsv) {
+	strseg_t list= triggers_tsv, trigger;
+	sigset_t sigs;
+	int signum;
+	bool autostart= false, enable_sigs= false;
+	
+	// convert triggers to bit flags
+	sigemptyset(&sigs);
+	while (strseg_tok_next(&list, '\t', &trigger)) {
+		if (0 == strseg_cmp(trigger, STRSEG("always")))
+			autostart= true;
+		else if ((signum= sig_num_by_name(trigger)) > 0) {
+			if (sigaddset(&sigs, signum) < 0)
+				return false;
+			enable_sigs= true;
+		}
+		else
+			return false;
+	}
+
+	if (!svc_set_var(svc, STRSEG("triggers"), &triggers_tsv))
+		return false;
+
+	svc->auto_restart= autostart;
+	svc->autostart_signals= sigs;
+	svc_set_sigwake(svc, enable_sigs);
+	
+	// finally, if a relevant signal is un-cleared, start the service.
+	if (svc->auto_restart || svc_check_sigwake(svc)) {
+		log_trace("Service needs started now");
+		svc_handle_start(svc, wake->now);
+	}
+
+	return true;
+}
+	
+static void svc_set_sigwake(service_t *svc, bool sigwake) {
+	svc->sigwake= sigwake;
 	// Add or remove this service from the sigwake list, as needed.
-	if (svc->sigwake && !svc->sigwake_prev_ptr) {
+	if (sigwake && !svc->sigwake_prev_ptr) {
 		log_trace("Adding service to sigwake_list");
 		svc->sigwake_next= svc_sigwake_list;
 		if (svc_sigwake_list)
@@ -421,22 +454,16 @@ void svc_set_triggers(service_t *svc, int64_t autostart_interval, sigset_t *sigs
 		svc_sigwake_list= svc;
 		svc->sigwake_prev_ptr= &svc_sigwake_list;
 	}
-	else if (!svc->sigwake && svc->sigwake_prev_ptr) {
+	else if (!sigwake && svc->sigwake_prev_ptr) {
 		log_trace("Removing service from sigwake_list");
 		if (svc->sigwake_next)
 			svc->sigwake_next->sigwake_prev_ptr= svc->sigwake_prev_ptr;
 		*svc->sigwake_prev_ptr= svc->sigwake_next;
 		svc->sigwake_prev_ptr= NULL;
 	}
-	
-	// finally, if a relevant signal is un-cleared, start the service.
-	if (svc->auto_restart || svc_check_sigwake(svc)) {
-		log_trace("Service needs started now");
-		svc_handle_start(svc, wake->now);
-	}
 }
 
-bool svc_check_sigwake(service_t *svc) {
+static bool svc_check_sigwake(service_t *svc) {
 	int signum, sig_count;
 	int64_t sig_ts;
 

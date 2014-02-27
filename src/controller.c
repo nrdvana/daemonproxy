@@ -565,8 +565,6 @@ bool ctl_state_dump_fds(controller_t *ctl) {
 }
 
 bool ctl_state_dump_services(controller_t *ctl) {
-	int64_t delay;
-	sigset_t sigs;
 	service_t *svc= svc_by_name(STRSEG(ctl->statedump_current), false);
 	if (!svc) ctl->command_substate= 0;
 	/* Statedump command, part 2: iterate services and dump each one.
@@ -593,8 +591,7 @@ bool ctl_state_dump_services(controller_t *ctl) {
 		ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc));
  case 5:
 		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 5; break; }
-		svc_get_triggers(svc, &delay, &sigs);
-		ctl_notify_svc_triggers(ctl, svc_get_name(svc), delay, &sigs);
+		ctl_notify_svc_autostart(ctl, svc_get_name(svc), svc_get_restart_interval(svc), svc_get_triggers(svc));
 	}
  }//switch
 	if (svc) { // If we broke the loop early, record name of where to resume
@@ -828,58 +825,52 @@ bool ctl_cmd_svc_fds(controller_t *ctl) {
 }
 
 /*
-=item service.triggers NAME [auto[=INTERVAL]] [sig=SIGNAL,...]
+=item service.autostart NAME MIN_INTERVAL [TRIGGER]...
 
-Set a list of triggers that cause the service to start.  A value of 'auto'
-causes the service to restart automatically.  The restart interval can optionally
-be specified, and is the minimum number of seconds between start events.  A value
-of "sig" may be used to cause this service to start in response to daemonproxy
-receiving a signal.  It is followed with a comma separated list of signal names.
+Start the service (no more rapidly than MIN_INTERVAL seconds apart) if any of
+the triggers are true.
+
+MIN_INTERVAL counts from the time of the previous start attempt, so if the
+service has been running longer than MIN_INTERVAL and it exits while a trigger
+is true, it will be restarted immediately.  MIN_INTERVAL cannot be less than 1
+second.  A MIN_INTERVAL of '-' disables autostart.
+
+Currently, triggers are 'always', SIGINT, SIGHUP, SIGTERM, SIGUSR1, SIGUSR2,
+SIGQUIT.
+
+'always' means the service will always start if it is not already running.
+Using 'always' with a large MIN_INTERVAL can give you a cron-like effect, if
+you want a periodicaly-run service and don't care what specific time it runs.
+
+Signal triggers cause the service to start if the pending count of that signal
+is nonzero.  (and the service is expected to issue the command "signal.clear"
+to reset the count to zero, to prevent being started again)
 
 =cut
 */
-bool ctl_cmd_svc_triggers(controller_t *ctl) {
+bool ctl_cmd_svc_autostart(controller_t *ctl) {
 	service_t *svc;
-	strseg_t arg, arg2, sigtext;
-	int64_t autostart= 0, val;
-	sigset_t sigs;
+	int64_t interval;
 
 	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
 		return false;
-	
-	sigemptyset(&sigs);
-	while (ctl_get_arg(ctl, &arg)) {
-		if (strseg_tok_next(&arg, '=', &arg2)) {
-			log_trace("trigger arg \"%.*s\"", arg.len, arg.data);
-			if (0 == strseg_cmp(arg2, STRSEG("auto"))) {
-				autostart= SERVICE_RESTART_INTERVAL;
-				if (arg.len > 0) {
-					if (!strseg_atoi(&arg, &autostart) || arg.len > 0 || (autostart >> 32)) {
-						ctl_notify_error(ctl, "invalid auto= interval");
-						continue;
-					}
-					if (autostart < 1) autostart= 1;
-					autostart= autostart << 32;
-				}
-				continue;
-			}
-			else if (0 == strseg_cmp(arg2, STRSEG("sig"))) {
-				while (strseg_tok_next(&arg, ',', &arg2)) {
-					sigtext= arg2;
-					val= sig_num_by_name(sigtext);
-					if (!(val || (strseg_atoi(&sigtext, &val) && sigtext.len <= 0 && !(val >> 32)))
-						|| sigaddset(&sigs, (int) val) < 0)
-						ctl_notify_error(ctl, "Invalid signal name/number \"%.*s\"", arg2.len, arg2.data);
-				}
-				continue;
-			}
-		}
-		ctl_notify_error(ctl, "Unknown trigger %.*s", arg.len, arg.data);
-	}
 
-	log_trace("setting trigger %lld", autostart);
-	svc_set_triggers(svc, autostart, &sigs);
-	ctl_notify_svc_triggers(NULL, svc_get_name(svc), autostart, &sigs);
+	if (!ctl_get_arg_int(ctl, &interval))
+		return false;
+
+	if (interval < 1 || (interval >> 31)) {
+		ctl->command_error= "invalid interval";
+		return false;
+	}
+	interval <<= 32;
+
+	svc_set_restart_interval(svc, interval);
+	if (!svc_set_triggers(svc, ctl->command.len > 0? ctl->command : STRSEG(""))) {
+		ctl->command_error= "unable to set autostart triggers";
+		return false;
+	}
+	
+	ctl_notify_svc_autostart(NULL, svc_get_name(svc), interval, svc_get_triggers(svc));
 	return true;
 }
 
@@ -1253,27 +1244,11 @@ Triggers for auto-starting the service have changed.
 
 =cut
 */
-bool ctl_notify_svc_triggers(controller_t *ctl, const char *name, int64_t interval, sigset_t *sigs) {
-	const char *signame;
-	int i;
-	bool first= true;
-	
-	ctl_write(ctl, "service.triggers	%s", name);
-	if (interval)
-		ctl_write(ctl, interval == SERVICE_RESTART_INTERVAL? "	auto":"	auto=%d", (int)(interval>>32));
-
-	if (sigs) {
-		for (i= 1; i < 255; i++) {
-			if (sigismember(sigs, i) == 1) {
-				if ((signame= sig_name_by_num(i)))
-					ctl_write(ctl, "%s%s", first? "	sig=SIG" : ",SIG", signame);
-				else
-					ctl_write(ctl, "%s%d", first? "	sig=" : ",", i);
-				first= false;
-			}
-		}
-	}
-	ctl_write(ctl, "\n");
+bool ctl_notify_svc_autostart(controller_t *ctl, const char *name, int64_t interval, const char *triggers_tsv) {
+	if (triggers_tsv && triggers_tsv[0])
+		ctl_write(ctl, "service.autostart	%s	%d	%s", name, (int)(interval>>32), triggers_tsv);
+	else
+		ctl_write(ctl, "service.autostart	%s	-", name);
 	return true;
 }
 
