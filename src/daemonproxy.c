@@ -213,28 +213,32 @@ void daemonize() {
 	}
 }
 
+static bool is_open(int fd) {
+	return fcntl(fd, F_GETFL) != -1;
+}
+
 bool create_standard_handles(int dev_null) {
 	return fd_new_file(STRSEG("null"), dev_null,
 				(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true },
 				STRSEG("/dev/null"))
 
-		&& fd_new_file(STRSEG("stdin"), 0,
+		&& fd_new_file(STRSEG("stdin"), is_open(0)? 0 : -1,
 				(fd_flags_t){ .special= true, .read= true, .write= false, .is_const= true },
 				STRSEG("standard-in of daemonproxy"))
 		
-		&& fd_new_file(STRSEG("stdout"), 1,
+		&& fd_new_file(STRSEG("stdout"), is_open(1)? 1 : -1,
 				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
 				STRSEG("standard-out of daemonproxy"))
 		
-		&& fd_new_file(STRSEG("stderr"), 2,
+		&& fd_new_file(STRSEG("stderr"), is_open(2)? 2 : -1,
 				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
 				STRSEG("standard-err of daemonproxy"))
 		
-		&& fd_new_file(STRSEG("control.event"), -2,
+		&& fd_new_file(STRSEG("control.event"), -1,
 				(fd_flags_t){ .special= true, .read= true, .write= false, .is_const= true },
 				STRSEG("daemonproxy event stream"))
 
-		&& fd_new_file(STRSEG("control.cmd"), -3,
+		&& fd_new_file(STRSEG("control.cmd"), -1,
 				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
 				STRSEG("daemonproxy commanbd pipe"))
 	;

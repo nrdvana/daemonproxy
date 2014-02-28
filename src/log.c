@@ -7,6 +7,8 @@
 #include "daemonproxy.h"
 
 int  log_filter= LOG_LEVEL_DEBUG;
+char log_dest_fd_name_buf[NAME_BUF_SIZE];
+strseg_t log_dest_fd_name= (strseg_t){ log_dest_fd_name_buf, 0 };
 char log_buffer[1024];
 int  log_buf_pos= 0;
 int  log_fd= 2;
@@ -20,9 +22,57 @@ const char * log_level_name(int level) {
 	return "unknown";
 }
 
+static bool log_flush();
+static bool log_fd_attach();
+
 void log_init() {
+	log_fd= 2;
+	log_fd_attach();
+}
+
+int log_get_fd() {
+	return log_fd;
+}
+
+void log_fd_reset() {
+	if (log_fd >= 0) {
+		FD_CLR(log_fd, &wake->fd_write);
+		log_fd= -1;
+	}
+}
+
+void log_fd_set_name(strseg_t name) {
+	log_fd_reset();
+
+	assert(name.len < sizeof(log_dest_fd_name_buf));
+	memcpy(log_dest_fd_name_buf, name.data, name.len);
+	log_dest_fd_name_buf[name.len]= '\0';
+	log_dest_fd_name.len= name.len;
+	
+	log_fd_attach();
+}
+
+static bool log_fd_attach() {
+	fd_t *fd;
+	// If the FD the log was going to got closed, log_fd is set to -1.
+	// To resume logging, we check to see if the named FD has become available
+	// again.
+	// Note: log module gets initialized before fd module, but log_dest_fd_name
+	// doesn't get set until afterward.
+	if (log_fd < 0 && log_dest_fd_name.len > 0 && (fd= fd_by_name(log_dest_fd_name)))
+		log_fd= fd_get_fdnum(fd);
+
+	if (log_fd < 0)
+		return false;
+	
 	if (fcntl(log_fd, F_SETFL, O_NONBLOCK))
-		log_error("unable to set stderr to nonblocking mode!  logging might block daemonproxy!");
+		log_error("unable to set log fd to nonblocking mode!  logging might block daemonproxy!");
+
+	if (log_buf_pos > 0)
+		FD_SET(log_fd, &wake->fd_write);
+	else
+		FD_CLR(log_fd, &wake->fd_write);
+	return true;
 }
 
 bool log_level_by_name(strseg_t name, int *lev) {
@@ -78,13 +128,16 @@ void log_set_filter(int value) {
 }
 
 void log_run() {
+	if (log_fd < 0 && !log_fd_attach())
+		return;
+
 	if (FD_ISSET(log_fd, &wake->fd_write)) {
 		FD_CLR(log_fd, &wake->fd_write);
 		log_flush();
 	}
 }
 
-bool log_flush() {
+static bool log_flush() {
 	int n;
 	
 	while (log_buf_pos > 0) {

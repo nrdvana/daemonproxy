@@ -128,6 +128,11 @@ void fd_delete(fd_t *fd) {
 	}
 	// close descriptor.
 	if (fd->fd >= 0) {
+		// If this object was the target of daemonproxy's logging, tell the
+		// log module it needs to find the new value of this named FD.
+		if (log_get_fd() == fd->fd)
+			log_fd_reset();
+		
 		int result= close(fd->fd);
 		log_trace("close(%d) => %d", fd->fd, result);
 	}

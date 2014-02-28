@@ -69,6 +69,7 @@ COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
 COMMAND(ctl_cmd_exit,                "exit");
 COMMAND(ctl_cmd_log_filter,          "log.filter");
+COMMAND(ctl_cmd_log_dest,            "log.dest");
 COMMAND(ctl_cmd_event_pipe_timeout,  "conn.event_timeout");
 COMMAND(ctl_cmd_signal_clear,        "signal.clear");
 COMMAND(ctl_cmd_terminate_exec_args, "terminate.exec_args");
@@ -1021,6 +1022,45 @@ bool ctl_cmd_log_filter(controller_t *ctl) {
 
 	ctl_write(ctl, "log.filter\t%s\n", log_level_name(log_filter) );
 	return true;
+}
+
+/*
+=item log.dest fd FD_NAME
+
+Redirect daaemonproxy's logging to named file descriptor.  FD_NAME must be a
+valid name, but it does not need to exist yet.  The logging system will check
+this name until it is available, and then resume logging.  Likewise if the
+descriptor by that name is deleted or re-used.
+
+WARNING: the file descriptor will be put into non-blocking mode, so it is best
+not to share this descriptor with other processes, especially processes that
+might reset it to a blocking state and cause daemonproxy to hang on a blocked
+logging pipe. (However, if you're one of those types who preferrs your daemons
+freeze up when the logging is interrupted, then here's your workaround.)
+
+=cut
+*/
+bool ctl_cmd_log_dest(controller_t *ctl) {
+	strseg_t arg, fd_name;
+	fd_t *fd;
+
+	if (!ctl_get_arg(ctl, &arg))
+		return false;
+
+	if (strseg_cmp(arg, STRSEG("fd")) == 0) {
+		if (!ctl_get_arg_fd(ctl, false, false, &fd_name, &fd))
+			return false;
+
+		if (!fd)
+			ctl_write(ctl, "warning	fd \"%.*s\" does not exist\n", fd_name.len, fd_name.data);
+
+		log_fd_set_name(fd_name);
+		return true;
+	}
+	else {
+		ctl->command_error= "Unknown logging type";
+		return false;
+	}
 }
 
 /*

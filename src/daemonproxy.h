@@ -37,6 +37,9 @@ int  strseg_cmp(strseg_t a, strseg_t b);
 bool strseg_atoi(strseg_t *str, int64_t *int_out);
 bool strseg_parse_size(strseg_t *string, int64_t *val);
 
+//----------------------------------------------------------------------------
+// Log.c interface
+
 #define LOG_LEVEL_FATAL 3
 #define LOG_LEVEL_ERROR 2
 #define LOG_LEVEL_WARN 1
@@ -47,8 +50,12 @@ bool strseg_parse_size(strseg_t *string, int64_t *val);
 
 void log_init();
 bool log_write(int level, const char * msg, ...);
-bool log_flush();
 void log_run();
+
+int  log_get_fd();
+void log_fd_reset();
+void log_fd_set_name(strseg_t name);
+
 extern int log_filter;
 void log_set_filter(int level);
 const char * log_level_name(int level);
