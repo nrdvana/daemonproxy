@@ -65,8 +65,8 @@ static bool remove_any_socket(const char *path) {
 	}
 }
 
-bool control_socket_start(const char *path) {
-	if (strlen(path) >= sizeof(control_socket_addr.sun_path)) {
+bool control_socket_start(strseg_t path) {
+	if (path.len >= sizeof(control_socket_addr.sun_path)) {
 		errno= ENAMETOOLONG;
 		return false;
 	}
@@ -76,14 +76,15 @@ bool control_socket_start(const char *path) {
 		control_socket_stop();
 	
 	// copy new name into address
-	strcpy(control_socket_addr.sun_path, path);
+	memcpy(control_socket_addr.sun_path, path.data, path.len);
+	control_socket_addr.sun_path[path.len]= '\0';
 	if (!control_socket_addr.sun_path[0]) {
 		errno= EINVAL;
 		return false;
 	}
 	
 	// If this is a new name, possibly remove any leftover socket in our way
-	if (!remove_any_socket(path))
+	if (!remove_any_socket(control_socket_addr.sun_path))
 		return false;
 	
 	// create the unix socket
@@ -94,7 +95,7 @@ bool control_socket_start(const char *path) {
 	}
 	
 	if (bind(control_socket, (struct sockaddr*) &control_socket_addr, (socklen_t) sizeof(control_socket_addr)) < 0)
-		log_error("bind(control_socket, %s: %s", path, strerror(errno));
+		log_error("bind(control_socket, %s: %s", control_socket_addr.sun_path, strerror(errno));
 	else if (listen(control_socket, 2) < 0)
 		log_error("listen(control_socket): %s", strerror(errno));
 	else if (fcntl(control_socket, F_SETFL, O_NONBLOCK) < 0)

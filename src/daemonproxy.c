@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
 	ctl_init();
 	control_socket_init();
 
-	if (opt_socket_path && !control_socket_start(opt_socket_path))
+	if (opt_socket_path && !control_socket_start(STRSEG(opt_socket_path)))
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't create controller socket");
 	
 	if (opt_config_file) {

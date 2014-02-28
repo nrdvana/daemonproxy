@@ -97,7 +97,7 @@ void create_missing_dirs(char *path);
 
 void control_socket_init();
 void control_socket_run();
-bool control_socket_start(const char *path);
+bool control_socket_start(strseg_t path);
 void control_socket_stop();
 
 //----------------------------------------------------------------------------

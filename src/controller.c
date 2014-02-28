@@ -62,6 +62,8 @@ COMMAND(ctl_cmd_svc_autostart,       "service.autostart");
 COMMAND(ctl_cmd_svc_start,           "service.start");
 COMMAND(ctl_cmd_svc_signal,          "service.signal");
 COMMAND(ctl_cmd_svc_delete,          "service.delete");
+COMMAND(ctl_cmd_socket_create,       "socket.create");
+COMMAND(ctl_cmd_socket_delete,       "socket.delete");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
@@ -1042,6 +1044,51 @@ bool ctl_cmd_signal_clear(controller_t *ctl) {
 		return false;
 
 	sig_mark_seen(sig, count);
+	return true;
+}
+
+/*
+=item socket.create OPTIONS PATH
+
+Create the controller socket at the designated path.  Options must be empty
+or the literal string "-". (options will be added in the future)
+
+Only one controller socket may exist.  If create is called a second time, the
+previous socket will be unlinked.
+
+=cut
+*/
+bool ctl_cmd_socket_create(controller_t *ctl) {
+	strseg_t opts, path;
+
+	if (!ctl_get_arg(ctl, &opts))
+		return false;
+
+	if (!ctl_get_arg(ctl, &path))
+		return false;
+
+	if (opts.len > 1 || (opts.len != 0 && opts.data[0] != '-')) {
+		ctl->command_error= "Invalid options";
+		return false;
+	}
+	
+	if (!control_socket_start(path)) {
+		ctl->command_error= "Failed to create control socket";
+		return false;
+	}
+	return true;
+}
+
+/*
+=item socket.delete
+
+Takes no arguments.  Cleans up the previously created socket.  If no socket
+exists, this is a no-op.
+
+=cut
+*/
+bool ctl_cmd_socket_delete(controller_t *ctl) {
+	control_socket_stop();
 	return true;
 }
 
