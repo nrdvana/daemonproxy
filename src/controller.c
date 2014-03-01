@@ -11,6 +11,7 @@ typedef bool ctl_state_fn_t(struct controller_s *);
 
 struct controller_s {
 	ctl_state_fn_t *state_fn;
+	int id;
 	
 	int  recv_fd;
 	bool append_final_newline;
@@ -132,13 +133,15 @@ controller_t *ctl_new(int recv_fd, int send_fd) {
 }
 
 controller_t *ctl_alloc() {
-	controller_t *ctl;
-	for (ctl= client; ctl < client + CONTROLLER_MAX_CLIENTS; ctl++)
-		if (!ctl->state_fn) {
+	int i;
+
+	for (i= 0; i < CONTROLLER_MAX_CLIENTS; i++)
+		if (!client[i].state_fn) {
 			// non-null state marks it as allocated
-			memset(ctl, 0, sizeof(controller_t));
-			ctl->state_fn= &ctl_state_free;
-			return ctl;
+			memset(&client[i], 0, sizeof(controller_t));
+			client[i].state_fn= &ctl_state_free;
+			client[i].id= i;
+			return &client[i];
 		}
 	return NULL;
 }
@@ -166,7 +169,7 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 }
 
 void ctl_dtor(controller_t *ctl) {
-	log_debug("destroying client %d", ctl - client);
+	log_debug("destroying client %d", ctl->id);
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
 	if (ctl->send_fd >= 0) close(ctl->send_fd);
 	ctl->state_fn= ctl_state_free;
@@ -174,6 +177,7 @@ void ctl_dtor(controller_t *ctl) {
 
 void ctl_free(controller_t *ctl) {
 	ctl->state_fn= NULL;
+	main_notify_controller_freed(ctl);
 }
 
 /** Run all processing needed for the controller for this time slice
@@ -361,7 +365,7 @@ bool ctl_state_next_command(controller_t *ctl) {
 	// We now have a complete line
 	ctl->line_len= eol - ctl->recv_buf + 1;
 	*eol= '\0';
-	log_debug("controller got line: \"%s\"", ctl->recv_buf);
+	log_debug("client[%d] command: \"%s\"", ctl->id, ctl->recv_buf);
 	ctl->state_fn= ctl_state_run_command;
 	return true;
 }
@@ -1399,19 +1403,19 @@ bool ctl_read_more(controller_t *ctl) {
 	n= read(ctl->recv_fd, ctl->recv_buf + ctl->recv_buf_pos, CONTROLLER_RECV_BUF_SIZE - ctl->recv_buf_pos);
 	if (n <= 0) {
 		e= errno;
-		log_trace("controller input read failed: %d %s", n, strerror(e));
+		log_trace("controller[%d] input read failed: %d %s", ctl->id, n, strerror(e));
 		if (n == 0) {
 			// EOF.  Close file descriptor
 			close(ctl->recv_fd);
 			ctl->recv_fd= -1;
 		}
 		else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			log_error("read(controller pipe): %s", strerror(e));
+			log_error("read(client[%d])): %s", ctl->id, strerror(e));
 		errno= e;
 		return false;
 	}
 	ctl->recv_buf_pos += n;
-	log_trace("controller read %d bytes (%d in recv buf)", n, ctl->recv_buf_pos);
+	log_trace("controller[%d] read %d bytes (%d in recv buf)", ctl->id, n, ctl->recv_buf_pos);
 	return true;
 }
 
@@ -1457,7 +1461,7 @@ bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 			if (p != dest[i]->send_buf_pos)
 				goto check_space;
 			
-			log_debug("can't write msg, %d > buffer free %d", msg_len, buf_free);
+			log_debug("client[%d]: can't write msg, %d > buffer free %d", dest[i]->id, msg_len, buf_free);
 			// if it is a broadcast, we mark the client outbuf as having overflowed
 			//if (!single_dest)
 				dest[i]->send_overflow= true;
@@ -1484,7 +1488,7 @@ bool ctl_write(controller_t *single_dest, const char *fmt, ... ) {
 				msg_data= dest[i]->send_buf + dest[i]->send_buf_pos; // save for next iter
 			}
 			dest[i]->send_buf_pos += msg_len;
-			log_trace("appended %d to out_buf (%d pending)", msg_len, dest[i]->send_buf_pos);
+			log_debug("client[%d] event: \"%.*s\"", dest[i]->id, msg_len, msg_data);
 		}
 	}
 	
@@ -1510,8 +1514,8 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 		for (eol= ctl->send_buf_pos-1; eol >= 0; eol--)
 			if (ctl->send_buf[eol] == '\n')
 				break;
-		log_trace("controller write buffer %d bytes pending, final eol at %d, %s",
-			ctl->send_buf_pos, eol, ctl->send_overflow? "(overflow flag set)" : "");
+		log_trace("controller[%d] write buffer %d bytes pending, final eol at %d, %s",
+			ctl->id, ctl->send_buf_pos, eol, ctl->send_overflow? "(overflow flag set)" : "");
 		// if no send_fd, discard buffer
 		if (ctl->send_fd == -1)
 			ctl->send_buf_pos= 0;
@@ -1528,7 +1532,7 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 		else {
 			n= write(ctl->send_fd, ctl->send_buf, eol+1);
 			if (n > 0) {
-				log_trace("controller flushed %d bytes", n);
+				log_trace("controller[%d] flushed %d bytes", ctl->id, n);
 				ctl->send_buf_pos -= n;
 				ctl->send_blocked_ts= 0;
 				memmove(ctl->send_buf, ctl->send_buf + n, ctl->send_buf_pos);
@@ -1541,7 +1545,7 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 				return false;
 			} else {
 				// fatal error
-				log_debug("controller outbuf write failed: %s", strerror(errno));
+				log_debug("controller[%d] outbuf write failed: %s", ctl->id, strerror(errno));
 				close(ctl->send_fd);
 				ctl->send_fd= -1;
 				return true;  // the buffer is now "flushed" for all practical purposes
