@@ -27,27 +27,28 @@ void sig_handler(int sig) {
 	static int64_t prev= 0;
 	int64_t now= gettime_mon_frac();
 
-	// We have a requirement that no two signals share a timestamp.
-	if (now == prev) now++;
-	// We also use '0' as a NULL value, so avoid it
-	if (!now) now++;
-	prev= now;
-	
-	for (i= 0; i < signals_count; i++)
-		if (signals[i].signum == sig)
-			break;
-	
-	// Not seen before? allocate next signal slot
-	if (i == signals_count) {
-		if (signals_count < SIGNAL_STATUS_SLOTS)
-			signals_count++;
-		else // none free? fail by re-using final slot
-			signals[--i].number_pending= 0;
-		signals[i].signum= sig;
+	if (sig != SIGCHLD) {
+		// We have a requirement that no two signals share a timestamp.
+		if (now == prev) now++;
+		// We also use '0' as a NULL value, so avoid it
+		if (!now) now++;
+		prev= now;
+		// See if we have a slot for this signal already
+		for (i= 0; i < signals_count; i++)
+			if (signals[i].signum == sig)
+				break;
+		// Not seen before? allocate next signal slot
+		if (i == signals_count) {
+			if (signals_count < SIGNAL_STATUS_SLOTS)
+				signals_count++;
+			else // none free? fail by re-using final slot
+				signals[--i].number_pending= 0;
+			signals[i].signum= sig;
+		}
+		// Record the receipt of the signal in the slot
+		signals[i].number_pending++;
+		signals[i].last_received_ts= now;
 	}
-	
-	signals[i].number_pending++;
-	signals[i].last_received_ts= now;
 	
 	// put character in pipe to wake main loop
 	if (write(sig_wake_wr, "", 1) != 1)
@@ -59,7 +60,6 @@ void fatal_sig_handler(int sig) {
 	fatal(EXIT_BROKEN_PROGRAM_STATE, "Received signal %s%s (%d)", signame? "SIG":"???", signame? signame : "", sig);
 	// No fallback available.  Probably can't actually recover from fatal signal...
 	// TODO: consider some sort of longjmp + state recovery
-	_exit(EXIT_BROKEN_PROGRAM_STATE);
 }
 
 struct signal_spec_s {
