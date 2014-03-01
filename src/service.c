@@ -383,9 +383,9 @@ bool svc_set_fds(service_t *svc, strseg_t new_fds) {
 	svc->uses_control_event= false;
 	svc->uses_control_cmd= false;
 	while (strseg_tok_next(&new_fds, '\t', &name)) {
-		if (strseg_cmp(name, STRSEG("cotrol.event")))
+		if (strseg_cmp(name, STRSEG("control.event")) == 0)
 			svc->uses_control_event= true;
-		if (strseg_cmp(name, STRSEG("control.cmd")))
+		if (strseg_cmp(name, STRSEG("control.cmd")) == 0)
 			svc->uses_control_cmd= true;
 	}
 	return true;
@@ -702,7 +702,8 @@ void svc_do_exec(service_t *svc) {
 	char **argv, *arg_spec, *p;
 	strseg_t fd_spec, tmp, fd_name;
 
-	// clear signal mask
+	// clear signal mask and handlers
+	log_trace("resetting signal mask");
 	sig_reset_for_exec();
 	
 	fd_spec.data= svc_get_fds(svc);
@@ -737,25 +738,27 @@ void svc_do_exec(service_t *svc) {
 	for (i= 0; i < fd_count; i++) {
 		// If file descriptor is less than the max destination, dup it to a higher number
 		// We have no way to know which higher numbers are safe, so repeat until we get one.
+		log_trace("fd_list[%d]= %d", i, fd_list[i]);
 		while (fd_list[i] >= 0 && fd_list[i] < fd_count) {
 			fd_list[i]= dup(fd_list[i]);
 			if (fd_list[i] < 0) {
-				log_error("failed to dup file descriptor %d", fd_list[i]);
+				log_error("Failed to dup file descriptor %d", fd_list[i]);
 				abort();
 			}
+			log_trace("  dup'd to %d", fd_list[i]);
 		}
 	}
 	// Now dup2 each into its correct slot, and close the rest
 	for (i= 0; i < fd_count; i++) {
 		if (fd_list[i] >= 0) {
 			if (dup2(fd_list[i], i) < 0) {
-				log_error("failed to dup file descriptor %d to %d", fd_list[i], i);
+				log_error("Failed to dup file descriptor %d to %d", fd_list[i], i);
 				abort();
 			}
 		}
 		else close(i);
 	}
-	// close all fd we arent keeping
+	// close all fd we aren't keeping
 	while (i < FD_SETSIZE) close(i++);
 	
 	// just modify the buffer in the service object, since we're execing soon
