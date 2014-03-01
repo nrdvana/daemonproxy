@@ -99,8 +99,9 @@ once and cannot be "re-loaded" later.
 */
 void set_opt_configfile(char** argv ) {
 	struct stat st;
-	if (stat(argv[0], &st))
-		fatal(EXIT_BAD_OPTIONS, "Cannot stat configfile \"%s\"", argv[0]);
+	if (strcmp(argv[0], "-") != 0)
+		if (stat(argv[0], &st))
+			fatal(EXIT_BAD_OPTIONS, "Cannot stat configfile \"%s\"", argv[0]);
 	opt_config_file= argv[0];
 }
 

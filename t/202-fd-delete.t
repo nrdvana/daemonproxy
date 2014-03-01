@@ -23,8 +23,8 @@ $dp->recv_ok( qr/^fd.state	temp.r	pipe	from	temp.w/m, 'pipe read end' );
 $dp->recv_ok( qr/^fd.state	temp.w	pipe	to	temp.r/m, 'pipe write end' );
 $dp->discard_response;
 
-$dp->send("fd.delete	stdin");
-$dp->recv_ok( qr/^error\t/m, 'can\'t delete stdin' );
+$dp->send("fd.delete	null");
+$dp->recv_ok( qr/^error\t/m, 'can\'t delete null' );
 
 $dp->send("fd.delete	control.cmd");
 $dp->recv_ok( qr/^error\t/m, 'can\'t delete control.cmd' );

@@ -8,23 +8,25 @@
 
 bool     main_terminate= false;
 int      main_exitcode= 0;
+controller_t *interactive_controller;
 
 wake_t main_wake;
 
 wake_t *wake= &main_wake;
 
 // Parse options and apply to global vars; calls fatal() on failure.
-bool create_standard_handles(int dev_null);
 bool set_exec_on_exit(strseg_t arguments_tsv);
+static bool register_open_fds();
+static bool setup_interactive_mode();
+static bool setup_config_file(const char *path);
+static void fd_to_dev_null(fd_t *fd);
 static void daemonize();
 
 int main(int argc, char** argv) {
-	int wstat, f, ret;
+	int wstat, ret;
 	pid_t pid;
 	struct timeval tv;
-	bool config_on_stdin= false;
 	service_t *svc;
-	controller_t *ctl;
 	wake_t wake_instance;
 	
 	memset(&wake_instance, 0, sizeof(wake_instance));
@@ -47,27 +49,20 @@ int main(int argc, char** argv) {
 	if (!opt_interactive && !opt_config_file && !opt_socket_path)
 		fatal(EXIT_BAD_OPTIONS, "require -i or -c or -S");
 	
-	// Set up signal handlers and signal mask and signal self-pipe
-	sig_init();
-	
 	// Initialize file descriptor object pool and indexes
 	fd_init();
 	if (opt_fd_pool_count > 0 && opt_fd_pool_size_each > 0)
 		if (!fd_preallocate(opt_fd_pool_count, opt_fd_pool_size_each))
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
+	if (!fd_init_special_handles())
+		fatal(EXIT_BROKEN_PROGRAM_STATE, "Can't initialize all special handles");
 
-	// A handle to dev/null is mandatory...
-	f= open("/dev/null", O_RDWR|O_NOCTTY);
-	log_trace("open(/dev/null) => %d", f);
-	if (f < 0) {
-		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %s (%d)", strerror(errno), errno);
-		// if we're in failsafe mode, fatal doesn't exit()
-		log_error("Services using 'null' descriptor will get closed handles instead!");
-		f= -1;
-	}
-	if (!create_standard_handles(f))
-		fatal(EXIT_INVALID_ENVIRONMENT, "Can't allocate standard handle objects");
+	if (!register_open_fds())
+		fatal(EXIT_BAD_OPTIONS, "Not enough FD objects to register all open FDs");
 
+	// Set up signal handlers and signal mask and signal self-pipe
+	sig_init();
+	
 	// Initialize service object pool and indexes
 	svc_init();
 	if (opt_svc_pool_count > 0 && opt_svc_pool_size_each > 0)
@@ -81,30 +76,14 @@ int main(int argc, char** argv) {
 	if (opt_socket_path && !control_socket_start(STRSEG(opt_socket_path)))
 		fatal(EXIT_INVALID_ENVIRONMENT, "Can't create controller socket");
 	
-	if (opt_config_file) {
-		if (0 == strcmp(opt_config_file, "-"))
-			config_on_stdin= true;
-		else {
-			f= open(opt_config_file, O_RDONLY|O_NONBLOCK|O_NOCTTY);
-			if (f == -1)
-				fatal(EXIT_INVALID_ENVIRONMENT, "failed to open config file \"%s\": %s (%d)",
-					opt_config_file, strerror(errno), errno);
-			else if (!(ctl= ctl_new(f, -1))) {
-				close(f);
-				fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to allocate controller for config file!");
-			}
-			else
-				ctl_set_auto_final_newline(ctl, true);
-		}
-	}
-	
-	if (opt_interactive || config_on_stdin) {
-		if (!(ctl= ctl_new(0, 1)))
-			fatal(EXIT_BROKEN_PROGRAM_STATE, "failed to initialize stdio controller client!");
-		else
-			ctl_set_auto_final_newline(ctl, config_on_stdin);
-	}
-	
+	if (opt_interactive)
+		if (!setup_interactive_mode())
+			fatal(EXIT_INVALID_ENVIRONMENT, "stdin/stdout are not usable!");
+
+	if (opt_config_file)
+		if (!setup_config_file(opt_config_file))
+			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to process config file");
+
 	if (opt_mlockall) {
 		// Lock all memory into ram. init should never be "swapped out".
 		if (mlockall(MCL_CURRENT | MCL_FUTURE))
@@ -113,7 +92,7 @@ int main(int argc, char** argv) {
 	
 	// fork and setsid if requested, but not if PID 1 or interactive
 	if (opt_daemonize) {
-		if (getpid() == 1 || opt_interactive || config_on_stdin)
+		if (getpid() == 1 || opt_interactive)
 			log_warn("Ignoring --daemonize (see manual)");
 		else
 			daemonize();
@@ -158,7 +137,7 @@ int main(int argc, char** argv) {
 		log_run();
 		
 		sig_enable(true);
-
+		
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)
 		wake->now= gettime_mon_frac();
@@ -189,9 +168,24 @@ int main(int argc, char** argv) {
 	return main_exitcode;
 }
 
-void daemonize() {
-	pid_t pid= fork();
-	if (pid < 0)
+void main_notify_controller_freed(controller_t *ctl) {
+	if (interactive_controller && ctl == interactive_controller) {
+		log_debug("interactive controller was freed");
+		// treat this as an exit request
+		if (!opt_terminate_guard) {
+			main_terminate= true;
+			wake->next= wake->now;
+		}
+		interactive_controller= NULL;
+	}
+}
+
+static void daemonize() {
+	fd_t *fd;
+	int fdnum, i;
+	pid_t pid;
+
+	if ((pid= fork()) < 0)
 		fatal(EXIT_INVALID_ENVIRONMENT, "fork: %s", strerror(errno));
 	// The parent writes PID to stdout, and exits immediately
 	else if (pid > 0) {
@@ -205,43 +199,117 @@ void daemonize() {
 	// We don't need to do an additional fork (which prevents acquiring a controlling tty)
 	// because all further calls to 'open' are passed the "NOCTTY" flag.
 	else {
-		close(0);
-		close(1);
-		close(2);
+		// For stdin/stdout/stderr, close the handle if it was originally open
+		// and hasn't been claimed by something like config file on stdin.
+		// Then make the named FD a dup of /dev/null
+		// (claimed descriptors will be dup'd copies of /dev/null already)
+		for (i= 0; i < 3; i++) {
+			fd= fd_by_name(i == 0? STRSEG("stdin") : i == 1? STRSEG("stdout") : STRSEG("stderr"));
+			log_trace("fd %d %s fdnum is %d", i, fd? fd_get_name(fd) : "null", fd? fd_get_fdnum(fd) : -1);
+			if (fd && (fdnum= fd_get_fdnum(fd)) == i) {
+				fd_to_dev_null(fd);
+				close(i);
+			}
+		}
+		// and become our own session and process group
 		if (setsid() == -1)
 			fatal(EXIT_INVALID_ENVIRONMENT, "setsid: %s", strerror(errno));
 	}
 }
 
-static bool is_open(int fd) {
-	return fcntl(fd, F_GETFL) != -1;
+// Add all open file descriptors as named FD objects
+static bool register_open_fds() {
+	int i, fdnum;
+	bool result= true, is_open;
+	char buffer[16];
+
+	for (i= 0; i < 1024; i++) {
+		is_open= i != fd_dev_null && fcntl(i, F_GETFL) != -1;
+		// for stdin,stdout,stderr, we create it as a dup of dev_null if it isn't open.
+		// for all others, we only create it if it is open.
+		if (is_open || i < 3) {
+			if (i < 3)
+				strcpy(buffer, i == 0? "stdin" : i == 1? "stdout" : "stderr");
+			else
+				snprintf(buffer, sizeof(buffer), "fd_%d", i);
+
+			fdnum= is_open? i : dup(fd_dev_null);
+			log_trace("registering %s as %d", buffer, fdnum);
+			result= fd_new_file(STRSEG(buffer), fdnum,
+					(fd_flags_t){ .special= true, .is_const= false },
+					STRSEG("initially-open file descriptor"))
+				&& result;
+		}
+	}
+	return result;
 }
 
-bool create_standard_handles(int dev_null) {
-	return fd_new_file(STRSEG("null"), dev_null,
-				(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true },
-				STRSEG("/dev/null"))
+static bool setup_interactive_mode() {
+	controller_t *ctl;
+	fd_t *stdin_fd= fd_by_name(STRSEG("stdin"));
+	fd_t *stdout_fd= fd_by_name(STRSEG("stdout"));
 
-		&& fd_new_file(STRSEG("stdin"), is_open(0)? 0 : -1,
-				(fd_flags_t){ .special= true, .read= true, .write= false, .is_const= true },
-				STRSEG("standard-in of daemonproxy"))
-		
-		&& fd_new_file(STRSEG("stdout"), is_open(1)? 1 : -1,
-				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
-				STRSEG("standard-out of daemonproxy"))
-		
-		&& fd_new_file(STRSEG("stderr"), is_open(2)? 2 : -1,
-				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
-				STRSEG("standard-err of daemonproxy"))
-		
-		&& fd_new_file(STRSEG("control.event"), -1,
-				(fd_flags_t){ .special= true, .read= true, .write= false, .is_const= true },
-				STRSEG("daemonproxy event stream"))
+	if (!stdin_fd || !stdout_fd) {
+		log_error("stdin/stdout not available");
+		return false;
+	}
 
-		&& fd_new_file(STRSEG("control.cmd"), -1,
-				(fd_flags_t){ .special= true, .read= false, .write= true, .is_const= true },
-				STRSEG("daemonproxy commanbd pipe"))
-	;
+	if (!(ctl= ctl_new(0, 1))) {
+		log_error("Failed to allocate controller");
+		return false;
+	}
+
+	// if command stream is interrupted, do not execute the final command
+	interactive_controller= ctl;
+	ctl_set_auto_final_newline(ctl, false);
+
+	// stdin is used now, so make the named "stdin" handle a dup of /dev/null
+	// if dup() fails, they become -1, which is the desired fallback.
+	
+	fd_to_dev_null(stdin_fd);
+	fd_to_dev_null(stdout_fd);
+	return true;
+}
+
+static void fd_to_dev_null(fd_t *fd) {
+	int fdnum= dup(fd_dev_null);
+	log_trace("reassigning %s to %d", fd_get_name(fd), fdnum);
+	fd_set_fdnum(fd, fdnum);
+}
+
+static bool setup_config_file(const char *path) {
+	fd_t *stdin_fd= NULL;
+	controller_t *ctl;
+	int f;
+	
+	if (0 == strcmp(path, "-")) {
+		stdin_fd= fd_by_name(STRSEG("stdin"));
+		if (!stdin_fd || fd_get_fdnum(stdin_fd) != 0) {
+			log_error("stdin not available");
+			return false;
+		}
+		f= 0;
+	}
+	else {
+		f= open(path, O_RDONLY|O_NONBLOCK|O_NOCTTY);
+		if (f == -1) {
+			log_error("Failed to open config file \"%s\": %s",
+				path, strerror(errno));
+			return false;
+		}
+	}
+	
+	if (!(ctl= ctl_new(f, -1))) {
+		if (f != 0) close(f);
+		log_error("Failed to allocate controller");
+		return false;
+	}
+	
+	ctl_set_auto_final_newline(ctl, true);
+	// stdin is used, so make the named "stdin" handle a dup of /dev/null
+	if (stdin_fd)
+		fd_to_dev_null(stdin_fd);
+	return true;
 }
 
 // returns monotonic time as a 32.32 fixed-point number 

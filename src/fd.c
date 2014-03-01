@@ -37,6 +37,7 @@ int fd_list_count= 0, fd_list_limit= 0;
 RBTree fd_by_name_index;
 void *fd_obj_pool= NULL;
 int fd_obj_pool_size_each= 0;
+int fd_dev_null;
 
 // Set minimum FD size of struct + fd name + 31 chars for partial file name
 const int fd_min_obj_size= sizeof(fd_t) + NAME_BUF_SIZE + 32;
@@ -55,6 +56,31 @@ int fd_by_name_compare(void *data, RBTreeNode *node) {
 
 void fd_init() {
 	RBTree_Init( &fd_by_name_index, fd_by_name_compare );
+}
+
+bool fd_init_special_handles() {
+	fd_dev_null= open("/dev/null", O_RDWR|O_NOCTTY);
+	log_trace("open(/dev/null) => %d", fd_dev_null);
+
+	if (fd_dev_null < 0) {
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't open /dev/null: %s", strerror(errno));
+		// if we're in failsafe mode, fatal doesn't exit()
+		log_error("Services using 'null' descriptor will get closed handles instead!");
+		fd_dev_null= -1;
+	}
+	
+	return
+		fd_new_file(STRSEG("null"), fd_dev_null,
+			(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true },
+			STRSEG("/dev/null"))
+		&&
+		fd_new_file(STRSEG("control.cmd"), -1,
+			(fd_flags_t){ .special= true, .write= true, .is_const= true },
+			STRSEG("daemonproxy command pipe"))
+		&&
+		fd_new_file(STRSEG("control.event"), -1,
+			(fd_flags_t){ .special= true, .read= true, .is_const= true },
+			STRSEG("daemonproxy event stream"));
 }
 
 bool fd_preallocate(int count, int size_each) {
@@ -263,6 +289,15 @@ fd_t * fd_by_name(strseg_t name) {
 	RBTreeSearch s= RBTree_Find( &fd_by_name_index, &name );
 	if (s.Relation == 0)
 		return (fd_t*) s.Nearest->Object;
+	return NULL;
+}
+
+// This happens so seldom (only at startup in main()), its not worth a R/B Tree.
+fd_t * fd_by_num(int fdnum) {
+	int i;
+	for (i= 0; i< fd_list_count; i++)
+		if (fd_list[i]->fd == fdnum)
+			return fd_list[i];
 	return NULL;
 }
 

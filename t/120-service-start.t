@@ -30,7 +30,7 @@ for my $sig (qw: SIGTERM SIGHUP SIGINT SIGKILL :) {
 # Test uptime and timestamps
 $dp->timeout(4);
 $dp->send('service.args	foo	perl	-e	use Time::HiRes qw:clock_gettime CLOCK_MONOTONIC sleep:; $|=1; print clock_gettime(CLOCK_MONOTONIC).qq{\n};sleep 2;print clock_gettime(CLOCK_MONOTONIC).qq{\n};');
-$dp->send("service.fds	foo	null	stdout	stdout");
+$dp->send("service.fds	foo	null	stderr	stderr");
 $dp->send("service.start	foo");
 $dp->recv_ok( qr!^service.state\tfoo\tup\t(\d+)!m, 'service up' );
 my $t_start= clock_gettime(CLOCK_MONOTONIC);

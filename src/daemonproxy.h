@@ -6,6 +6,15 @@
 #ifndef DAEMONPROXY_H
 #define DAEMONPROXY_H
 
+struct fd_s;
+typedef struct fd_s fd_t;
+
+struct service_s;
+typedef struct service_s service_t;
+
+struct controller_s;
+typedef struct controller_s controller_t;
+
 // Get CLOCK_MONOTONIC time as 32.32 fixed-point number
 int64_t gettime_mon_frac();
 
@@ -90,15 +99,11 @@ bool set_exec_on_exit(strseg_t args);
 extern bool    main_terminate;
 extern int     main_exitcode;
 extern wake_t *wake;
+extern void main_notify_controller_freed(controller_t *ctl);
 
 extern const char *  version_git_tag;
 extern const int64_t version_build_ts;
 extern const char *  version_git_head;
-
-struct fd_s;
-typedef struct fd_s fd_t;
-struct service_s;
-typedef struct service_s service_t;
 
 void create_missing_dirs(char *path);
 
@@ -210,10 +215,12 @@ typedef struct fd_flags_s {
 } fd_flags_t;
 
 extern const int fd_min_obj_size, fd_max_obj_size;
+extern int fd_dev_null;
 
 // Initialize the fd pool from a static chunk of memory
 void fd_init();
 bool fd_preallocate(int count, int size_each);
+bool fd_init_special_handles();
 
 const char* fd_get_name(fd_t *fd);
 int         fd_get_fdnum(fd_t *fd);
@@ -233,6 +240,7 @@ void fd_delete(fd_t *fd);
 
 #define fd_check_name svc_check_name
 fd_t * fd_by_name(strseg_t name);
+fd_t * fd_by_num(int fdnum);
 fd_t * fd_by_fd(int fd);
 fd_t * fd_iter_next(fd_t *current, const char *from_name);
 

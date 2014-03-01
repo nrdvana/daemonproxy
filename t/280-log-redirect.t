@@ -7,7 +7,7 @@ use lib 't/lib';
 use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
-
+$dp->timeout(0.5);
 $dp->run('-i', '-vv');
 
 my $fname= $dp->temp_path . '/280-logdata.txt';
@@ -58,7 +58,7 @@ $dp->recv_ok( qr/^service.state	check_pipe	down.*exit	0/m, 'check_pipe sees debu
 # now overflow the pipe
 for (1..4000) {
 	$dp->send("echo	". "x"x 100);
-	$dp->recv( qr/^x{100}/m ) or die;
+	$dp->recv_stdout( qr/^x{100}/m ) or die;
 }
 
 # then redirect back to file.  The file should contain a "warning: lost %d log messages"
