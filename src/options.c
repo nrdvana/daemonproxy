@@ -110,7 +110,9 @@ void set_opt_configfile(char** argv ) {
 
 =item --interactive
 
-Use STDIN+STDOUT as a controller communication pipe.
+Use STDIN+STDOUT as a controller communication pipe.  Daemonproxy will
+terminate at EOF (unless exit-guard is set; then it will keep running
+in the background).
 
 =cut
 */
@@ -123,7 +125,10 @@ void set_opt_stdin(char **argv) {
 
 =item --socket PATH
 
-Listen on PATH for controller connections.
+Listen on PATH for controller connections.  This is not needed for your
+controller script, but might be helpful for debugging or receiving external
+events (but your controller script is the better place to receive external
+events).  By default, daemonproxy doesn't listen to anything.
 
 =cut
 */
@@ -140,8 +145,7 @@ Fork into the background.  This prints the new PID on stdout, closes stdin,
 stdout, and stderr, and calls setsid() to become a session leader.
 
 This option cannot be used when running as PID 1, and is incompatible with
---interactive, and suppresses all logging.  (until such time when I implement
-redirecting the error log)
+--interactive, and suppresses the default logging.  (see: log.dest command)
 
 =cut
 */
@@ -177,7 +181,7 @@ void set_opt_failsafe(char **argv) {
 exec() args in any trappable exit scenario.
 
 This causes daemonproxy to exec into another program on any condition which
-would otherwise cause daemonproxy to exit.  Tis includes anything from normal
+would otherwise cause daemonproxy to exit.  This includes anything from normal
 program termination to fatal signals like SIGSEGV.
 
 =cut
@@ -301,10 +305,8 @@ void set_opt_svc_prealloc(char **argv) {
 
 =item --mlockall
 
-Call mlockall() after allocating structures.
-
-This is primarily intended for use with the fixed-size memory pools for
-services and file handles when running as process 1.
+Call mlockall() after allocating structures.  This is primarily intended for
+use with --fd-pool or --service-pool when running as process 1.
 
 =cut
 */
@@ -317,7 +319,7 @@ void set_opt_mlockall(char **argv) {
 
 =item --verbose
 
-Enable another level of logging output.
+Enable another level of logging output.  (see also: log.filter command)
 
 =cut
 */
@@ -330,7 +332,7 @@ void set_opt_verbose(char** argv) {
 
 =item --quiet
 
-Suppress another level of logging output.
+Suppress another level of logging output.  (see also: log.filter command)
 
 =cut
 */
