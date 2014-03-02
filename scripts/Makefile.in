@@ -2,6 +2,7 @@ SHELL = /bin/sh
 PERL = perl
 POD2MAN = pod2man
 GZIP = gzip
+CURRENT_UNIX_TIMESTAMP = $(shell date "+%s")
 
 all: daemonproxy daemonproxy.1
 
@@ -12,7 +13,7 @@ prefix = @prefix@
 exec_prefix = @exec_prefix@
 bindir = @bindir@
 srcdir = @srcdir@/../src
-scriptdir = @srcdir@/../scripts
+scriptdir = @srcdir@
 docdir = @srcdir@/../doc
 datarootdir = @datarootdir@
 sysconfdir = @sysconfdir@
@@ -34,14 +35,15 @@ LIBS = @LIBS@
 	@test -e $(@:.o=.c) || ln -s $< $(@:.o=.c)
 	$(CC) -o $@ $(CPPFLAGS) -c $(@:.o=.c) $(CFLAGS)
 
-daemonproxy: $(daemonproxy_src:.c=.o)
-	@echo Generating version.c
-	@( echo '#include "config.h"'; \
-	   echo 'const char *  version_git_tag = "'`git tag | tail -n 1`'";'; \
-	   echo 'const int64_t version_build_ts = '`date +%s`';'; \
-	   echo 'const char *  version_git_head = "TODO: see Makefile.in";'; \
-	) > version.autogen.c
-	$(CC) -o version.autogen.o $(CPPFLAGS) -c version.autogen.c $(CFLAGS)
+daemonproxy: $(daemonproxy_src:.c=.o) version.autogen.c
+	@if [ -f "$(scriptdir)/version.dist" ]; then \
+		cp -f "$(scriptdir)/version.dist" version.autogen.c; \
+	else \
+		echo Generating version.c; \
+		env PROJ_ROOT="$(scriptdir)/.." $(PERL) "$(scriptdir)/generate_version_data.pl" > version.autogen.c.tmp \
+			&& mv version.autogen.c.tmp version.autogen.c; \
+	fi;
+	$(CC) -o version.autogen.o $(CPPFLAGS) -DCURRENT_UNIX_TIMESTAMP=$(CURRENT_UNIX_TIMESTAMP) -c version.autogen.c $(CFLAGS)
 	$(CC) -o $@ $(CPPFLAGS) $^ version.autogen.o $(CFLAGS) $(LDFLAGS) $(LIBS)
 
 controller.o: $(srcdir)/controller_data.autogen.c

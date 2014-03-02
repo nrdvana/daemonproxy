@@ -1,4 +1,4 @@
 /build
-/autoconf/configure
-/autoconf/autom4te.cache
+/scripts/configure
+/scripts/autom4te.cache
 /src/*.autogen.c

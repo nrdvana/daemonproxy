@@ -4,17 +4,17 @@ PROVE = prove
 all: build/Makefile
 	$(MAKE) -C build all
 
-build/Makefile build/config.h: autoconf/configure autoconf/Makefile.in autoconf/config.h.in
-	mkdir -p build && cd build && ../autoconf/configure
+build/Makefile build/config.h: scripts/configure scripts/Makefile.in scripts/config.h.in
+	mkdir -p build && cd build && ../scripts/configure
 
-autoconf/configure: autoconf/configure.ac
-	cd autoconf && autoconf
+scripts/configure: scripts/configure.ac
+	cd scripts && autoconf
 
 clean:
 	$(MAKE) -C build clean
 
 dist:
-	make -C build dist
+	$(MAKE) -C build dist
 
 test:
 	$(MAKE) -C build daemonproxy
@@ -23,4 +23,4 @@ test:
 install:
 	$(MAKE) -C build install
 
-.PHONY: test all clean distclean install
+.PHONY: test all clean dist install

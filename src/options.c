@@ -348,7 +348,8 @@ Quick usage synopsis.
 =cut
 */
 void show_help(char **argv) {
-	printf("daemonproxy version %s\noptions:\n", version_git_tag);
+	printf("daemonproxy version %d.%d.%d%s\noptions:\n",
+		version_major, version_minor, version_release, version_suffix);
 	const struct option_table_entry_s *entry;
 	for (entry= option_table; entry->handler; entry++)
 		if (entry->help)
@@ -372,12 +373,13 @@ other text is subject to change.
 void show_version(char **argv) {
 	struct tm cal;
 	localtime_r(&version_build_ts, &cal);
-	printf("daemonproxy version %s\n"
+	printf("daemonproxy version %d.%d.%d%s\n"
 		" build timestamp: %lld (%4d-%02d-%02d %02d:%02d:%02d)\n"
-		" git HEAD: %s\n",
-		version_git_tag, (long long) version_build_ts,
+		" git HEAD: %s%s\n",
+		version_major, version_minor, version_release, version_suffix,
+		(long long) version_build_ts,
 		cal.tm_year+1900, cal.tm_mon+1, cal.tm_mday, cal.tm_hour, cal.tm_min, cal.tm_sec,
-		version_git_head);
+		version_git_head, version_git_dirty? " (dirty)":"");
 	
 	// now exit, unless they also specified exec-on-exit
 	fatal(EXIT_NO_OP, "");

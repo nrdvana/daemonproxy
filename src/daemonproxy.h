@@ -101,9 +101,13 @@ extern int     main_exitcode;
 extern wake_t *wake;
 extern void main_notify_controller_freed(controller_t *ctl);
 
-extern const char *  version_git_tag;
-extern const int64_t version_build_ts;
-extern const char *  version_git_head;
+const int     version_major;
+const int     version_minor;
+const int     version_release;
+const char *  version_suffix;
+const int64_t version_build_ts;
+const char *  version_git_head;
+const bool    version_git_dirty;
 
 void create_missing_dirs(char *path);
 

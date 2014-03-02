@@ -1,5 +1,5 @@
 AC_PREREQ([2.68])
-AC_INIT([daemonproxy], [0.5], [mike@nrdvana.net])
+AC_INIT([daemonproxy], [0], [mike@nrdvana.net])
 AC_CONFIG_SRCDIR([config.h.in])
 AC_CONFIG_HEADERS([config.h])
 
