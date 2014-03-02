@@ -14,7 +14,7 @@ clean:
 	$(MAKE) -C build clean
 
 dist:
-	$(MAKE) -C build dist
+	env PROJ_ROOT=. $(PERL) scripts/build_dist_tarball.pl
 
 test:
 	$(MAKE) -C build daemonproxy

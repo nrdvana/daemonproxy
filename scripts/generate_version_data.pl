@@ -1,5 +1,18 @@
 #! /usr/bin/env perl
 
+=head1 DESCRIPTION
+
+Generates version.autogen.c from the version number in ChangeLog, the hostname,
+and the git HEAD.
+
+=head1 COPYRIGHT
+
+Copyright (C) 2014 Michael Conrad <mike@nrdvana.net>
+
+Distributed under GPLv2, see LICENSE
+
+=cut
+
 use strict;
 use warnings;
 
@@ -52,10 +65,14 @@ sub c_str {
 
 my $suffix_c_str= c_str($suffix);
 my $git_c_str= c_str($commit);
+my $canonical= "$major.$minor.$release$suffix";
 
 print <<END;
 #include "config.h"
 
+/*
+canonical=$canonical
+*/
 const int     version_major=     $major;
 const int     version_minor=     $minor;
 const int     version_release=   $release;
