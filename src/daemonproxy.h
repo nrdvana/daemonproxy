@@ -105,7 +105,7 @@ const int     version_major;
 const int     version_minor;
 const int     version_release;
 const char *  version_suffix;
-const int64_t version_build_ts;
+const time_t  version_build_ts;
 const char *  version_git_head;
 const bool    version_git_dirty;
 
@@ -118,9 +118,6 @@ void control_socket_stop();
 
 //----------------------------------------------------------------------------
 // controller.c interface
-
-struct controller_s;
-typedef struct controller_s controller_t;
 
 // Initialize controller state machine.
 void ctl_init();

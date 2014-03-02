@@ -44,6 +44,8 @@ struct service_s {
 	sigset_t autostart_signals;
 };
 
+extern char **environ;
+
 // Service list - a vector of service references.
 service_t
 	**svc_list= NULL;
@@ -239,6 +241,8 @@ int64_t svc_get_reap_ts(service_t *svc) {
 static bool svc_get_var(service_t *svc, strseg_t name, strseg_t *value_out) {
 	strseg_t val, key, vars= svc->vars;
 
+	assert(name.len >= 0);
+
 	while (vars.len > 0 && strseg_tok_next(&vars, '\0', &val)) {
 		if (strseg_tok_next(&val, '=', &key) && 0 == strseg_cmp(key, name)) {
 			if (value_out) *value_out= val;
@@ -260,6 +264,9 @@ static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
 	char *buf= (char*) svc->vars.data;
 	bool found= false;
 	strseg_t oldval, key, tail= svc->vars;
+
+	assert(name.len >= 0);
+	assert(!value || value->len >= 0);
 
 	// See if we have a variable of this name yet
 	while (tail.len > 0 && strseg_tok_next(&tail, '\0', &oldval)) {
@@ -749,7 +756,8 @@ void svc_do_exec(service_t *svc) {
 	argv[++i]= NULL;
 	
 	p= NULL;
-	execvpe(argv[0], argv, &p);
+	environ= &p;
+	execvp(argv[0], argv);
 	log_error("exec(%s, ...) failed: %s", argv[0], strerror(errno));
 	_exit(EXIT_INVALID_ENVIRONMENT);
 }

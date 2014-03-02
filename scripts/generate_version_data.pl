@@ -77,7 +77,7 @@ const int     version_major=     $major;
 const int     version_minor=     $minor;
 const int     version_release=   $release;
 const char *  version_suffix=    $suffix_c_str;
-const int64_t version_build_ts=  CURRENT_UNIX_TIMESTAMP;
+const time_t  version_build_ts=  CURRENT_UNIX_TIMESTAMP;
 const char *  version_git_head=  $git_c_str;
 const bool    version_git_dirty= $dirty;
 END
