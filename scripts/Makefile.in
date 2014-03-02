@@ -2,6 +2,7 @@ SHELL = /bin/sh
 PERL = perl
 POD2MAN = pod2man
 GZIP = gzip
+INSTALL = install
 CURRENT_UNIX_TIMESTAMP = $(shell date "+%s")
 
 all: daemonproxy daemonproxy.1
@@ -52,6 +53,8 @@ daemonproxy.1.gz: daemonproxy.1
 	$(GZIP) < $< > $@.tmp && mv $@.tmp $@
 
 install: daemonproxy daemonproxy.1.gz
+	$(INSTALL) -d $(DESTDIR)$(bindir)/
+	$(INSTALL) -d $(DESTDIR)$(mandir)/man1/
 	$(INSTALL) -m 755 daemonproxy $(DESTDIR)$(bindir)/
 	$(INSTALL) -m 644 daemonproxy.1.gz $(DESTDIR)$(mandir)/man1/
 

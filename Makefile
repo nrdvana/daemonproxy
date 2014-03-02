@@ -1,8 +1,9 @@
 MAKE = make
 PROVE = prove
+PERL = perl
 
 all: build/Makefile
-	$(MAKE) -C build all
+	$(MAKE) -C build -j4 all
 
 build/Makefile build/config.h: scripts/configure scripts/Makefile.in scripts/config.h.in
 	mkdir -p build && cd build && ../scripts/configure

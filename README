@@ -87,8 +87,8 @@ errors, or to exec() to a cleanup script in case of fatal error.
 It is a single-thread process written in non-blocking style as a
 collection of state machines, and it has no external library
 dependencies, so it is a natural fit for static compilation.
-It also has very few lines of code!  Memory footprint numbers are
-not yet available.
+It also has relatively few lines of code!  Memory footprint numbers
+are not yet available.
 
 other uses
 ==========
