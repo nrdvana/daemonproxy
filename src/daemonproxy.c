@@ -236,7 +236,7 @@ static bool register_open_fds() {
 			fdnum= is_open? i : dup(fd_dev_null);
 			log_trace("registering %s as %d", buffer, fdnum);
 			result= fd_new_file(STRSEG(buffer), fdnum,
-					(fd_flags_t){ .special= true, .is_const= false },
+					(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= false },
 					STRSEG("initially-open file descriptor"))
 				&& result;
 		}
