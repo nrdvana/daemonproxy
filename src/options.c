@@ -241,7 +241,7 @@ size that might not be large enough for long filenames.
 =cut
 */
 void set_opt_fd_prealloc(char **argv) {
-	int64_t val_n, val_m= FD_POOL_OBJ_SIZE;
+	int64_t val_n, val_m= FD_DATA_SIZE_DEFAULT;
 
 	parse_NxM(STRSEG(argv[0]), &val_n, &val_m);
 
@@ -253,12 +253,12 @@ void set_opt_fd_prealloc(char **argv) {
 		val_n= FD_POOL_SIZE_MAX;
 	}
 
-	if (val_m < fd_min_obj_size) {
-		log_warn("fd obj size increased to minimum of %d", fd_min_obj_size);
-		val_m= fd_min_obj_size;
-	} else if (val_m > fd_max_obj_size) {
-		log_warn("fd obj size limited to maximum of %d", fd_max_obj_size);
-		val_m= fd_max_obj_size;
+	if (val_m < FD_DATA_SIZE_MIN) {
+		log_warn("fd obj size increased to minimum of %d", FD_DATA_SIZE_MIN);
+		val_m= FD_DATA_SIZE_MIN;
+	} else if (val_m > FD_DATA_SIZE_MAX) {
+		log_warn("fd obj size limited to maximum of %d", FD_DATA_SIZE_MAX);
+		val_m= FD_DATA_SIZE_MAX;
 	}
 
 	opt_fd_pool_count= (int) val_n;
@@ -276,7 +276,7 @@ size that might not be large enough for long argument lists.
 =cut
 */
 void set_opt_svc_prealloc(char **argv) {
-	int64_t val_n, val_m= SERVICE_POOL_OBJ_SIZE;
+	int64_t val_n, val_m= SERVICE_DATA_SIZE_DEFAULT;
 
 	parse_NxM(STRSEG(argv[0]), &val_n, &val_m);
 
@@ -288,12 +288,9 @@ void set_opt_svc_prealloc(char **argv) {
 		val_n= SERVICE_POOL_SIZE_MAX;
 	}
 
-	if (val_m < svc_min_obj_size) {
-		log_warn("servce obj size increased to minimum of %d", svc_min_obj_size);
-		val_m= svc_min_obj_size;
-	} else if (val_m > svc_max_obj_size) {
-		log_warn("service obj size limited to maximum of %d", svc_max_obj_size);
-		val_m= svc_max_obj_size;
+	if (val_m < SERVICE_DATA_SIZE_MIN) {
+		log_warn("servce obj size increased to minimum of %d", SERVICE_DATA_SIZE_MIN);
+		val_m= SERVICE_DATA_SIZE_MIN;
 	}
 
 	opt_svc_pool_count= (int) val_n;

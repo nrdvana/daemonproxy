@@ -22,11 +22,11 @@ $dp->send("service.args	foo	");
 $dp->recv_ok( qr/^service.args	foo\t?$/m, 'args of length 0' );
 
 # verify that it checks service names before creating them
-$dp->send("service.args	".("x"x 64)."	/bin/true");
-$dp->recv_ok( qr/^error	.*service.args	x/m, 'service name length 64 fails' );
+$dp->send("service.args	".("x"x 32)."	/bin/true");
+$dp->recv_ok( qr/^error	.*service.args	x/m, 'service name length 32 fails' );
 
-$dp->send("service.args	".("x"x 63)."	/bin/true");
-$dp->recv_ok( qr/^service.args	x{63}	/m, 'service name length 63 succeeds' );
+$dp->send("service.args	".("x"x 31)."	/bin/true");
+$dp->recv_ok( qr/^service.args	x{31}	/m, 'service name length 31 succeeds' );
 
 $dp->send("terminate	0");
 $dp->exit_is( 0 );

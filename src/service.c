@@ -21,39 +21,50 @@
 #define SVC_STATE_ALLOC_CTL     6
 
 struct service_s {
-	int size, state;
-	int name_len, vars_len;
-	RBTreeNode name_index_node;
-	RBTreeNode pid_index_node;
-	struct service_s **active_prev_ptr, *active_next;
-	struct service_s **sigwake_prev_ptr, *sigwake_next;
+	int state;
+	char name_buf[NAME_BUF_SIZE];
+	strseg_t
+		name,              // constant.  points to name_buf
+		vars;              // dynamic, unless service pool feature used.
+	RBTreeNode             // nodes for Red/Black tree indexing
+		name_index_node, 
+		pid_index_node;
+	struct service_s       // doubly linked lists
+		**active_prev_ptr, *active_next,
+		**sigwake_prev_ptr, *sigwake_next;
 	pid_t pid;
 	bool auto_restart: 1,
 		sigwake: 1,
 		uses_control_event: 1,
 		uses_control_cmd: 1;
 	int wait_status;
+	int64_t  start_time;   // 32-bit-precision fixed point fraction
+	int64_t  reap_time;
 	int64_t  restart_interval;
 	sigset_t autostart_signals;
-	int64_t  start_time;
-	int64_t  reap_time;
-	char buffer[]; // holds name and vars.  length is "svc->size - sizeof(struct service_s)"
 };
 
-// Define a sensible minimum for service size.
-// Want at least struct size, plus room for name, small argv list, and short names of file descriptors
-const int svc_min_obj_size= sizeof(service_t) + NAME_BUF_SIZE + 128;
-const int svc_max_obj_size= sizeof(service_t) + NAME_BUF_SIZE + 4096 + 255 * NAME_BUF_SIZE;
+// Service list - a vector of service references.
+service_t
+	**svc_list= NULL;
+int
+	svc_list_count= 0,
+	svc_list_limit= 0;
 
-service_t **svc_list= NULL;
-int svc_list_count= 0, svc_list_limit= 0;
+// Service pool is an optional feature where all services are allocated from
+// a single chunk of memory.  Nothing is resizable when using this feature.
 void *svc_pool= NULL;
 int svc_pool_size_each= 0;
-RBTree svc_by_name_index;
-RBTree svc_by_pid_index;
-service_t *svc_active_list= NULL;   // linked list of active services
+
+RBTree svc_by_name_index;           // sorted index by name
+RBTree svc_by_pid_index;            // sorted index by PID (only if running)
+service_t *svc_active_list= NULL;   // linked list of services that need processed each iteration
 service_t *svc_sigwake_list= NULL;  // linked list of services that can wake via signals
 int64_t svc_last_signal_ts= 0;      // last signal we saw, for triggering services.
+
+static service_t *svc_new(strseg_t name);
+static void svc_ctor(service_t *svc, strseg_t name);
+static void svc_dtor(service_t *svc);
 
 static bool svc_list_resize(int new_limit);
 static void svc_notify_state(service_t *svc);
@@ -62,13 +73,11 @@ static void svc_do_exec(service_t *svc);
 static void svc_set_active(service_t *svc, bool activate);
 static void svc_set_sigwake(service_t *svc, bool sigwake);
 static bool svc_check_sigwake(service_t *svc);
-static void svc_ctor(service_t *svc, int size, strseg_t name);
-static void svc_dtor(service_t *svc);
 
 int svc_by_name_compare(void *data, RBTreeNode *node) {
 	strseg_t *name= (strseg_t*) data;
 	service_t *obj= (service_t*) node->Object;
-	return strseg_cmp(*name, (strseg_t){ obj->buffer, obj->name_len });
+	return strseg_cmp(*name, obj->name);
 }
 
 int svc_by_pid_compare(void *key, RBTreeNode *node) {
@@ -82,10 +91,14 @@ void svc_init() {
 	RBTree_Init( &svc_by_pid_index,  svc_by_pid_compare );
 }
 
-bool svc_preallocate(int count, int size_each) {
-	int i;
+bool svc_preallocate(int count, int data_size_each) {
+	int i, size_each;
 	assert(svc_list == NULL);
 	assert(svc_pool == NULL);
+	assert(data_size_each > 0);
+
+	size_each= sizeof(service_t) + data_size_each;
+	size_each= ((size_each - 1) | 0xF) + 1; // round to 16
 	
 	if (!svc_list_resize(count))
 		return false;
@@ -100,7 +113,7 @@ bool svc_preallocate(int count, int size_each) {
 
 bool svc_list_resize(int new_limit) {
 	service_t **new_list;
-	assert(new_limit >= svc_list_count);
+
 	new_list= realloc(svc_list, new_limit * sizeof(fd_t*));
 	if (!new_list)
 		return false;
@@ -109,30 +122,26 @@ bool svc_list_resize(int new_limit) {
 	return true;
 }
 
-service_t *svc_new(int size, strseg_t name) {
+service_t *svc_new(strseg_t name) {
 	service_t *svc;
 	
-	assert(size >= sizeof(service_t) + name.len + 1);
 	assert(name.len < NAME_BUF_SIZE);
 	
-	// enlarge the container if needed (and not using a pool)
+	// enlarge the service vector if needed (and not using a pool)
 	if (svc_list_count >= svc_list_limit)
 		if (svc_pool || !svc_list_resize(svc_list_limit + 32))
 			return NULL;
+
 	// allocate space (unless using a pool)
-	if (svc_pool) {
-		size= svc_pool_size_each;
-		if (size < sizeof(service_t) + name.len + 1)
-			return NULL;
+	if (svc_pool)
 		svc= svc_list[svc_list_count++];
-	}
 	else {
-		if (!(svc= (service_t*) malloc(size)))
+		if (!(svc= (service_t*) malloc(sizeof(service_t))))
 			return NULL;
 		svc_list[svc_list_count++]= svc;
 	}
 	
-	svc_ctor(svc, size, name);
+	svc_ctor(svc, name);
 	return svc;
 }
 
@@ -156,73 +165,22 @@ void svc_delete(service_t *svc) {
 	}
 }
 
-bool svc_resize(service_t *svc, int new_size) {
-	service_t *resized;
-	strseg_t name;
-	int i;
+// Requires a buffer as large as sizeof(service_t) + name.len + 1 !
+void svc_ctor(service_t *svc, strseg_t name) {
+	assert(name.len < NAME_BUF_SIZE);
 
-	// can't resize pooled objects
-	if (svc_pool) return false;
-
-	// round up to multiple of 128
-	new_size= (new_size | 0x7F) + 1;
-	
-	// remove tree nodes
-	RBTreeNode_Prune(&svc->name_index_node);
-	if (svc->pid) RBTreeNode_Prune(&svc->pid_index_node);
-	
-	if (!(resized= (service_t*) realloc(svc, new_size))) {
-		// re-add old nodes
-		name.data= svc->buffer;
-		name.len=  svc->name_len;
-		RBTree_Add( &svc_by_name_index, &svc->name_index_node, &name );
-		if (svc->pid) RBTree_Add( &svc_by_pid_index, &svc->pid_index_node, &svc->pid );
-		return false;
-	}
-	
-	resized->size= new_size;
-	name.data= resized->buffer;
-	name.len=  resized->name_len;
-	RBTree_Add( &svc_by_name_index, &resized->name_index_node, &name );
-	if (resized->pid) RBTree_Add( &svc_by_pid_index, &resized->pid_index_node, &resized->pid );
-	// if address changed, we have some updates to do
-	if (svc != resized) {
-		// update main list
-		for (i= 0; i < svc_list_count; i++) {
-			if (svc_list[i] == svc) {
-				svc_list[i]= resized;
-				break;
-			}
-		}
-		// update active list
-		if (resized->active_prev_ptr) {
-			*resized->active_prev_ptr= resized;
-			if (resized->active_next)
-				resized->active_next->active_prev_ptr= &resized->active_next;
-		}
-		// update sigwake list
-		if (resized->sigwake_prev_ptr) {
-			*resized->sigwake_prev_ptr= resized;
-			if (resized->sigwake_next)
-				resized->sigwake_next->sigwake_prev_ptr= &resized->sigwake_next;
-		}
-		resized->name_index_node.Object= resized;
-		resized->pid_index_node.Object= resized;
-	}
-	return true;
-}
-
-void svc_ctor(service_t *svc, int size, strseg_t name) {
-	memset(svc, 0, size);
-	svc->size= size;
+	memset(svc, 0, sizeof(service_t));
 	svc->state= SVC_STATE_DOWN;
 	
 	sigemptyset(&svc->autostart_signals); // probably redundant, but obeying API...
 	
-	// This relies on svc_check_name having been called already
-	assert(name.len+1 < size - sizeof(service_t));
-	memcpy(svc->buffer, name.data, name.len);
-	svc->name_len= name.len;
+	memcpy(svc->name_buf, name.data, name.len);
+	svc->name= (strseg_t){ svc->name_buf, name.len };
+	
+	if (svc_pool) {
+		// When part of a pool, the vars are allocated immediately after the name
+		svc->vars.data= svc->name.data + svc->name.len + 1;
+	}
 	
 	RBTreeNode_Init( &svc->name_index_node );
 	svc->name_index_node.Object= svc;
@@ -241,10 +199,13 @@ void svc_dtor(service_t *svc) {
 	if (svc->pid)
 		RBTreeNode_Prune( &svc->pid_index_node );
 	RBTreeNode_Prune( &svc->name_index_node );
+	// Free the variables pool, but only if service pool feature not enabled
+	if (!svc_pool && svc->vars.data)
+		free((char*)svc->vars.data);
 }
 
 const char * svc_get_name(service_t *svc) {
-	return svc->buffer;
+	return svc->name.data;
 }
 
 bool svc_check_name(strseg_t name) {
@@ -276,10 +237,9 @@ int64_t svc_get_reap_ts(service_t *svc) {
  * value_out is pointed to the string which is also NUL terminated.
  */
 static bool svc_get_var(service_t *svc, strseg_t name, strseg_t *value_out) {
-	strseg_t val, key;
-	strseg_t var_buf= { svc->buffer + svc->name_len + 1, svc->vars_len };
-	
-	while (var_buf.len > 0 && strseg_tok_next(&var_buf, '\0', &val)) {
+	strseg_t val, key, vars= svc->vars;
+
+	while (vars.len > 0 && strseg_tok_next(&vars, '\0', &val)) {
 		if (strseg_tok_next(&val, '=', &key) && 0 == strseg_cmp(key, name)) {
 			if (value_out) *value_out= val;
 			return true;
@@ -296,14 +256,13 @@ static bool svc_get_var(service_t *svc, strseg_t name, strseg_t *value_out) {
  * so this should be sufficient.
  */
 static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
-	int sizediff;
+	int sizediff, buf_size;
+	char *buf= (char*) svc->vars.data;
 	bool found= false;
-	strseg_t oldval, key;
-	strseg_t var_buf= { svc->buffer + svc->name_len + 1, svc->vars_len };
-	int buf_free= svc->size - sizeof(service_t) - svc->name_len - 1 - svc->vars_len;
+	strseg_t oldval, key, tail= svc->vars;
 
 	// See if we have a variable of this name yet
-	while (var_buf.len > 0 && strseg_tok_next(&var_buf, '\0', &oldval)) {
+	while (tail.len > 0 && strseg_tok_next(&tail, '\0', &oldval)) {
 		if (strseg_tok_next(&oldval, '=', &key) && 0 == strseg_cmp(key, name)) {
 			found= true;
 			break;
@@ -311,34 +270,46 @@ static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
 	}
 	sizediff= found? ( value? value->len - oldval.len : -(oldval.len + 1 + name.len + 1) )
 		: ( value? name.len + 1 + value->len + 1 : 0 );
-	
+
 	// make sure we have room for new value
-	if (sizediff > buf_free) {
+	if (sizediff > 0) {
 		// Objects in pool cannot be resized
-		if (svc_pool || !svc_resize(svc, svc->size + (sizediff - buf_free)))
-			return false;
+		if (svc_pool) {
+			buf_size= svc_pool_size_each - (buf - (char*)svc);
+			if (svc->vars.len + sizediff > buf_size)
+				return false;
+		}
+		// else just realloc
+		else {
+			buf= (char*) realloc(buf, svc->vars.len + sizediff);
+			if (!buf)
+				return false;
+			// Translate our pointers into the new buffer
+			tail.data += (buf - svc->vars.data);
+			oldval.data += (buf - svc->vars.data);
+			svc->vars.data= buf;
+		}
 	}
+	// adjust recorded size of variables pool, since we can't fail below this point
+	svc->vars.len += sizediff;
 
 	// if tail of buffer needs to move, move it
-	if (sizediff && var_buf.len > 0)
-		memmove((char*)var_buf.data + sizediff, var_buf.data, var_buf.len);
-	
+	if (sizediff && tail.len > 0)
+		memmove((char*)tail.data + sizediff, tail.data, tail.len);
+
 	// if we're adding a new var, set up the "name=" portion at the end of the buffer
 	if (!found && value) {
-		memcpy((char*) var_buf.data, name.data, name.len);
-		((char*)var_buf.data)[name.len]= '=';
-		oldval.data= var_buf.data + name.len + 1;
+		memcpy((char*)tail.data, name.data, name.len);
+		((char*)tail.data)[name.len]= '=';
+		oldval.data= tail.data + name.len + 1;
 	}
-	
+
 	// If we have a value, overwrite the old one
 	if (value) {
-		memcpy((char*) oldval.data, value->data, value->len);
+		memcpy((char*)oldval.data, value->data, value->len);
 		((char*)oldval.data)[value->len]= '\0';
 	}
-	
-	// adjust recorded size of variables pool
-	svc->vars_len += sizediff;
-	
+
 	// unless NDEBUG:
 		svc_check(svc);
 	return true;
@@ -354,8 +325,7 @@ const char * svc_get_argv(service_t *svc) {
  * This is slightly expensive, but typically happens only once per service.
  */
 bool svc_set_argv(service_t *svc, strseg_t new_argv) {
-	if (new_argv.len < 0) new_argv.len= 0;
-	return svc_set_var(svc, STRSEG("args"), &new_argv);
+	return svc_set_var(svc, STRSEG("args"), new_argv.len <= 0? NULL : &new_argv);
 }
 
 const char * svc_get_fds(service_t *svc) {
@@ -427,7 +397,7 @@ bool svc_set_triggers(service_t *svc, strseg_t triggers_tsv) {
 			return false;
 	}
 
-	if (!svc_set_var(svc, STRSEG("triggers"), &triggers_tsv))
+	if (!svc_set_var(svc, STRSEG("triggers"), triggers_tsv.len <= 0? NULL : &triggers_tsv))
 		return false;
 
 	svc->auto_restart= autostart;
@@ -786,7 +756,7 @@ void svc_do_exec(service_t *svc) {
 	
 void svc_notify_state(service_t *svc) {
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
-	ctl_notify_svc_state(NULL, svc->buffer, svc->start_time, svc->reap_time, svc->wait_status, svc->pid);
+	ctl_notify_svc_state(NULL, svc->name.data, svc->start_time, svc->reap_time, svc->wait_status, svc->pid);
 }
 
 service_t *svc_by_name(strseg_t name, bool create) {
@@ -796,7 +766,7 @@ service_t *svc_by_name(strseg_t name, bool create) {
 	// if create requested, create a new service by this name
 	// (if name is valid)
 	if (create && svc_check_name(name))
-		return svc_new(svc_pool_size_each? svc_pool_size_each : svc_min_obj_size, name);
+		return svc_new(name);
 
 	return NULL;
 }
@@ -843,19 +813,27 @@ service_t * svc_iter_next(service_t *svc, const char *from_name) {
 
 #ifndef NDEBUG
 void svc_check(service_t *svc) {
-	int buf_len;
 	assert(svc != NULL);
-	assert(svc->size >= svc_min_obj_size);
-	buf_len= svc->size - sizeof(service_t);
-	assert(svc->name_len >= 0 && svc->name_len < buf_len);
-	assert(svc->vars_len >= 0 && svc->vars_len < buf_len);
-	assert(svc->name_len + 1 + svc->vars_len <= buf_len);
+
+	assert(svc->name.len > 0);
+	assert(svc->name.len < NAME_BUF_SIZE);
+	assert(svc->name.data == svc->name_buf);
+	assert(svc->name.data[svc->name.len] == 0);
+
+	assert(svc->vars.len >= 0);
+	if (svc->vars.len) {
+		assert(svc->vars.data);
+		assert(svc->vars.data[svc->vars.len-1] == 0);
+	}
+	if (svc_pool) {
+		assert(svc->name.data + svc->name.len + 1 == svc->vars.data);
+		assert( ((char*)svc) + svc_pool_size_each >= svc->vars.data + svc->vars.len );
+	}
+
 	assert(svc->name_index_node.Color == RBTreeNode_Black || svc->name_index_node.Color == RBTreeNode_Red);
 	if (svc->pid)
 		assert(svc->pid_index_node.Color == RBTreeNode_Black || svc->pid_index_node.Color == RBTreeNode_Red);
 	else
 		assert(svc->pid_index_node.Color == RBTreeNode_Unassigned);
-	assert(svc->buffer[svc->name_len] == 0);
-	assert(svc->buffer[svc->name_len + 1 + svc->vars_len - 1] == 0);
 }
 #endif

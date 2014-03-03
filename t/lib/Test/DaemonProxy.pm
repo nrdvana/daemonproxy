@@ -66,6 +66,7 @@ sub run {
 			POSIX::dup2(fileno($child_fds[$i]), $i)
 				or die "dup pipe to $i: $!";
 		}
+		POSIX::close($_) for ($pipe_count .. 1023);
 		exec($self->binary_path, @argv)
 			or warn "exec(daemonproxy): $!";
 		# make a sharp exit, without running cleanup code that could interfere with the parent process

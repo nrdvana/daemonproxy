@@ -152,11 +152,9 @@ void ctl_flush(wake_t *wake);
 //----------------------------------------------------------------------------
 // service.c interface
 
-extern const int svc_min_obj_size, svc_max_obj_size;
-
 void svc_init();
 // Initialize the service pool
-bool svc_preallocate(int service_count, int size_each);
+bool svc_preallocate(int service_count, int data_size_each);
 
 const char * svc_get_name(service_t *svc);
 bool svc_check_name(strseg_t name);
@@ -223,7 +221,7 @@ extern int fd_dev_null;
 
 // Initialize the fd pool from a static chunk of memory
 void fd_init();
-bool fd_preallocate(int count, int size_each);
+bool fd_preallocate(int count, int data_size_each);
 bool fd_init_special_handles();
 
 const char* fd_get_name(fd_t *fd);

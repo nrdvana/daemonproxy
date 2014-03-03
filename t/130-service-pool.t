@@ -19,12 +19,6 @@ $dp->send("terminate	0");
 $dp->exit_is( 0 );
 
 $dp= Test::DaemonProxy->new;
-$dp->run('-i', '--service-pool', '5x1G');
-$dp->recv_ok( qr/^warn.*maximum/, '1GB object gets truncated' );
-$dp->send("terminate	0");
-$dp->exit_is( 0 );
-
-$dp= Test::DaemonProxy->new;
 $dp->run('-i', '--service-pool', '6');
 $dp->timeout(0.5);
 

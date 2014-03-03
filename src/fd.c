@@ -39,10 +39,6 @@ void *fd_obj_pool= NULL;
 int fd_obj_pool_size_each= 0;
 int fd_dev_null;
 
-// Set minimum FD size of struct + fd name + 31 chars for partial file name
-const int fd_min_obj_size= sizeof(fd_t) + NAME_BUF_SIZE + 32;
-const int fd_max_obj_size= ((sizeof(fd_t) + NAME_BUF_SIZE + PATH_MAX)|0xF)+1;
-
 bool fd_list_resize(int new_limit);
 void add_fd_by_name(fd_t *fd);
 void create_missing_dirs(char *path);
@@ -83,14 +79,18 @@ bool fd_init_special_handles() {
 			STRSEG("daemonproxy event stream"));
 }
 
-bool fd_preallocate(int count, int size_each) {
-	int i;
+bool fd_preallocate(int count, int data_size_each) {
+	int i, size_each;
 	assert(fd_list == NULL);
 	assert(fd_obj_pool == NULL);
 	
 	if (!fd_list_resize(count))
 		return false;
-	
+
+	// Caller asks for buffer space, but we need to include struct and name
+	size_each= sizeof(fd_t) + NAME_BUF_SIZE + data_size_each;
+	size_each= ((size_each - 1) | 0xF) + 1; // round up to 16
+
 	if (!(fd_obj_pool= malloc(count * size_each)))
 		return false;
 	fd_obj_pool_size_each= size_each;
