@@ -6,4 +6,4 @@ if [ ! -d scripts -o ! -d src ]; then
 	exit 1;
 fi
 
-make build/Makefile
+mkdir -p build && cd build && ../scripts/configure --enable-dev --enable-debug "$@"

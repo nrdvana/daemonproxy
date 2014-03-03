@@ -5,8 +5,11 @@ PERL = perl
 all: build/Makefile
 	$(MAKE) -C build -j4 all
 
+autogen_files: build/Makefile
+	$(MAKE) -C build autogen_files
+
 build/Makefile build/config.h: scripts/configure scripts/Makefile.in scripts/config.h.in
-	mkdir -p build && cd build && ../scripts/configure
+	./configure
 
 scripts/configure: scripts/configure.ac
 	cd scripts && autoconf

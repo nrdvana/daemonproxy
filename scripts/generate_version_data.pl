@@ -51,9 +51,9 @@ my $commit= $1;
 
 # Is working dir clean?
 
-my $changes= `git --git-dir='$proj_root/.git' status --porcelain`;
+my $changes= `cd "$proj_root"; git status --porcelain`;
 $? == 0 or die "Can't run 'git status'";
-my $dirty= length($changes) > 2? 'true' : 'false';
+my $dirty= ($changes =~ /\S+/)? 'true' : 'false';
 
 # Build version.c
 

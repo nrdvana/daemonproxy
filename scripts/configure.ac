@@ -3,6 +3,19 @@ AC_INIT([daemonproxy], [0], [mike@nrdvana.net])
 AC_CONFIG_SRCDIR([config.h.in])
 AC_CONFIG_HEADERS([config.h])
 
+AC_ARG_ENABLE(static, AS_HELP_STRING([static], [enable static compilation]),
+ [ if test "$enableval" != "no"; then LDFLAGS="$LDFLAGS -static"; fi; ],
+ [ ])
+
+AC_ARG_ENABLE(debug,  AS_HELP_STRING([debug], [enable assertions and debug symbols]),
+ [ if test "$enableval" != "no"; then CFLAGS="$CFLAGS -O0 -g3"; else CFLAGS="$CFLAGS -O2 -DNDEBUG"; fi; ],
+ [ CFLAGS="$CFLAGS -O0 -g3"; ])
+
+AC_ARG_ENABLE(dev,    AS_HELP_STRING([dev], [enable source generators (requires perl)]),
+ [ if test "$enableval" != "no"; then dev_include_makefile="\$(scriptdir)/dev_rules.mak"; fi; ],
+ [ dev_include_makefile="\$(scriptdir)/dev_rules.mak"; ])
+AC_SUBST(dev_include_makefile)
+
 # Checks for programs.
 AC_PROG_CC
 

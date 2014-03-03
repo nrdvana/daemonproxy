@@ -17,22 +17,35 @@ use strict;
 use warnings;
 
 my $proj_root= $ENV{PROJ_ROOT};
+my $dest_dir= "$proj_root/dist/next";
 
-my @distclean= (
-	'.git',
-	'build',
-	'scripts/dev_rules.mak',
-	'scripts/autom4te.cache',
-);
+-d "$proj_root/src" and -d "$proj_root/scripts"
+	or die "Incorrect project root \"$proj_root\"";
+
+sub distclean {
+	my @distclean= (
+		'.git',
+		'build',
+		'scripts/autom4te.cache',
+	);
+
+	system('rm', '-rf', map { "$dest_dir/$_" } @distclean) == 0
+	or die "Unable to clean non-distributable files";
+}
+
+sub make {
+	system('make', '-C', $dest_dir, @_) == 0
+	or die "Make failed";
+}
+
+# Verify we have all changes checked in
 
 my @uncommitted= `git --git-dir="$proj_root/.git" status --porcelain`;
 !@uncommitted
 	or die "Uncommitted git changes!";
 
--d "$proj_root/src" and -d "$proj_root/scripts"
-	or die "Incorrect project root \"$proj_root\"";
+# Clone project into a temporary directory
 
-my $dest_dir= "$proj_root/dist/next";
 system('mkdir', '-p', $dest_dir) == 0
 and system('rm', '-rf', $dest_dir) == 0
 or die "Can't set up $dest_dir";
@@ -40,16 +53,24 @@ or die "Can't set up $dest_dir";
 system('git', 'clone', $proj_root, $dest_dir) == 0
 or die "Can't clone project into $dest_dir";
 
+# Build the generated source files
+
 $ENV{MAKE_DIST}= 1;
+make 'autogen_files';
 
-system('make', '-C', $dest_dir) == 0
-or die "Make failed";
+# Remove debug and dev configuration that we added by default
 
-system('make', '-C', $dest_dir, 'test') == 0
-or die "Testing failed";
+system('sed', '-i', '-e', 's/--enable-dev/--disable-dev/', '-e', 's/--enable-debug/--disable-debug/', "$dest_dir/configure") == 0
+or die "Can't remove default configure options";
 
-system('rm', '-rf', map { "$dest_dir/$_" } @distclean) == 0
-or die "Unable to remove temp git dir";
+# Test that we can compile and build it
+
+distclean;
+
+make;
+make 'test';
+
+distclean;
 
 # Extract version for directory name
 
