@@ -184,7 +184,7 @@ void ctl_free(controller_t *ctl) {
  * This function is mainly a wrapper that repeatedly executes the current state until
  * the state_fn returns false.  We then flush buffers and decide what to wake on.
  */
-void ctl_run(wake_t *wake) {
+void ctl_run() {
 	int i, j;
 	controller_t *ctl;
 	ctl_state_fn_t *prev_state;

@@ -531,7 +531,7 @@ void svc_set_active(service_t *svc, bool activate) {
 /** Run the state machine for each active service.
  * Services might set themselves back to inactive during this loop.
  */
-void svc_run_active(wake_t *wake) {
+void svc_run_active() {
 	service_t *svc, *next;
 	int signum, sig_count;
 	int64_t sig_ts;
@@ -553,14 +553,14 @@ void svc_run_active(wake_t *wake) {
 	svc= svc_active_list;
 	while (svc) {
 		next= svc->active_next;
-		svc_run(svc, wake);
+		svc_run(svc);
 		svc= next;
 	}
 }
 
 /** Run the state machine for one service.
  */
-void svc_run(service_t *svc, wake_t *wake) {
+void svc_run(service_t *svc) {
 	pid_t pid;
 	int pipes[4], i;
 	controller_t *ctl= NULL;
