@@ -586,7 +586,7 @@ bool ctl_state_dump_services(controller_t *ctl) {
 		svc_check(svc);
 		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 1; break; }
 		ctl_notify_svc_state(ctl, svc_get_name(svc), svc_get_up_ts(svc),
-			svc_get_reap_ts(svc), svc_get_pid(svc), svc_get_wstat(svc));
+			svc_get_reap_ts(svc), svc_get_wstat(svc), svc_get_pid(svc));
 // case 2:
 //		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 2; break; }
 //		ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc));
