@@ -205,7 +205,7 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
-bool ctl_notify_svc_autostart(controller_t *ctl, const char *name, int64_t interval, const char *tsv_triggers);
+bool ctl_notify_svc_auto_up(controller_t *ctl, const char *name, int64_t interval, const char *tsv_triggers);
 bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd);
 #define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error\t" msg "\n", ##__VA_ARGS__))
 
@@ -245,13 +245,13 @@ bool svc_set_fds(service_t *svc, strseg_t tsv_fields);
 // Return TSV string of fds
 const char * svc_get_fds(service_t *svc);
 
-// Set restart interval (used if service has an autostart trigger)
+// Set restart interval (used if service has an auto_up trigger)
 bool svc_set_restart_interval(service_t *svc, int64_t interval);
 
-// Return TSV string of autostart values
+// Return TSV string of auto_up values
 const char * svc_get_triggers(service_t *svc);
 
-// Set TSV string of triggers for the autostart feature
+// Set TSV string of triggers for the auto_up feature
 bool svc_set_triggers(service_t *svc, strseg_t triggers_tsv);
 
 // Tell service state machine to start at specified time

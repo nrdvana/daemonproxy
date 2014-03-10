@@ -59,7 +59,7 @@ COMMAND(ctl_cmd_echo,                "echo");
 COMMAND(ctl_cmd_statedump,           "statedump");
 COMMAND(ctl_cmd_svc_args,            "service.args");
 COMMAND(ctl_cmd_svc_fds,             "service.fds");
-COMMAND(ctl_cmd_svc_autostart,       "service.autostart");
+COMMAND(ctl_cmd_svc_auto_up,         "service.auto_up");
 COMMAND(ctl_cmd_svc_start,           "service.start");
 COMMAND(ctl_cmd_svc_signal,          "service.signal");
 COMMAND(ctl_cmd_svc_delete,          "service.delete");
@@ -598,7 +598,7 @@ bool ctl_state_dump_services(controller_t *ctl) {
 		ctl_notify_svc_fds(ctl, svc_get_name(svc), svc_get_fds(svc));
  case 5:
 		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 5; break; }
-		ctl_notify_svc_autostart(ctl, svc_get_name(svc), svc_get_restart_interval(svc), svc_get_triggers(svc));
+		ctl_notify_svc_auto_up(ctl, svc_get_name(svc), svc_get_restart_interval(svc), svc_get_triggers(svc));
 	}
  }//switch
 	if (svc) { // If we broke the loop early, record name of where to resume
@@ -832,7 +832,7 @@ bool ctl_cmd_svc_fds(controller_t *ctl) {
 }
 
 /*
-=item service.autostart NAME MIN_INTERVAL [TRIGGER]...
+=item service.auto_up NAME MIN_INTERVAL [TRIGGER]...
 
 Start the service (no more rapidly than MIN_INTERVAL seconds apart) if any of
 the triggers are true.
@@ -840,7 +840,7 @@ the triggers are true.
 MIN_INTERVAL counts from the time of the previous start attempt, so if the
 service has been running longer than MIN_INTERVAL and it exits while a trigger
 is true, it will be restarted immediately.  MIN_INTERVAL cannot be less than 1
-second.  A MIN_INTERVAL of '-' disables autostart.
+second.  A MIN_INTERVAL of '-' disables auto-up.
 
 Currently, triggers are 'always', SIGINT, SIGHUP, SIGTERM, SIGUSR1, SIGUSR2,
 SIGQUIT.
@@ -855,7 +855,7 @@ to reset the count to zero, to prevent being started again)
 
 =cut
 */
-bool ctl_cmd_svc_autostart(controller_t *ctl) {
+bool ctl_cmd_svc_auto_up(controller_t *ctl) {
 	service_t *svc;
 	int64_t interval;
 	strseg_t tmp;
@@ -880,11 +880,11 @@ bool ctl_cmd_svc_autostart(controller_t *ctl) {
 	}
 
 	if (!svc_set_triggers(svc, ctl->command.len > 0? ctl->command : STRSEG(""))) {
-		ctl->command_error= "unable to set autostart triggers";
+		ctl->command_error= "unable to set auto_up triggers";
 		return false;
 	}
 	
-	ctl_notify_svc_autostart(NULL, svc_get_name(svc), svc_get_restart_interval(svc), svc_get_triggers(svc));
+	ctl_notify_svc_auto_up(NULL, svc_get_name(svc), svc_get_restart_interval(svc), svc_get_triggers(svc));
 	return true;
 }
 
@@ -1342,11 +1342,11 @@ Triggers for auto-starting the service have changed.
 
 =cut
 */
-bool ctl_notify_svc_autostart(controller_t *ctl, const char *name, int64_t interval, const char *triggers_tsv) {
+bool ctl_notify_svc_auto_up(controller_t *ctl, const char *name, int64_t interval, const char *triggers_tsv) {
 	if (triggers_tsv && triggers_tsv[0])
-		ctl_write(ctl, "service.autostart	%s	%d	%s\n", name, (int)(interval>>32), triggers_tsv);
+		ctl_write(ctl, "service.auto_up	%s	%d	%s\n", name, (int)(interval>>32), triggers_tsv);
 	else
-		ctl_write(ctl, "service.autostart	%s	-\n", name);
+		ctl_write(ctl, "service.auto_up	%s	-\n", name);
 	return true;
 }
 
