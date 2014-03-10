@@ -1,0 +1,21 @@
+Output of 'top', on a stripped-down Linux Arch x64:
+
+  PID USER      PR  NI    VIRT    RES    SHR S %CPU %MEM     TIME+ COMMAND                                                 
+13417 root      20   0   73872   3492   2700 S  0.0  0.7   0:00.00 sshd                                                                         
+   83 root      20   0   39932   2760   2184 S  0.0  0.5   0:09.84 sshd                                                                         
+13420 silverd+  20   0   14012   1984   1548 S  0.0  0.4   0:00.00 bash                                                                         
+13419 silverd+  20   0   73872   1560    764 S  0.0  0.3   0:00.01 sshd                                                                         
+13449 silverd+  20   0   13648   1288    924 R  0.0  0.3   0:00.00 top                                                                          
+   85 root      20   0    8128    856    728 S  0.0  0.2   0:00.00 agetty                                                                       
+    1 root      20   0    8492    680    564 S  0.0  0.1   0:01.98 daemonproxy                                                                  
+
+Full process listing of the stripped-down Arch system:
+
+[root@(none) ~]# pstree -ap
+daemonproxy,1
+  |-agetty,85 38400 tty2 linux
+  `-sshd,83 -D
+      `-sshd,13417 R
+          `-sshd,13419 R
+              `-bash,13420
+                  `-pstree,13442 -ap
