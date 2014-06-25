@@ -36,6 +36,21 @@ main use-case for the design of daemonproxy) then use service.start
 instead, and when you get the service.state event saying the service
 died, you can decide to restart it on your own.
 
+=head2 Using a Controller Script
+
+If you are actually using a controller script, here is all you need
+in a config file:
+
+  service.args	my_controller	my-controller.pl
+  service.fds	my_controller	control.event	control.cmd	stderr
+
+This starts a controller service which reads events on stdin and
+writes daemonproxy commands on stdout.  Its stderr goes to
+daemonproxy's stderr.  The controller can do whatever you like,
+such as listening on a unix socket, or even a TCP socket, or even
+a UDP socket, or using INotify to watch a directory, or anything
+else you can think of.
+
 =head2 Other examples
 
 See the examples in the doc directory that come with daemonproxy.
