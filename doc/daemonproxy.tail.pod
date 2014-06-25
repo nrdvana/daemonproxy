@@ -41,8 +41,9 @@ died, you can decide to restart it on your own.
 If you are actually using a controller script, here is all you need
 in a config file:
 
-  service.args	my_controller	my-controller.pl
+  service.args	my_controller	./my-controller.pl
   service.fds	my_controller	control.event	control.cmd	stderr
+  service.auto_up	my_controller	1	always
 
 This starts a controller service which reads events on stdin and
 writes daemonproxy commands on stdout.  Its stderr goes to
@@ -51,7 +52,7 @@ such as listening on a unix socket, or even a TCP socket, or even
 a UDP socket, or using INotify to watch a directory, or anything
 else you can think of.
 
-=head2 Other examples
+=head2 Other Examples
 
 See the examples in the doc directory that come with daemonproxy.
 If they aren't installed by your package manager, you can find them
