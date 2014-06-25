@@ -338,6 +338,8 @@ void set_opt_quiet(char** argv) {
 }
 
 /*
+=item -h
+
 =item --help
 
 Quick usage synopsis.
