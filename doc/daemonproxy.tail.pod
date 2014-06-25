@@ -1,3 +1,47 @@
+=head1 EXAMPLE
+
+=head2 Basics
+
+Here is how you run a basic service.  Remember that the whitespace
+between fields must be TABs.
+
+  service.args	mysql	runuid	-s	mysql	mysqld
+  service.fds	mysql	null	stdout	stdout
+  service.auto_up	mysql	2	always
+
+That example leaves error messages going to daemonproxy's STDOUT.
+If you want to set up a logger, try this:
+
+  fd.pipe	mysql-log.r	mysql-log.w
+  service.args	mysql-log	sissylog	mysql
+  service.fds	mysql-log	mysql-log.r	stderr	stderr
+  service.auto_up	mysql-log	2	always
+  service.args	mysql	runuid	-s	mysql	mysqld
+  service.fds	mysql	null	mysql-log.w	mysql-log.w
+  service.auto_up	mysql	2	always
+
+That example requires 'sissylog' from the perp package.  Also,
+you might want to configure mysql to use /dev/fd/1 as its log file.
+
+To down a service, use this sequence:
+
+  service.auto_up	mysql	-
+  service.signal	mysql	SIGKILL
+
+and then wait for the event that it went down.
+
+These examples use auto_up, which asks daemonproxy to auto-restart
+the service.  If you're using a controller script (which was the
+main use-case for the design of daemonproxy) then use service.start
+instead, and when you get the service.state event saying the service
+died, you can decide to restart it on your own.
+
+=head2 Other examples
+
+See the examples in the doc directory that come with daemonproxy.
+If they aren't installed by your package manager, you can find them
+on github or the home page.
+
 =head1 BUGS
 
 Please report bugs in the issue tracker at L<http://github.com/silverdirk/daemonproxy>
@@ -7,6 +51,18 @@ Please report bugs in the issue tracker at L<http://github.com/silverdirk/daemon
 The documentation distributed with the source code contains an informative
 README and a "api.ltw" which contains more detailed documentation for the
 command and event protocol.
+
+=over 15
+
+=item Homepage
+
+L<http://nrdvana.net/daemonproxy>
+
+=item GitHub Page
+
+L<http://github.com/silverdirk/daemonproxy>
+
+=back
 
 =head1 AUTHOR
 
