@@ -103,7 +103,8 @@ sub _quote_str {
 }
 
 sub send {
-	my ($self, $msg)= @_;
+	my $self= shift;
+	my $msg= join("\t", @_);
 	Test::More::note("send: "._quote_str($msg));
 	local $SIG{PIPE}= sub {};
 	$self->dp_stdin->print($msg."\n");
