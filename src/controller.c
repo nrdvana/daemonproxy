@@ -484,8 +484,9 @@ Set the timeouts associated with this controller.  If the controller's event
 stream has been blocked for more than RESET_TIMEOUT seconds, daemonproxy
 will flag the connection as "overflowed" and discard further writes until
 the script resumes reading events.  If the pipe has not been cleared by
-CLOSE_TIMEOUT seconds, daemonproxy will close the pipe and restart the
-controller.
+CLOSE_TIMEOUT seconds, daemonproxy will close the pipe, which hopefully sends
+SIGPIPE to the controller and kills it, after which daemonproxy will restart
+it if configured to do so.
 
 =cut
 */
