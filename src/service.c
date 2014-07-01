@@ -8,9 +8,8 @@
 #include "Contained_RBTree.h"
 
 // Describes a service, complete with metadata,
-// argument list, environment modifications,
-// file descriptor specification, and a state
-// machine for watching the PID.
+// argument list, file descriptor specification,
+// and a state machine for watching the PID.
 
 #define SVC_STATE_UNDEF         0
 #define SVC_STATE_DOWN          1
@@ -43,8 +42,6 @@ struct service_s {
 	int64_t  restart_interval;
 	sigset_t autostart_signals;
 };
-
-extern char **environ;
 
 // Service list - a vector of service references.
 service_t
@@ -755,8 +752,6 @@ void svc_do_exec(service_t *svc) {
 		}
 	argv[++i]= NULL;
 	
-	p= NULL;
-	environ= &p;
 	execvp(argv[0], argv);
 	log_error("exec(%s, ...) failed: %s", argv[0], strerror(errno));
 	_exit(EXIT_INVALID_ENVIRONMENT);

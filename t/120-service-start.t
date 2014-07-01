@@ -7,14 +7,15 @@ use lib 't/lib';
 use Test::DaemonProxy;
 use Time::HiRes 'sleep', 'clock_gettime', 'CLOCK_MONOTONIC';
 
+$ENV{env_test}= 'testing-'.$$;
 my $dp;
 $dp= Test::DaemonProxy->new;
 $dp->run('-i');
 
 # Test return values
 for my $ret (0, 42, 255) {
-	$dp->send("service.args	foo	perl	-e	exit($ret)");
-	$dp->send("service.start	foo");
+	$dp->send('service.args', 'foo', 'perl', '-e', "exit($ret)");
+	$dp->send('service.start', 'foo');
 	$dp->recv_ok( qr!^service.state\tfoo\tup!m, 'service started' );
 	$dp->recv_ok( qr!^service.state\tfoo\tdown\t.*\texit\t$ret\t!m, "service exited $ret" );
 }
@@ -26,6 +27,13 @@ for my $sig (qw: SIGTERM SIGHUP SIGINT SIGKILL :) {
 	$dp->recv_ok( qr!^service.state\tfoo\tup!m, 'service started' );
 	$dp->recv_ok( qr!^service.state\tfoo\tdown\t[^\t]+\t[^\t]+\tsignal\t$sig\t!m, "service signalled $sig" );
 }
+
+# Test that environment variables ARE preserved
+$dp->send('service.args', 'bar', 'perl', '-e', 'print "env_test=".$ENV{env_test}."\n"');
+$dp->send('service.fds',  'bar', 'null', 'stderr', 'stderr');
+$dp->send('service.start', 'bar');
+$dp->recv_ok( qr!^env_test=(.*)!m, 'service prints env_test value' );
+is( $dp->last_captures->[0], $ENV{env_test} );
 
 # Test uptime and timestamps
 $dp->timeout(4);
