@@ -452,7 +452,7 @@ command per line.  There is no escaping mechanism, and your commands
 must not contain ASCII control characters.  Events are delivered in
 this same format.
 
-In practice, ascii control characters shouldn't be needed, and the
+In practice, ASCII control characters shouldn't be needed, and the
 absence of quoting/escaping makes the protocol easier to implement
 in your script.
 
@@ -484,7 +484,7 @@ Set the timeouts associated with this controller.  If the controller's event
 stream has been blocked for more than RESET_TIMEOUT seconds, daemonproxy
 will flag the connection as "overflowed" and discard further writes until
 the script resumes reading events.  If the pipe has not been cleared by
-CLOSE_TIMEOUT seconds, daemonproxy will close the pipe and retsart the
+CLOSE_TIMEOUT seconds, daemonproxy will close the pipe and restart the
 controller.
 
 =cut
