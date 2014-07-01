@@ -1,3 +1,6 @@
+(upcoming)	Version 1.1.0
+	* Services now inherit environment from daemonproxy (see 5eb4b3ec)
+
 2014-03-09	Version 1.0.0
 
 	* Initial Release
