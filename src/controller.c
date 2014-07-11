@@ -57,6 +57,7 @@ STATE(ctl_state_dump_signals);
 #define COMMAND(name, ...) static bool name(controller_t *ctl)
 COMMAND(ctl_cmd_echo,                "echo");
 COMMAND(ctl_cmd_statedump,           "statedump");
+COMMAND(ctl_cmd_svc_tags,            "service.tags");
 COMMAND(ctl_cmd_svc_args,            "service.args");
 COMMAND(ctl_cmd_svc_fds,             "service.fds");
 COMMAND(ctl_cmd_svc_auto_up,         "service.auto_up");
@@ -588,9 +589,9 @@ bool ctl_state_dump_services(controller_t *ctl) {
 		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 1; break; }
 		ctl_notify_svc_state(ctl, svc_get_name(svc), svc_get_up_ts(svc),
 			svc_get_reap_ts(svc), svc_get_wstat(svc), svc_get_pid(svc));
-// case 2:
-//		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 2; break; }
-//		ctl_notify_svc_meta(ctl, svc_get_name(svc), svc_get_meta(svc));
+ case 2:
+		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 2; break; }
+		ctl_notify_svc_tags(ctl, svc_get_name(svc), svc_get_tags(svc));
  case 3:
 		if (!ctl_out_buf_ready(ctl)) { ctl->command_substate= 3; break; }
 		ctl_notify_svc_argv(ctl, svc_get_name(svc), svc_get_argv(svc));
@@ -769,6 +770,34 @@ bool ctl_cmd_fd_delete(controller_t *ctl) {
 
 	ctl_write(NULL, "fd.state	%s	deleted\n", fd_get_name(fd));
 	fd_delete(fd);
+	return true;
+}
+
+/*
+=item service.tags NAME TAG_1 TAG_2 ... TAG_N
+
+Set some ad-hoc metadata for this service, for use by the controller script.
+Beware! if you use a fixed-size service memory pool you won't be able to
+fit much data here.  Also everything you store here will be held in memory,
+bulking up daemonproxy's footprint.  This is mainly intended for small tags
+and IDs which might be inconvenient to store within the service name.
+
+If you have lots of metadata for a service, consider storing it in a file
+or database, keyed by the service name.
+=cut
+*/
+bool ctl_cmd_svc_tags(controller_t *ctl) {
+	service_t *svc;
+	
+	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
+		return false;
+	
+	if (!svc_set_tags(svc, ctl->command.len >= 0? ctl->command : STRSEG(""))) {
+		ctl->command_error= "unable to set tags";
+		return false;
+	}
+	
+	ctl_notify_svc_tags(NULL, svc_get_name(svc), svc_get_tags(svc));
 	return true;
 }
 
@@ -1312,6 +1341,17 @@ bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, in
 			name, (int)(reap_ts>>32), (int) pid, signame? signame : "-?",
 			(int)((reap_ts - up_ts)>>32), (int)((wake->now - reap_ts)>>32));
 	}
+}
+
+/*
+=item service.tags NAME TAG_1 TAG_2 ... TAG_N
+
+Tags for the service have changed.
+
+=cut
+*/
+bool ctl_notify_svc_tags(controller_t *ctl, const char *name, const char *tsv_fields) {
+	return ctl_write(ctl, "service.tags	%s	%s\n", name, tsv_fields);
 }
 
 /*

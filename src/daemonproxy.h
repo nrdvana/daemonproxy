@@ -202,7 +202,7 @@ bool ctl_write(controller_t *ctl, const char *msg, ... );
 // Notify functions are simply a way to keep all the event "printf" statements in one place.
 bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count);
 bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat);
-bool ctl_notify_svc_meta(controller_t *ctl, const char *name, const char *tsv_fields);
+bool ctl_notify_svc_tags(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_auto_up(controller_t *ctl, const char *name, int64_t interval, const char *tsv_triggers);
@@ -232,6 +232,12 @@ int     svc_get_wstat(service_t *svc);
 int64_t svc_get_up_ts(service_t *svc);
 int64_t svc_get_reap_ts(service_t *svc);
 int64_t svc_get_restart_interval(service_t *svc);
+
+// Set tags for a service. Fails if unable to allocate the needed space
+bool svc_set_tags(service_t *svc, strseg_t tsv_fields);
+
+// Return TSV string of tags
+const char * svc_get_tags(service_t *svc);
 
 // Set args for a service. Fails if unable to allocate the needed space
 bool svc_set_argv(service_t *svc, strseg_t tsv_fields);

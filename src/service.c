@@ -319,14 +319,27 @@ static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
 	return true;
 }
 
+const char * svc_get_tags(service_t *svc) {
+	strseg_t val;
+	return svc_get_var(svc, STRSEG("tags"), &val)? val.data : "";
+}
+
+/** Set the string for the service's tags
+ * This string is concatenated with args and fds in a single buffer.
+ * This can be slightly expensive, but args and fds are typically static.
+ */
+bool svc_set_tags(service_t *svc, strseg_t new_tags) {
+	return svc_set_var(svc, STRSEG("tags"), new_tags.len <= 0? NULL : &new_tags);
+}
+
 const char * svc_get_argv(service_t *svc) {
 	strseg_t val;
 	return svc_get_var(svc, STRSEG("args"), &val)? val.data : "";
 }
 
 /** Set the string for the service's argument list
- * This string is concatenated with meta and fds in a single buffer.
- * This is slightly expensive, but typically happens only once per service.
+ * This string is concatenated with tags and fds in a single buffer.
+ * This can be slightly expensive, but args and fds are typically static.
  */
 bool svc_set_argv(service_t *svc, strseg_t new_argv) {
 	return svc_set_var(svc, STRSEG("args"), new_argv.len <= 0? NULL : &new_argv);
@@ -339,7 +352,7 @@ const char * svc_get_fds(service_t *svc) {
 
 /** Set the string for the service's file descriptor specification
  * This string is concatenated with meta and argv in a single buffer.
- * This is slightly expensive, but typically happens only once per service.
+ * This can be slightly expensive, but args and fds are typically static.
  */
 bool svc_set_fds(service_t *svc, strseg_t new_fds) {
 	strseg_t name;
