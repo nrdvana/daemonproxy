@@ -1,7 +1,9 @@
 (upcoming)	Version 1.1.0-pre2
 
   * Services now inherit environment from daemonproxy (see 5eb4b3ec)
-  * New command service.tags allows attaching ad-hoc metadata.
+  * New command service.tags allows attaching ad-hoc metadata
+  * Fixed service.start delayed start feature and enabled cancellation
+  * Guard against child procs running parent signal handlers during fork
 
 2014-03-09	Version 1.0.0
 
