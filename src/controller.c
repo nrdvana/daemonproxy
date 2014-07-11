@@ -96,6 +96,7 @@ static inline bool ctl_get_arg(controller_t *ctl, strseg_t *arg_out) {
 }
 
 static bool ctl_get_arg_int(controller_t *ctl, int64_t *val);
+static bool ctl_get_arg_ts(controller_t *ctl, int64_t *ts);
 //static bool ctl_get_arg_name_val(controller_t *ctl, strseg_t *name, strseg_t *val);
 static bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, service_t **svc_out);
 static bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out);
@@ -921,8 +922,22 @@ bool ctl_cmd_svc_auto_up(controller_t *ctl) {
 /*
 =item service.start NAME [FUTURE_TIMESTAMP]
 
-Start the service, optionally at a future time.  Errors in service specification
-are reported immediate.  Errors during fork/exec are reported later.
+Start the service, optionally at a future time (or cancel a previous request).
+
+FUTURE_TIMESTAMP is an integer of seconds according to CLOCK_MONOTONIC.
+(This might be extended to allow fractional seconds in the future.)
+The service.start will take place as soon as that time is past, but if
+the timestamp is more than 100000 seconds in the past it is considered
+an error.  The service.state will become 'start'.
+
+If FUTURE_TIMESTAMP is the string "-", a pending start event will be
+canceled.  However, because commands are asynchronous the service might
+get started anyway.  Watch for the service.state event to find out whether
+it started or was canceled.
+
+Starting a service can reveal configuration errors, such as invalid FD names,
+or an argv that can't be executed.  Error messages are events, so they are
+asynchronous and might be received in any order.
 
 =cut
 */
@@ -930,13 +945,20 @@ bool ctl_cmd_svc_start(controller_t *ctl) {
 	const char *argv;
 	int64_t starttime_ts;
 	service_t *svc;
+	strseg_t when;
 	
 	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
 		return false;
 	
 	// Optional timestamp for service start
-	if (ctl_peek_arg(ctl, NULL)) {
-		if (!ctl_get_arg_int(ctl, &starttime_ts) || starttime_ts - wake->now < 10000) {
+	if (ctl_peek_arg(ctl, &when)) {
+		if (0 == strseg_cmp(when, STRSEG("-"))) {
+			if (svc_cancel_start(svc))
+				return true;
+			ctl->command_error= "no service.start pending";
+			return false;
+		}
+		if (!ctl_get_arg_ts(ctl, &starttime_ts) || starttime_ts - wake->now < -100000) {
 			ctl->command_error= "invalid timestamp";
 			return false;
 		}
@@ -949,8 +971,10 @@ bool ctl_cmd_svc_start(controller_t *ctl) {
 		return false;
 	}
 	
-	svc_handle_start(svc, starttime_ts);
-	return true;
+	if (svc_handle_start(svc, starttime_ts))
+		return true;
+	ctl->command_error= "service is not startable";
+	return false;
 }
 
 /*
@@ -1621,6 +1645,21 @@ bool ctl_get_arg_int(controller_t *ctl, int64_t *val) {
 		ctl->command_error= "Expected integer";
 		return false;
 	}
+	return true;
+}
+
+/** Extract the next argument as a timestamp
+ */
+bool ctl_get_arg_ts(controller_t *ctl, int64_t *ts) {
+	strseg_t str;
+	if (!strseg_tok_next(&ctl->command, '\t', &str)
+		|| !strseg_atoi(&str, ts)
+		|| str.len > 0   // should consume all of str
+	) {
+		ctl->command_error= "Expected integer";
+		return false;
+	}
+	*ts <<= 32; // create fixed-point 32.32 timestamp
 	return true;
 }
 

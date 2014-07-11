@@ -486,6 +486,19 @@ bool svc_handle_start(service_t *svc, int64_t when) {
 	return true;
 }
 
+bool svc_cancel_start(service_t *svc) {
+	if (svc->state != SVC_STATE_START) {
+		log_debug("Can't cancel start for service \"%s\": state is %d", svc_get_name(svc), svc->state);
+		return false;
+	}
+	
+	svc->state= SVC_STATE_DOWN;
+	svc->start_time= 0;
+	svc_set_active(svc, false);
+	svc_notify_state(svc);
+	return true;
+}
+
 /** Handle the case where a service's pid was reaped with wait().
  * This wakes up the service state machine, to possibly restart the daemon.
  * It is assumed that this is called by main() before iterating the active services.

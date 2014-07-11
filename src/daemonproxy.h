@@ -263,6 +263,9 @@ bool svc_set_triggers(service_t *svc, strseg_t triggers_tsv);
 // Tell service state machine to start at specified time
 bool svc_handle_start(service_t *svc, int64_t when);
 
+// Cancel a pending service.start; return service to 'down' state
+bool svc_cancel_start(service_t *svc);
+
 // Tell service state machine it has been reaped
 void svc_handle_reaped(service_t *svc, int wstat);
 
