@@ -16,7 +16,6 @@
 #define SVC_STATE_START         2
 #define SVC_STATE_UP            3
 #define SVC_STATE_REAPED        4
-#define SVC_STATE_ALLOC_CTL     5
 
 struct service_s {
 	int state;
