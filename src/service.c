@@ -13,11 +13,10 @@
 
 #define SVC_STATE_UNDEF         0
 #define SVC_STATE_DOWN          1
-#define SVC_STATE_START_PENDING 2
-#define SVC_STATE_START         3
-#define SVC_STATE_UP            4
-#define SVC_STATE_REAPED        5
-#define SVC_STATE_ALLOC_CTL     6
+#define SVC_STATE_START         2
+#define SVC_STATE_UP            3
+#define SVC_STATE_REAPED        4
+#define SVC_STATE_ALLOC_CTL     5
 
 struct service_s {
 	int state;
@@ -464,21 +463,20 @@ static bool svc_check_sigwake(service_t *svc) {
 }
 
 bool svc_handle_start(service_t *svc, int64_t when) {
-	if (svc->state != SVC_STATE_DOWN && svc->state != SVC_STATE_START_PENDING) {
+	if (svc->state != SVC_STATE_DOWN && svc->state != SVC_STATE_START) {
 		log_debug("Can't start service \"%s\": state is %d", svc_get_name(svc), svc->state);
 		return false;
 	}
 	
 	if (when - wake->now > 0) {
 		log_debug("start service \"%s\" in %d seconds", svc_get_name(svc), (int)((when - wake->now) >> 32));
-		svc->state= SVC_STATE_START_PENDING;
-		svc->start_time= when;
 	}
 	else {
-		log_debug("start service \"%s\" now", svc_get_name(svc), (int)((when - wake->now) >> 32));
-		svc->state= SVC_STATE_START;
-		svc->start_time= wake->now;
+		log_debug("start service \"%s\" now", svc_get_name(svc));
+		when= wake->now;
 	}
+	svc->state= SVC_STATE_START;
+	svc->start_time= when;
 	if (svc->start_time == 0) svc->start_time++; // 0 means undefined
 	svc_change_pid(svc, 0);
 	svc->reap_time= 0;
@@ -578,7 +576,7 @@ void svc_run(service_t *svc) {
 	re_switch_state:
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
 	switch (svc->state) {
-	case SVC_STATE_START_PENDING:
+	case SVC_STATE_START:
 		// if not wake time yet,
 		if (svc->start_time - wake->now > 0) {
 			// set main-loop wake time if we're next
@@ -589,9 +587,6 @@ void svc_run(service_t *svc) {
 			break;
 		}
 		// else we've reached the time to retry
-		svc->state= SVC_STATE_START;
-		svc_notify_state(svc);
-	case SVC_STATE_START:
 		for (i=0; i<4; i++) pipes[i]= -1;
 		// If this service uses the control.{cmd,event} file handles, then we
 		// need to create pipes for them, and attach to a new controller
@@ -612,10 +607,6 @@ void svc_run(service_t *svc) {
 				if (ctl) {
 					ctl_dtor(ctl);
 					ctl_free(ctl);
-				}
-				if (svc->state != SVC_STATE_START) {
-					svc->state= SVC_STATE_START;
-					svc_notify_state(svc);
 				}
 				log_info("will retry in %d seconds", (int)( FORK_RETRY_DELAY >> 32 ));
 				svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
