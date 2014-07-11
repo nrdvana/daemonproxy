@@ -7,6 +7,7 @@
 #include "daemonproxy.h"
 
 // Global signal self-pipe
+pid_t sig_main_pid= 0;
 int sig_wake_rd= -1;
 int sig_wake_wr= -1;
 volatile int signal_error= 0;
@@ -26,6 +27,13 @@ void sig_handler(int sig) {
 	int i;
 	static int64_t prev= 0;
 	int64_t now= gettime_mon_frac();
+	
+	// Make absolutely sure a forked child never runs the parent's
+	// signal handler
+	if (getpid() != sig_main_pid) {
+		sig_reset_for_exec();
+		kill(getpid(), sig);
+	}
 
 	if (sig != SIGCHLD) {
 		// We have a requirement that no two signals share a timestamp.
@@ -56,7 +64,16 @@ void sig_handler(int sig) {
 }
 
 void fatal_sig_handler(int sig) {
-	const char* signame= sig_name_by_num(sig);
+	const char* signame;
+	
+	// Make absolutely sure a forked child never runs the parent's
+	// signal handler
+	if (getpid() != sig_main_pid) {
+		sig_reset_for_exec();
+		kill(getpid(), sig);
+	}
+	
+	signame= sig_name_by_num(sig);
 	fatal(EXIT_BROKEN_PROGRAM_STATE, "Received signal %s%s (%d)", signame? "SIG":"???", signame? signame : "", sig);
 	// No fallback available.  Probably can't actually recover from fatal signal...
 	// TODO: consider some sort of longjmp + state recovery
@@ -87,15 +104,18 @@ void sig_init() {
 	int pipe_fd[2];
 	struct sigaction act;
 	struct signal_spec_s *ss;
-
+	
 	// in a last-ditch attempt to recover from fatal errors, we might re-run
 	// the initialization.  otherwise, this condition is never true.
 	if (sig_wake_rd >= 0) close(sig_wake_rd);
 	if (sig_wake_wr >= 0) close(sig_wake_wr);
 
+	if (!sig_main_pid)
+		sig_main_pid= getpid();
+	
 	// initialize with 0
 	memset((void*)signals, 0, sizeof(signals));
-	
+
 	// Create pipe and set non-blocking
 	if (pipe(pipe_fd)
 		|| fcntl(pipe_fd[0], F_SETFD, FD_CLOEXEC)
