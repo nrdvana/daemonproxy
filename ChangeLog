@@ -1,7 +1,9 @@
-(upcoming)	Version 1.1.0
-	* Services now inherit environment from daemonproxy (see 5eb4b3ec)
+(upcoming)	Version 1.1.0-pre2
+
+  * Services now inherit environment from daemonproxy (see 5eb4b3ec)
+  * New command service.tags allows attaching ad-hoc metadata.
 
 2014-03-09	Version 1.0.0
 
-	* Initial Release
+  * Initial Release
 
