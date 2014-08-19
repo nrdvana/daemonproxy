@@ -11,19 +11,22 @@ has 'signals',          is => 'rw';
 
 sub service {
 	my ($self, $svcname)= @_;
-	return Daemonproxy::Protocol::Service->new(conn => $self, name => $svcname);
+	return bless [$self, $svcname], 'Daemonproxy::Protocol::Service';
 }
 
 sub file_descriptor {
 	my ($self, $fdname)= @_;
-	return Daemonproxy::Protocol::Service->new(conn => $self, name => $fdname);
+	return bless [$self, $fdname], 'Daemonproxy::Protocol::Service';
 }
 
 *fd= *file_descriptor;
 *svc= *service;
 
 sub pump_events {
-	...;
+	my $self= shift;
+	while (defined my $line= $self->handle->getline) {
+		$self->process_event($line);
+	}
 }
 
 sub process_event {
@@ -34,15 +37,17 @@ sub process_event {
 	if (my $mth= $self->can('process_event_'.$event_id)) {
 		$self->$mth(@args);
 	} else {
-		carp "Unknown event '$text'";
+		$log->warn("Unknown event '$text'");
 	}
 }
 
 sub process_event_service_state {
 	my $self= shit;
 	my $service_name= shift;
-	@{$self->{state}{services}{$service_name}{state}}{qw( state timestamp pid exitreason exitvalue uptime downtime )}=
+	@{$self->{state}{services}{$service_name}}{qw( state timestamp pid exit_reason exit_value uptime downtime )}=
 		map { defined $_ && $_ eq '-'? undef : $_ } @_;
+	delete $self->{state}{services}{$service_name}
+		if $self->{state}{services}{$service_name}{state} eq 'deleted';
 }
 
 sub process_event_service_auto_up {
@@ -52,9 +57,9 @@ sub process_event_service_auto_up {
 	@{$self->{state}{services}{$service_name}}{'restart_interval','triggers'}= ($restart_interval, @triggers? \@triggers : undef);
 }
 
-sub process_event_service_meta {
-	my ($self, $service_name, @meta_flags)= @_;
-	$self->{state}{services}{$service_name}{meta}= \@meta_flags;
+sub process_event_service_tags {
+	my ($self, $service_name, @tags)= @_;
+	$self->{state}{services}{$service_name}{'tags','tags_hash'}= (\@tags, undef);
 }
 
 sub process_event_service_fds {
@@ -82,22 +87,19 @@ sub send {
 	$self->handle->print($msg."\n");
 }
 
-...; XXX
 sub begin_cmd {
-	&{ $self->can('send') };
-	&{ $self->can('_get_cmd_watcher') } if defined wantarray;
+	my $self= shift;
+	$self->send(@_);
+	$self->_get_cmd_watcher(@_) if defined wantarray;
 }
 
 sub _get_cmd_watcher {
 	my $self= shift;
-	$self->send(@_) if @_;
-	return $self->flush(@_) if (defin
-	my $cmd= Daemonproxy::Protocol::Command->new( conn => $self, command => $cmd_id, args => \@args );
+	my $cmd= Daemonproxy::Protocol::Command->new( conn => $self, command => shift, args => [ @_ ] );
 	$self->send('echo', '--cmd-complete--', $cmd);
 	weaken($self->{pending_commands}{$cmd}= $cmd);
-	$cmd;
+	return $cmd;
 }
-...; XXX
 
 sub reset {
 	$self->{state}= {};
@@ -106,27 +108,128 @@ sub reset {
 
 sub flush {
 	my ($self)= @_;
-	$self->begin_cmd()->wait;
+	$self->_get_cmd_watcher()->wait;
 }
 
 package Daemonproxy::Protocol::Service;
+use strict;
+use warnings;
+no warnings 'uninitialized';
 
-sub name { ... }
-sub is_running { ... }
+sub conn { $_[0][0] }
+sub name { $_[0][1] }
 
-sub arguments { ... }
-sub arg_list { @{ $_[0]->arguments } }
+sub _svc { $_[0][0]->{state}{services}{$_[0][1]} || {} }
 
-sub file_descriptors { ... }
-sub fd_list  { @{ $_[0]->file_descriptors } }
+sub state {
+	return $_[0]->_svc->{state};
+}
 
-sub meta { ... }
+sub is_running {
+	return $_[0]->state eq 'up';
+}
+
+sub is_starting {
+	return $_[0]->state eq 'starting';
+}
+
+sub pid {
+	return $_[0]->_svc->{pid};
+}
+
+sub exit_reason {
+	return $_[0]->_svc->{exitreason};
+}
+
+sub exit_value {
+	return $_[0]->_svc->{exit_value};
+}
+
+sub arg_list { @{ $_[0]->_svc->{args} } }
+sub fd_list  { @{ $_[0]->_svc->{fds} } }
+sub tag_list { @{ $_[0]->_svc->{tags} } }
+
+sub arguments        { [ $_[0]->arg_list ] }
+*args = *arguments;
+sub file_descriptors { [ $_[0]->fd_list ] }
+*fds = *file_descriptors;
+sub tags             { [ $_[0]->tag_list ] }
+
+sub _tag_hash {
+	my $svc= (shift)->_svc;
+	$svc->{tags_hash} ||= { map { $_ =~ /^([^=]*)(?:=(.*))?/? ($1 => defined $2? $2 : 1) : () } @{ $svc->{tags} } };
+}
+
+sub tag_values {
+	my $tag_hash= shift->_tag_hash;
+	return @_ > 1? @{$tag_hash}{@_}
+		: ref $_[0] eq 'ARRAY'? [ @{$tag_hash}{@{$_[0]}} ]
+		: $tags_hash->{$_[0]};
+}
+
+sub start {
+	my $self= shift;
+	$self->conn->begin_cmd('service.start', $self->name);
+}
+
+sub signal {
+	my ($self, $signal)= @_;
+	$self->conn->begin_cmd('service.signal', $self->name, $signal);
+}
+
+sub signal_pgroup {
+	my ($self, $signal)= @_;
+	$self->conn->begin_cmd('service.signal', $self->name, $signal, 'group');
+}
+
+sub delete {
+	my $self= shift;
+	$self->conn->begin_cmd('service.delete', $self->name);
+}
+
+sub set_args {
+	my $self= shift;
+	my $ret= $self->conn->begin_cmd('service.args', @_);
+	# Apply changes immediately, to prevent confusion
+	$self->conn->state->{services}{$self->name}{args}= [ @_ ];
+}
+
+sub set_fds {
+	my $self= shift;
+	my $ret= $self->conn->begin_cmd('service.fds', @_);
+	# Apply changes immediately, to prevent confusion
+	$self->conn->state->{services}{$self->name}{fds}= [ @_ ];
+}
+
+sub set_tags {
+	my $self= shift;
+	my $ret= $self->conn->begin_cmd('service.tags', @_);
+	# Apply changes immediately, to prevent confusion
+	$self->conn->state->{services}{$self->name}{tags}= [ @_ ];
+}
+
+sub set_tag_values {
+	my $self= shift;
+	my $tag_hash= $self->_tag_hash;
+	my @todo= @_;
+	@todo= %{ $todo[0] } if @todo == 1 && ref $todo[0] eq 'HASH';
+	while (@todo) {
+		my ($k, $v)= (shift @todo, shift @todo);
+		...;
+	}
+	...;
+}
 
 package Daemonproxy::Protocol::FileDescriptor;
+use strict;
+use warnings;
+no warnings 'uninitialized';
+
+has 'conn', is => 'ro';
+has 'name', is => 'ro';
 
 sub is_pipe { ... }
 sub is_file { ... }
-sub name { ... }
 
 package Daemonproxy::Protocol::Command;
 use Moo;
