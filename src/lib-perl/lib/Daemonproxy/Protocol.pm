@@ -119,7 +119,7 @@ no warnings 'uninitialized';
 sub conn { $_[0][0] }
 sub name { $_[0][1] }
 
-sub _svc { $_[0][0]->{state}{services}{$_[0][1]} || {} }
+sub _svc { $_[0][0]->{state}{services}{$_[0][1]} }
 
 sub state {
 	return $_[0]->_svc->{state};
@@ -189,35 +189,38 @@ sub delete {
 
 sub set_args {
 	my $self= shift;
-	my $ret= $self->conn->begin_cmd('service.args', @_);
-	# Apply changes immediately, to prevent confusion
-	$self->conn->state->{services}{$self->name}{args}= [ @_ ];
+	$self->conn->begin_cmd('service.args', @_);
 }
 
 sub set_fds {
 	my $self= shift;
-	my $ret= $self->conn->begin_cmd('service.fds', @_);
-	# Apply changes immediately, to prevent confusion
-	$self->conn->state->{services}{$self->name}{fds}= [ @_ ];
+	$self->conn->begin_cmd('service.fds', @_);
 }
 
 sub set_tags {
 	my $self= shift;
-	my $ret= $self->conn->begin_cmd('service.tags', @_);
-	# Apply changes immediately, to prevent confusion
-	$self->conn->state->{services}{$self->name}{tags}= [ @_ ];
+	$self->conn->begin_cmd('service.tags', @_);
 }
 
 sub set_tag_values {
 	my $self= shift;
-	my $tag_hash= $self->_tag_hash;
+	# since this merges values with existing values, to be safe we need
+	# to flush any previous commands to make sure we have the latest tags.
+	$self->conn->flush;
+	# now perform the merge
+	my %tag_hash= %{$self->_tag_hash};
 	my @todo= @_;
 	@todo= %{ $todo[0] } if @todo == 1 && ref $todo[0] eq 'HASH';
 	while (@todo) {
 		my ($k, $v)= (shift @todo, shift @todo);
-		...;
+		if (defined $v) {
+			$tag_hash{$k}= $v;
+		} else {
+			delete $tag_hash{$k};
+		}
 	}
-	...;
+	# build new tags from hash
+	$self->set_tags(map { "$_=$tag_hash{$_}" } sort keys %tag_hash);
 }
 
 package Daemonproxy::Protocol::FileDescriptor;
