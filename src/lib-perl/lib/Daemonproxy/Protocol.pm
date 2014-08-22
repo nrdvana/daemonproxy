@@ -189,17 +189,17 @@ sub delete {
 
 sub set_args {
 	my $self= shift;
-	$self->conn->begin_cmd('service.args', @_);
+	$self->conn->begin_cmd('service.args', $self->name, @_);
 }
 
 sub set_fds {
 	my $self= shift;
-	$self->conn->begin_cmd('service.fds', @_);
+	$self->conn->begin_cmd('service.fds', $self->name, @_);
 }
 
 sub set_tags {
 	my $self= shift;
-	$self->conn->begin_cmd('service.tags', @_);
+	$self->conn->begin_cmd('service.tags', $self->name, @_);
 }
 
 sub set_tag_values {
@@ -228,11 +228,55 @@ use strict;
 use warnings;
 no warnings 'uninitialized';
 
-has 'conn', is => 'ro';
-has 'name', is => 'ro';
+sub conn { $_[0][0] }
+sub name { $_[0][1] }
 
-sub is_pipe { ... }
-sub is_file { ... }
+sub _fd { $_[0][0]->{state}{fds}{$_[0][1]} }
+
+sub type        { $_[0]->_fd->{type} }
+sub flags       { $_[0]->_fd->{flags} }
+sub description { $_[0]->_fd->{descrip} }
+
+sub is_pipe    { $_[0]->_fd->{type} eq 'pipe' }
+sub is_file    { $_[0]->_fd->{type} eq 'file' }
+sub is_special { $_[0]->_fd->{type} eq 'special' }
+
+our %_file_flags= map { $_ => 1 } qw( read write create truncate nonblock mkdir );
+sub open_file {
+	my ($self, $path, $flags)= @_;
+	defined $path or croak "Require file path argument";
+	my @flags= !defined $flags? ()
+		: !ref $flags? split(/,/, $flags)
+		: ref $flags eq 'ARRAY'? @$flags
+		: ref $flags eq 'HASH'? (grep { $flags->{$_} } keys %$flags)
+		: croak "Can't process flags of $flags";
+	$_file_flags{$_} or croak "$_ is not a valid fd.open flag"
+		for @flags;
+	$self->conn->begin_cmd('fd.open', $self->name, join(',', @flags), $path);
+}
+
+sub open_pipe_to {
+	my ($self, $dest_name)= @_;
+	defined $dest_name
+		or croak "Require pipe read-end name";
+	$dest_name= $dest_name->name
+		if ref $dest_name;
+	$self->conn->begin_cmd('fd.pipe', $dest_name, $self->name);
+}
+
+sub open_pipe_from {
+	my ($self, $src_name)= @_;
+	defined $src_name
+		or croak "Require pipe write-end name";
+	$src_name= $src_name->name
+		if ref $src_name;
+	$self->conn->begin_cmd('fd.pipe', $self->name, $src_name);
+}
+
+sub delete {
+	my $self= shift;
+	$self->conn->begin_cmd('fd.delete', $self->name);
+}
 
 package Daemonproxy::Protocol::Command;
 use Moo;
