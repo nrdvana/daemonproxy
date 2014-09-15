@@ -34,11 +34,12 @@ sub temp_path {
 
 sub new {
 	my $class= shift;
-	return bless { timeout => 0.5 }, $class;
+	return bless { timeout => 0.5, pipe_count => 3 }, $class;
 }
 
 sub dp_pid        { $_[0]{dp_pid} }
 *pid= *dp_pid;
+sub pipe_count    { $_[0]{pipe_count} }
 sub dp_fds        { $_[0]{dp_fds} }
 sub dp_stdin      { $_[0]{dp_fds}[0]{handle} }
 sub dp_stdout     { $_[0]{dp_fds}[1]{handle} }
@@ -52,7 +53,7 @@ sub run {
 		if defined $self->{dp_pid};
 	my @parent_fds;
 	my @child_fds;
-	my $pipe_count= 3;
+	my $pipe_count= $self->pipe_count;
 	for (my $i= 0; $i < $pipe_count; $i++) {
 		pipe(my ($r,  $w)) or die "pipe: $!";
 		push @parent_fds, { handle => $i? $r : $w, input => $i == 0, output => $i != 0, buffer => '' };
@@ -283,9 +284,9 @@ sub cleanup {
 	
 	$self->dp_pid and kill SIGQUIT => $self->dp_pid;
 	delete $self->{dp_pid};
-	for (qw: dp_stdin dp_stdout dp_stderr :) {
-		close delete $self->{$_}
-			if defined $self->{$_};
+	for (@{ $self->{dp_fds} || [] }) {
+		close $_->{handle}
+			if defined $_->{handle};
 	}
 }
 
