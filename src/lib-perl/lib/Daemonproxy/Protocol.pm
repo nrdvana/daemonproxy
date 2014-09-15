@@ -4,7 +4,8 @@ use Log::Any '$log';
 use Time::HiRes 'time';
 use Carp;
 
-has 'handle',           is => 'ro', required => 1;
+has 'rd_handle',        is => 'ro', required => 1;
+has 'wr_handle',        is => 'ro', required => 1;
 has 'state',            is => 'rw';
 has 'pending_commands', is => 'rw';
 has 'signals',          is => 'rw';
@@ -24,7 +25,7 @@ sub file_descriptor {
 
 sub pump_events {
 	my $self= shift;
-	while (defined my $line= $self->handle->getline) {
+	while (defined (my $line= $self->rd_handle->getline)) {
 		$self->process_event($line);
 	}
 }
@@ -33,7 +34,7 @@ sub process_event {
 	my ($self, $text)= @_;
 	chomp $text;
 	my ($event_id, @args)= split /\t/, $text;
-	$event_id =~ tr/./_/g;
+	$event_id =~ tr/./_/;
 	if (my $mth= $self->can('process_event_'.$event_id)) {
 		$self->$mth(@args);
 	} else {
@@ -42,7 +43,7 @@ sub process_event {
 }
 
 sub process_event_service_state {
-	my $self= shit;
+	my $self= shift;
 	my $service_name= shift;
 	@{$self->{state}{services}{$service_name}}{qw( state timestamp pid exit_reason exit_value uptime downtime )}=
 		map { defined $_ && $_ eq '-'? undef : $_ } @_;
@@ -59,7 +60,7 @@ sub process_event_service_auto_up {
 
 sub process_event_service_tags {
 	my ($self, $service_name, @tags)= @_;
-	$self->{state}{services}{$service_name}{'tags','tags_hash'}= (\@tags, undef);
+	@{$self->{state}{services}{$service_name}}{'tags','tags_hash'}= (\@tags, undef);
 }
 
 sub process_event_service_fds {
@@ -69,7 +70,7 @@ sub process_event_service_fds {
 
 sub process_event_fd_state {
 	my ($self, $fd_name, $type, $flags, $descrip)= @_;
-	@{$self->{state}{handles}{$fd_name}{state}}{'type','flags','descrip'}= ($type, $flags, $descrip);
+	@{$self->{state}{fds}{$fd_name}{state}}{'type','flags','descrip'}= ($type, $flags, $descrip);
 }
 
 sub process_event_echo {
@@ -84,7 +85,7 @@ sub process_event_echo {
 sub send {
 	my $self= shift;
 	my $msg= join("\t", @_);
-	$self->handle->print($msg."\n");
+	$self->wr_handle->print($msg."\n");
 }
 
 sub begin_cmd {
@@ -102,6 +103,7 @@ sub _get_cmd_watcher {
 }
 
 sub reset {
+	my $self= shift;
 	$self->{state}= {};
 	return $self->begin_cmd("statedump");
 }
@@ -164,7 +166,7 @@ sub tag_values {
 	my $tag_hash= shift->_tag_hash;
 	return @_ > 1? @{$tag_hash}{@_}
 		: ref $_[0] eq 'ARRAY'? [ @{$tag_hash}{@{$_[0]}} ]
-		: $tags_hash->{$_[0]};
+		: $tag_hash->{$_[0]};
 }
 
 sub start {
@@ -227,6 +229,7 @@ package Daemonproxy::Protocol::FileDescriptor;
 use strict;
 use warnings;
 no warnings 'uninitialized';
+use Carp;
 
 sub conn { $_[0][0] }
 sub name { $_[0][1] }
@@ -287,6 +290,7 @@ has 'args',     is => 'ro', required => 1;
 has 'complete', is => 'rw';
 
 sub wait {
+	my $self= shift;
 	$self->conn->pump_events until $self->complete;
 }
 
