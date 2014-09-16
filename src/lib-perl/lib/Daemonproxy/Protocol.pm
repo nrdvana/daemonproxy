@@ -25,14 +25,18 @@ sub file_descriptor {
 
 sub pump_events {
 	my $self= shift;
+	my $prev_block= $self->rd_handle->blocking;
+	$self->rd_handle->blocking(0);
 	while (defined (my $line= $self->rd_handle->getline)) {
 		$self->process_event($line);
 	}
+	$self->rd_handle->blocking(1) if $prev_block;
 }
 
 sub process_event {
 	my ($self, $text)= @_;
 	chomp $text;
+	$log->tracef("process_event %s", $text) if $log->is_trace;
 	my ($event_id, @args)= split /\t/, $text;
 	$event_id =~ tr/./_/;
 	if (my $mth= $self->can('process_event_'.$event_id)) {
@@ -56,6 +60,11 @@ sub process_event_service_auto_up {
 	$restart_interval= undef
 		unless defined $restart_interval && $restart_interval ne '-';
 	@{$self->{state}{services}{$service_name}}{'restart_interval','triggers'}= ($restart_interval, @triggers? \@triggers : undef);
+}
+
+sub process_event_service_args {
+	my ($self, $service_name, @args)= @_;
+	$self->{state}{services}{$service_name}{args}= \@args;
 }
 
 sub process_event_service_tags {
@@ -85,6 +94,7 @@ sub process_event_echo {
 sub send {
 	my $self= shift;
 	my $msg= join("\t", @_);
+	$log->tracef("send_command %s", $msg) if $log->is_trace;
 	$self->wr_handle->print($msg."\n");
 }
 
@@ -116,6 +126,7 @@ sub flush {
 package Daemonproxy::Protocol::Service;
 use strict;
 use warnings;
+use overload 'bool' => \&exists;
 no warnings 'uninitialized';
 
 sub conn { $_[0][0] }
@@ -123,8 +134,12 @@ sub name { $_[0][1] }
 
 sub _svc { $_[0][0]->{state}{services}{$_[0][1]} }
 
+sub exists {
+	defined shift->_svc;
+}
+
 sub state {
-	return $_[0]->_svc->{state};
+	return ($_[0]->_svc || {})->{state};
 }
 
 sub is_running {
@@ -136,20 +151,20 @@ sub is_starting {
 }
 
 sub pid {
-	return $_[0]->_svc->{pid};
+	return ($_[0]->_svc || {})->{pid};
 }
 
 sub exit_reason {
-	return $_[0]->_svc->{exitreason};
+	return ($_[0]->_svc || {})->{exitreason};
 }
 
 sub exit_value {
-	return $_[0]->_svc->{exit_value};
+	return ($_[0]->_svc || {})->{exit_value};
 }
 
-sub arg_list { @{ $_[0]->_svc->{args} } }
-sub fd_list  { @{ $_[0]->_svc->{fds} } }
-sub tag_list { @{ $_[0]->_svc->{tags} } }
+sub arg_list { @{ ($_[0]->_svc || {})->{args} || []} }
+sub fd_list  { @{ ($_[0]->_svc || {})->{fds} || []} }
+sub tag_list { @{ ($_[0]->_svc || {})->{tags} || []} }
 
 sub arguments        { [ $_[0]->arg_list ] }
 *args = *arguments;
@@ -189,15 +204,17 @@ sub delete {
 	$self->conn->begin_cmd('service.delete', $self->name);
 }
 
-sub set_args {
+sub set_arguments {
 	my $self= shift;
 	$self->conn->begin_cmd('service.args', $self->name, @_);
 }
+*set_args= *set_arguments;
 
-sub set_fds {
+sub set_file_descriptors {
 	my $self= shift;
 	$self->conn->begin_cmd('service.fds', $self->name, @_);
 }
+*set_fds= *set_file_descriptors;
 
 sub set_tags {
 	my $self= shift;

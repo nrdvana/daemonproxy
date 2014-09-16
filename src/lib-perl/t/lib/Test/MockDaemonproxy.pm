@@ -10,6 +10,8 @@ sub new {
 	my %args= @_ == 1 && ref $_[0] eq 'HASH'? %{ $_[0] } : @_;
 	pipe($args{event_rd}, $args{event_wr});
 	pipe($args{cmd_rd}, $args{cmd_wr});
+	$_->blocking(0) for @args{'event_rd','cmd_rd'};
+	$_->autoflush(1) for @args{'event_wr','cmd_wr'};
 	bless \%args, $class;
 }
 
@@ -17,7 +19,7 @@ sub client {
 	my $self= shift;
 	return $self->{client} ||= Daemonproxy::Protocol->new(
 		rd_handle => $self->{event_rd},
-		wr_handle => $self->{event_wr}
+		wr_handle => $self->{cmd_wr}
 	);
 }
 

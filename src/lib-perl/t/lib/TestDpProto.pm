@@ -3,9 +3,21 @@ use strict;
 use warnings;
 use Carp;
 use FindBin;
+use Try::Tiny;
+use Test::More;
+use Log::Any '$log';
+use Log::Any::Adapter 'TAP';
 use lib "$FindBin::Bin/../../../../t/lib";
-use Exporter 'import';
+require Exporter;
 our @EXPORT= qw( dp client client2 mock_dp );
+
+sub import {
+	my $caller= caller;
+	strict->import;
+	warnings->import;
+	eval "package $caller; use Try::Tiny; use Test::More; use Log::Any '\$log';";
+	goto &Exporter::import;
+}
 
 our $mock_dp;
 sub mock_dp {
