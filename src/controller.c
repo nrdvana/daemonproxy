@@ -451,25 +451,26 @@ bool ctl_state_free(controller_t *ctl) {
 
 Daemonproxy reads commands in tab-separated-values format, with one
 command per line.  There is no escaping mechanism, and your commands
-must not contain ASCII control characters.  Events are delivered in
-this same format.
+must not contain ASCII control characters (other than TAB and NewLine).
+Events are delivered in this same format.
 
 In practice, ASCII control characters shouldn't be needed, and the
 absence of quoting/escaping makes the protocol easier to implement
 in your script.
 
-A full protocol reference can be found in the documentation included
-with daemonproxy.  However, here is a quick reference guide:
-
 =head2 COMMANDS
 
 =over 4
 
-=item echo ANY_STRING_OF_CHARACTERS
+=item echo ANY ARGUMENT LIST
 
-Prints all arguments as-is back as an event.  This is primarily intended to be
-used to mark the ends of other commands, by following the other command with
-an echo and a unique string, then watching for the echo to complete.
+Generates an event composed of the given arguments.  The main purpose of this
+command is to synchronize communications with daemonproxy, by sending a unique
+string and then waiting for the event containing that string, which means that
+daemonproxy has completed every command sent before the echo as well.
+
+You might find other clever uses for this command, since you can basically ask
+daemonproxy to generate any event of your choice.
 
 =cut
 */
@@ -980,9 +981,9 @@ bool ctl_cmd_svc_start(controller_t *ctl) {
 /*
 =item service.signal NAME SIGNAL [FLAGS]
 
-Send SIGNAL to the named service's pid, if it is running.  Optional flag may
-be "group", in which case (if the service leads a process group) the pprocess
-group is sent the signal.
+Send SIGNAL to the named service's pid, if it is running.  If you specify the
+flag "group" and the service is leading a process group, then the entire group
+receives the signal.
 
 =cut
 */
