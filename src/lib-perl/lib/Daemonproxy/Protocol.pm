@@ -17,7 +17,7 @@ sub service {
 
 sub file_descriptor {
 	my ($self, $fdname)= @_;
-	return bless [$self, $fdname], 'Daemonproxy::Protocol::Service';
+	return bless [$self, $fdname], 'Daemonproxy::Protocol::FileDescriptor';
 }
 
 *fd= *file_descriptor;
@@ -79,7 +79,7 @@ sub process_event_service_fds {
 
 sub process_event_fd_state {
 	my ($self, $fd_name, $type, $flags, $descrip)= @_;
-	@{$self->{state}{fds}{$fd_name}{state}}{'type','flags','descrip'}= ($type, $flags, $descrip);
+	@{$self->{state}{fds}{$fd_name}}{'type','flags','descrip'}= ($type, $flags, $descrip);
 }
 
 sub process_event_echo {
@@ -245,6 +245,7 @@ sub set_tag_values {
 package Daemonproxy::Protocol::FileDescriptor;
 use strict;
 use warnings;
+use overload 'bool' => \&exists;
 no warnings 'uninitialized';
 use Carp;
 
@@ -252,14 +253,17 @@ sub conn { $_[0][0] }
 sub name { $_[0][1] }
 
 sub _fd { $_[0][0]->{state}{fds}{$_[0][1]} }
+sub exists {
+	defined shift->_fd;
+}
 
-sub type        { $_[0]->_fd->{type} }
-sub flags       { $_[0]->_fd->{flags} }
-sub description { $_[0]->_fd->{descrip} }
+sub type        { ($_[0]->_fd || {})->{type} }
+sub flags       { ($_[0]->_fd || {})->{flags} }
+sub description { ($_[0]->_fd || {})->{descrip} }
 
-sub is_pipe    { $_[0]->_fd->{type} eq 'pipe' }
-sub is_file    { $_[0]->_fd->{type} eq 'file' }
-sub is_special { $_[0]->_fd->{type} eq 'special' }
+sub is_pipe    { ($_[0]->_fd || {})->{type} eq 'pipe' }
+sub is_file    { ($_[0]->_fd || {})->{type} eq 'file' }
+sub is_special { ($_[0]->_fd || {})->{type} eq 'special' }
 
 our %_file_flags= map { $_ => 1 } qw( read write create truncate nonblock mkdir );
 sub open_file {
