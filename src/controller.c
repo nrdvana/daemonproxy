@@ -54,6 +54,11 @@ STATE(ctl_state_dump_fds);
 STATE(ctl_state_dump_services);
 STATE(ctl_state_dump_signals);
 
+// Each of the command functions returns true on success,
+// or sets ctl->command_error to an error message and returns false.
+// The second argument in this macro is used by the perl script that
+// generates the static hash table of commands.
+
 #define COMMAND(name, ...) static bool name(controller_t *ctl)
 COMMAND(ctl_cmd_echo,                "echo");
 COMMAND(ctl_cmd_statedump,           "statedump");
@@ -69,6 +74,7 @@ COMMAND(ctl_cmd_socket_delete,       "socket.delete");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
+COMMAND(ctl_cmd_chdir,               "chdir");
 COMMAND(ctl_cmd_exit,                "exit");
 COMMAND(ctl_cmd_log_filter,          "log.filter");
 COMMAND(ctl_cmd_log_dest,            "log.dest");
@@ -82,11 +88,18 @@ static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
 static bool ctl_out_buf_ready(controller_t *ctl);
 
+//
+// These "get_arg" functions are convenience for the command implementations,
+// and handle all the most common tasks of argument parsing.
+//
+
+// Extract next argument into arg_out, but don't remove from the command string.
 static inline bool ctl_peek_arg(controller_t *ctl, strseg_t *arg_out) {
 	strseg_t str= ctl->command;
 	return strseg_tok_next(&str, '\t', arg_out);
 }
 
+// Extract argument from command into arg_out
 static inline bool ctl_get_arg(controller_t *ctl, strseg_t *arg_out) {
 	if (!strseg_tok_next(&ctl->command, '\t', arg_out)) {
 		ctl->command_error= "missing argument";
@@ -102,6 +115,10 @@ static bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name
 static bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out);
 static bool ctl_get_arg_signal(controller_t *ctl, int *sig_out);
 
+//
+// Here we define a static hash table of commands, and methods to access them.
+//
+
 typedef struct ctl_command_table_entry_s {
 	strseg_t command;
 	ctl_state_fn_t *fn;
@@ -114,10 +131,20 @@ const ctl_command_table_entry_t * ctl_find_command(strseg_t name) {
 	return result->fn && 0 == strseg_cmp(name, result->command)? result : NULL;
 }
 
+
+// A controller can be set to be less strict, and not require a newline
+// right before EOF
 void ctl_set_auto_final_newline(controller_t *ctl, bool enable) {
 	ctl->append_final_newline= enable;
 }
 
+/* Initialize controller subsystem
+ *
+ * We allocate controller clients out of a small static pool.  In most cases
+ * there will only be one client.  (daemonproxy does not do much synchronization
+ * between clients; this is the duty of the main controller script, which should
+ * be the only client.)
+ */
 void ctl_init() {
 	int i;
 	assert(CONTROLLER_MAX_CLIENTS >= 2);
@@ -125,6 +152,10 @@ void ctl_init() {
 		client[i].state_fn= NULL;
 }
 
+/* Allocate/construct next controller and bind it to an input and output handle.
+ *
+ * Returns NULL if there are no free controllers, or if the constructor fails.
+ */
 controller_t *ctl_new(int recv_fd, int send_fd) {
 	controller_t *ctl= ctl_alloc();
 	if (!ctl) return NULL;
@@ -134,6 +165,10 @@ controller_t *ctl_new(int recv_fd, int send_fd) {
 	return NULL;
 }
 
+/* Allocate the next unused controller from the static pool.
+ *
+ * Returns false if there are no free objects int he pool.
+ */
 controller_t *ctl_alloc() {
 	int i;
 
@@ -148,6 +183,10 @@ controller_t *ctl_alloc() {
 	return NULL;
 }
 
+/* Constructor (not including alloc)
+ *
+ * Initialize and bind a controller object to a pair of in/out handles.
+ */
 bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	log_debug("creating client %d with handles %d,%d", ctl - client, recv_fd, send_fd);
 	// file descriptors must be nonblocking
@@ -170,6 +209,10 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	return true;
 }
 
+/* Destructor (not including free)
+ *
+ * Finalize the state of a controller object.
+ */
 void ctl_dtor(controller_t *ctl) {
 	log_debug("destroying client %d", ctl->id);
 	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
@@ -177,6 +220,8 @@ void ctl_dtor(controller_t *ctl) {
 	ctl->state_fn= ctl_state_free;
 }
 
+/* Free a controller object, by returning it to the pool.
+ */
 void ctl_free(controller_t *ctl) {
 	ctl->state_fn= NULL;
 	main_notify_controller_freed(ctl);
@@ -300,6 +345,12 @@ void ctl_run() {
 	}
 }
 
+/** Report any new signals to the client
+ *
+ * We store the last signal event which we notified each client about, and now
+ * we look for anything newer than that event.  sig_get_new_events() should be
+ * doing appropriate synchronization to prevent race conditions.
+ */
 bool ctl_deliver_signals(controller_t *ctl) {
 	int signum, sig_count;
 	int64_t sig_ts;
@@ -372,6 +423,12 @@ bool ctl_state_next_command(controller_t *ctl) {
 	return true;
 }
 
+/** Dispatch the controller's current command
+ *
+ * The current command string was found in ctl_state_next_command, and now
+ * we check whether it is a known command and dispatch it to a handler function.
+ * Then, we check the result of the handler and if it fails we report an error.
+ */
 bool ctl_state_run_command(controller_t *ctl) {
 	const ctl_command_table_entry_t *cmd;
 
@@ -421,6 +478,11 @@ bool ctl_state_run_command(controller_t *ctl) {
 	return true;
 }
 
+/** Reset command-related variables, and advance read buffer.
+ *
+ * The command remains in the read buffer while it is being processed.
+ * Now that we're done, we shift the read buffer to make room for more.
+ */
 bool ctl_state_end_command(controller_t *ctl) {
 	// clean up old command, if any.
 	if (ctl->line_len > 0) {
@@ -513,6 +575,34 @@ bool ctl_cmd_event_pipe_timeout(controller_t *ctl) {
 	
 	ctl->write_timeout_reset= (reset_timeout << 32);
 	ctl->write_timeout_close= (close_timeout << 32);
+	return true;
+}
+
+/*
+=item chdir PATH
+
+Tell daemonproxy to perform a chdir.  Use with extreme caution, because service
+arguments might refer to executables or files by relative paths.
+
+=cut
+*/
+bool ctl_cmd_chdir(controller_t *ctl) {
+	strseg_t path;
+	if (!ctl_get_arg(ctl, &path)) {
+		ctl->command_error= "missing path argument";
+		return false;
+	}
+	if (ctl_peek_arg(ctl, NULL)) {
+		ctl->command_error= "unexpected argument after path";
+		return false;
+	}
+	assert(path.data[path.len] == '\0');
+	if (chdir(path.data) < 0) {
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"chdir failed: %s", strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
 	return true;
 }
 

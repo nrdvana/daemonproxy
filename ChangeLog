@@ -1,3 +1,5 @@
+  * New command chdir allows controller to re-home daemonproxy
+
 2014-07-11	Version 1.1.0
 
   * Services now inherit environment from daemonproxy (see 5eb4b3ec)

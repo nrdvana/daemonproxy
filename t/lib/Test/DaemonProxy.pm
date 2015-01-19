@@ -259,6 +259,13 @@ sub recv_stderr_ok {
 	}
 }
 
+my $next_sync= 0;
+sub sync {
+	my $self= shift;
+	my $id= 'sync_'.++$next_sync.'_';
+	$self->send('echo', $id);
+	$self->recv(qr/$id/) or croak "sync didn't complete";
+}
 
 sub exit_is {
 	my $self= shift;
@@ -292,3 +299,4 @@ sub cleanup {
 
 sub DESTROY { $_[0]->cleanup(); }
 
+1;
