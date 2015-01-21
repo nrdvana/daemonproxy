@@ -215,8 +215,10 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
  */
 void ctl_dtor(controller_t *ctl) {
 	log_debug("destroying client %d", ctl->id);
-	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
-	if (ctl->send_fd >= 0) close(ctl->send_fd);
+	if (ctl->recv_fd >= 0)
+		close(ctl->recv_fd);
+	if (ctl->send_fd >= 0 && ctl->send_fd != ctl->recv_fd)
+		close(ctl->send_fd);
 	ctl->state_fn= ctl_state_free;
 }
 
@@ -1560,13 +1562,13 @@ bool ctl_read_more(controller_t *ctl) {
 	if (n <= 0) {
 		e= errno;
 		log_trace("controller[%d] input read failed: %d %s", ctl->id, n, strerror(e));
-		if (n == 0) {
+		if (n == 0 || (e != EINTR && e != EAGAIN && e != EWOULDBLOCK)) {
+			if (n < 0)
+				log_error("read(client[%d])): %s", ctl->id, strerror(e));
 			// EOF.  Close file descriptor
 			close(ctl->recv_fd);
 			ctl->recv_fd= -1;
 		}
-		else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			log_error("read(client[%d])): %s", ctl->id, strerror(e));
 		errno= e;
 		return false;
 	}
