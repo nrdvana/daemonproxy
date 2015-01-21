@@ -39,7 +39,7 @@ $dp->send('service.start', 'foo', '-');
 $dp->recv_ok( qr!^service.state\tfoo\t(\w+)!m, 'got service state change' );
 is( $dp->last_captures->[0], 'down', 'service transition start->down with no "up"' );
 
-$dp->send("terminate	0");
+$dp->send('terminate', 0);
 $dp->exit_is( 0 );
 
 done_testing;

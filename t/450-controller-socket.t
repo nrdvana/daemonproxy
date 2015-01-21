@@ -17,13 +17,13 @@ unlink $sock_path, $sock_path2;
 ok( ! -e $sock_path, "socket $sock_path does not exist" );
 ok( ! -e $sock_path2, "socket $sock_path2 does not exist" );
 
-$dp->send("socket.create	-	$sock_path");
-$dp->send("echo	done");
+$dp->send('socket.create', '-', $sock_path);
+$dp->send('echo', 'done');
 $dp->recv( qr/^done$/m );
 ok( -S $sock_path, 'socket was created' );
 
-$dp->send("socket.create		$sock_path2");
-$dp->send("echo	done");
+$dp->send('socket.create', '', $sock_path2);
+$dp->send('echo', 'done');
 $dp->recv( qr/^done$/m );
 ok( ! -e $sock_path, 'old socket deleted' );
 ok( -S "$sock_path2", 'new socket created' );
@@ -33,7 +33,7 @@ socket(my $s, PF_UNIX, SOCK_STREAM, 0) || die "socket: $!";
 connect($s, sockaddr_un($sock_path2)) || die "connect: $!";
 $s->autoflush(1);
 $s->blocking(0);
-$s->print("terminate	0\n");
+$s->print("terminate\t0\n");
 
 $dp->exit_is( 0 );
 

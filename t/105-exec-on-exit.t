@@ -38,8 +38,8 @@ for my $sig ( qw( SIGABRT SIGSEGV ) ) {
 
 $dp= Test::DaemonProxy->new;
 $dp->run('-i');
-$dp->send("terminate.exec_args	perl	-e	exit 42");
-$dp->send("echo	done");
+$dp->send('terminate.exec_args', 'perl', '-e', 'exit 42');
+$dp->send('echo', 'done');
 $dp->recv( qr/^done/m );
 kill SIGILL => $dp->pid;
 $dp->exit_is( 42, "terminate.exec_args command" );

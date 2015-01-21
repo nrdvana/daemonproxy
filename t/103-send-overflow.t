@@ -15,9 +15,9 @@ $dp->recv_ok( qr/error\t.*long/, 'long line causes error' );
 
 $dp->discard_response;
 $dp->send("# blah\t" x 1000);
-$dp->send("echo\t-marker-");
+$dp->send('echo', '-marker-');
 $dp->recv_ok( qr/^-marker-$/, 'long comment doesn\'t generate an error' );
 
-$dp->send("terminate	0");
+$dp->send('terminate', 0);
 $dp->exit_is( 0 );
 done_testing;

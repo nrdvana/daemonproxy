@@ -9,7 +9,7 @@ use Test::DaemonProxy;
 my $dp= Test::DaemonProxy->new;
 my $sockpath= $dp->temp_path . '/080-tempfile.sock';
 $dp->run('-i', '-S', $sockpath);
-$dp->send("echo	foo");
+$dp->send('echo', 'foo');
 $dp->recv_ok( qr/^foo$/m, 'command over stdio' );
 
 use Socket;
