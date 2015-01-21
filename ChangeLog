@@ -1,4 +1,5 @@
   * New command chdir allows controller to re-home daemonproxy
+  * Controllers now get sockets instead of pipes
 
 2014-07-11	Version 1.1.0
 
