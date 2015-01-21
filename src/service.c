@@ -33,7 +33,8 @@ struct service_s {
 	bool auto_restart: 1,
 		sigwake: 1,
 		uses_control_event: 1,
-		uses_control_cmd: 1;
+		uses_control_cmd: 1,
+		uses_control_socket: 1;
 	int wait_status;
 	int64_t  start_time;   // 32-bit-precision fixed point fraction
 	int64_t  reap_time;
@@ -66,6 +67,7 @@ static void svc_dtor(service_t *svc);
 static bool svc_list_resize(int new_limit);
 static void svc_notify_state(service_t *svc);
 static void svc_change_pid(service_t *svc, pid_t pid);
+static bool svc_do_fork(service_t *svc);
 static void svc_do_exec(service_t *svc);
 static void svc_set_active(service_t *svc, bool activate);
 static void svc_set_sigwake(service_t *svc, bool sigwake);
@@ -367,11 +369,14 @@ bool svc_set_fds(service_t *svc, strseg_t new_fds) {
 	// the special control handles.
 	svc->uses_control_event= false;
 	svc->uses_control_cmd= false;
+	svc->uses_control_socket= false;
 	while (strseg_tok_next(&new_fds, '\t', &name)) {
 		if (strseg_cmp(name, STRSEG("control.event")) == 0)
 			svc->uses_control_event= true;
 		if (strseg_cmp(name, STRSEG("control.cmd")) == 0)
 			svc->uses_control_cmd= true;
+		if (strseg_cmp(name, STRSEG("control.socket")) == 0)
+			svc->uses_control_socket= true;
 	}
 	return true;
 }
@@ -475,8 +480,7 @@ bool svc_handle_start(service_t *svc, int64_t when) {
 		when= wake->now;
 	}
 	svc->state= SVC_STATE_START;
-	svc->start_time= when;
-	if (svc->start_time == 0) svc->start_time++; // 0 means undefined
+	svc->start_time= (when == 0? 1 : when); // 0 means undefined
 	svc_change_pid(svc, 0);
 	svc->reap_time= 0;
 	svc->wait_status= -1;
@@ -581,10 +585,6 @@ void svc_run_active() {
 /** Run the state machine for one service.
  */
 void svc_run(service_t *svc) {
-	pid_t pid;
-	int pipes[4], i;
-	controller_t *ctl= NULL;
-
 	re_switch_state:
 	log_trace("service %s state = %d", svc_get_name(svc), svc->state);
 	switch (svc->state) {
@@ -598,62 +598,18 @@ void svc_run(service_t *svc) {
 			svc_set_active(svc, true);
 			break;
 		}
+		
 		// else we've reached the time to retry
-		for (i=0; i<4; i++) pipes[i]= -1;
-		// If this service uses the control.{cmd,event} file handles, then we
-		// need to create pipes for them, and attach to a new controller
-		if (svc->uses_control_event || svc->uses_control_cmd) {
-			// We need a controller object, of which there are a fixed number
-			// Do we have one?  And can we create pipes?
-			if (!(ctl= ctl_alloc())
-				|| (svc->uses_control_cmd && 0 != pipe(pipes))
-				|| (svc->uses_control_event && 0 != pipe(pipes+2))
-				|| !ctl_ctor(ctl, pipes[0], pipes[3])
-			) {
-				if (!ctl)
-					log_warn("can't allocate controller object");
-				else
-					log_error("can't create pipe: %s", strerror(errno));
-				
-				for (i=0; i<4; i++) close(pipes[i]);
-				if (ctl) {
-					ctl_dtor(ctl);
-					ctl_free(ctl);
-				}
-				log_info("will retry in %d seconds", (int)( FORK_RETRY_DELAY >> 32 ));
-				svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
-				svc_notify_state(svc);
-				goto re_switch_state;
-			}
-		}
-		pid= fork();
-		if (pid > 0) {
-			svc_change_pid(svc, pid);
-			svc->start_time= wake->now;
-			if (!svc->start_time) svc->start_time= 1;
-			svc->state= SVC_STATE_UP;
-			if (svc->uses_control_cmd) close(pipes[1]);
-			if (svc->uses_control_event) close(pipes[2]);
-		} else if (pid == 0) {
-			if (svc->uses_control_cmd)
-				fd_set_fdnum(fd_by_name(STRSEG("control.cmd")), pipes[1]);
-			if (svc->uses_control_event)
-				fd_set_fdnum(fd_by_name(STRSEG("control.event")), pipes[2]);
-			svc_do_exec(svc);
-			// never returns
-			assert(0);
-		} else {
-			// else fork failed, and we need to wait 3 sec and try again
-			if (svc->uses_control_cmd || svc->uses_control_event) {
-				close(pipes[1]);
-				close(pipes[2]);
-				ctl_dtor(ctl); // this closes the other 2 pipe handles
-				ctl_free(ctl);
-			}
+		if (!svc_do_fork(svc)) {
+			log_info("will retry in %d seconds", (int)( FORK_RETRY_DELAY >> 32 ));
 			svc_handle_start(svc, wake->now + FORK_RETRY_DELAY);
+			goto re_switch_state;
 		}
+		
+		// service is started
+		svc->start_time= (wake->now? wake->now : 1); // time != 0 hack
+		svc->state= SVC_STATE_UP;
 		svc_notify_state(svc);
-		goto re_switch_state;
 	case SVC_STATE_UP:
 		svc_set_active(svc, false);
 		// waitpid in main loop will re-activate us and set state to REAPED
@@ -680,6 +636,90 @@ void svc_run(service_t *svc) {
 	}
 	// unless NDEBUG:
 		svc_check(svc);
+}
+
+bool svc_do_fork(service_t *svc) {
+	pid_t pid;
+	int sockets[2]= { -1, -1 };
+	controller_t *ctl= NULL;
+	bool want_ctl_read= svc->uses_control_socket || svc->uses_control_event;
+	bool want_ctl_write= svc->uses_control_socket || svc->uses_control_cmd;
+	
+	// If this service uses the control.{socket,cmd,event} file handles,
+	// then we need to create a socket, and attach to a new controller
+	if (svc->uses_control_socket || svc->uses_control_event || svc->uses_control_cmd) {
+		// We need a controller object, of which there are a fixed number
+		// Do we have one?  And can we create the sockets?
+		if (!(ctl= ctl_alloc())) {
+			ctl_free(ctl);
+			ctl= NULL;
+			log_error("can't allocate controller object");
+			goto fail;
+		}
+		if (0 != socketpair(AF_UNIX, SOCK_STREAM, 0, sockets)) {
+			log_error("can't create socketpair: %s", strerror(errno));
+			goto fail;
+		}
+		if (!ctl_ctor(ctl, want_ctl_write? sockets[0] : -1, want_ctl_read? sockets[0] : -1)) {
+			log_error("can't initialize controller");
+			goto fail;
+		}
+		
+		// If the service is only using one of control.event or control.cmd, then we
+		// shut down the unused direction so that it doesn't accidentally fill up
+		// with buffered data that will never be read.  i.e. simulate a single pipe.
+		if (!svc->uses_control_socket) {
+			// 0 is ours, 1 is theirs.
+			if (!want_ctl_read) {
+				shutdown(sockets[1], SHUT_RD);
+				shutdown(sockets[0], SHUT_WR);
+			}
+			if (!want_ctl_write) {
+				shutdown(sockets[1], SHUT_WR);
+				shutdown(sockets[0], SHUT_RD);
+			}
+		}
+	}
+	
+	if ((pid= fork()) < 0) {
+		log_error("fork failed: %s", strerror(errno));
+		goto fail;
+	}
+	
+	// Are we the client?  perform exec
+	if (pid == 0) {
+		if (sockets[0] >= 0)
+			close(sockets[0]);
+		if (sockets[1] >= 0) {
+			// Store the FD number of the client's socket in each of the FD objects
+			// which svc_do_exec might be looking at.
+			fd_set_fdnum(fd_by_name(STRSEG("control.socket")), sockets[1]);
+			fd_set_fdnum(fd_by_name(STRSEG("control.cmd")), sockets[1]);
+			fd_set_fdnum(fd_by_name(STRSEG("control.event")), sockets[1]);
+		}
+		svc_do_exec(svc);
+		// never returns
+		assert(0);
+	}
+	
+	if (sockets[1] >= 0)
+		close(sockets[1]);
+
+	svc_change_pid(svc, pid);
+	
+	return true;
+
+	fail: // cleanup based on what was initialized
+	
+	if (ctl) {
+		ctl_dtor(ctl); // this closes sockets[0]
+		ctl_free(ctl);
+	}
+	else if (sockets[0] >= 0)
+		close(sockets[0]);
+	if (sockets[1] >= 0)
+		close(sockets[1]);
+	return false;
 }
 
 /** Perform the exec() to launch the service's daemon (or runscript)

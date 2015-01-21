@@ -32,7 +32,7 @@
 #define SERVICE_DATA_SIZE_DEFAULT   512
 
 // Sensible min/max for allocating fd pool
-#define FD_POOL_SIZE_MIN              6
+#define FD_POOL_SIZE_MIN              7
 #define FD_POOL_SIZE_MAX     FD_SETSIZE
 #define FD_DATA_SIZE_MIN             32
 #define FD_DATA_SIZE_MAX       PATH_MAX

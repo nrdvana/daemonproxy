@@ -76,7 +76,11 @@ bool fd_init_special_handles() {
 		&&
 		fd_new_file(STRSEG("control.event"), -1,
 			(fd_flags_t){ .special= true, .read= true, .is_const= true },
-			STRSEG("daemonproxy event stream"));
+			STRSEG("daemonproxy event stream"))
+		&&
+		fd_new_file(STRSEG("control.socket"), -1,
+			(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= true },
+			STRSEG("daemonproxy control socket"));
 }
 
 bool fd_preallocate(int count, int data_size_each) {
