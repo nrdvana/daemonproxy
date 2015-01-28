@@ -72,6 +72,7 @@ COMMAND(ctl_cmd_svc_delete,          "service.delete");
 COMMAND(ctl_cmd_socket_create,       "socket.create");
 COMMAND(ctl_cmd_socket_delete,       "socket.delete");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
+COMMAND(ctl_cmd_fd_socketpair,       "fd.socketpair");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
 COMMAND(ctl_cmd_chdir,               "chdir");
@@ -114,6 +115,7 @@ static bool ctl_get_arg_ts(controller_t *ctl, int64_t *ts);
 static bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, service_t **svc_out);
 static bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out);
 static bool ctl_get_arg_signal(controller_t *ctl, int *sig_out);
+static bool ctl_get_arg_socktype(controller_t *ctl, int *domain_out, int *type_out, int *protocol_out);
 
 //
 // Here we define a static hash table of commands, and methods to access them.
@@ -734,13 +736,51 @@ bool ctl_cmd_fd_pipe(controller_t *ctl) {
 		return false;
 	
 	if (0 != pipe(pair)) {
-		ctl_notify_error(ctl, );
 		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
 			"pipe() failed: %s", strerror(errno));
 		ctl->command_error= ctl->command_error_buf;
+		return false;
 	}
 	
-	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1]);
+	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1], false);
+	if (!fd) {
+		close(pair[0]);
+		close(pair[1]);
+		ctl->command_error= "failed to create pipe";
+		return false;
+	}
+	
+	ctl_notify_fd_state(NULL, fd);
+	ctl_notify_fd_state(NULL, fd_get_pipe_peer(fd));
+	return true;
+}
+
+/*
+=item fd.socketpair TYPE NAME1 NAME2
+
+Create a pair of connected sockets.  The only supported type is UNIX_STREAM.
+Re-using an existing name will close the old handle.
+
+=cut
+*/
+bool ctl_cmd_fd_socketpair(controller_t *ctl) {
+	fd_t *fd;
+	int pair[2], s_domain, s_type, s_protocol;
+	strseg_t name1, name2;
+	
+	if (!ctl_get_arg_socktype(ctl, &s_domain, &s_type, &s_protocol)
+		|| !ctl_get_arg_fd(ctl, false, true, &name1, NULL)
+		|| !ctl_get_arg_fd(ctl, false, true, &name2, NULL))
+		return false;
+	
+	if (0 != socketpair(s_domain, s_type, s_protocol, pair)) {
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"socketpair() failed: %s", strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
+	
+	fd= fd_new_pipe(name1, pair[0], name2, pair[1], true);
 	if (!fd) {
 		close(pair[0]);
 		close(pair[1]);
@@ -1848,3 +1888,41 @@ bool ctl_get_arg_signal(controller_t *ctl, int *sig_out) {
 	return true;
 }
 
+const struct socket_type_entry {
+	const strseg_t name;
+	int dom, typ, proto;
+} socket_types[]= {
+	{ STRSEG_LITERAL("UNIX"),           AF_UNIX, SOCK_STREAM, 0 },
+	{ STRSEG_LITERAL("TCP"),            AF_INET, SOCK_STREAM, 0 },
+	{ STRSEG_LITERAL("UDP"),            AF_INET, SOCK_DGRAM,  0 },
+	{ STRSEG_LITERAL("UNIX_STREAM"),    AF_UNIX, SOCK_STREAM, 0 },
+	{ STRSEG_LITERAL("UNIX_DGRAM"),     AF_UNIX, SOCK_DGRAM,  0 },
+#ifdef SOCK_SEQPACKET
+	{ STRSEG_LITERAL("INET_SEQPACKET"), AF_INET, SOCK_SEQPACKET, 0 },
+	{ STRSEG_LITERAL("UNIX_SEQPACKET"), AF_UNIX, SOCK_SEQPACKET, 0 },
+#endif
+	{ {NULL,0}, 0, 0, 0 }
+};
+
+
+bool ctl_get_arg_socktype(controller_t *ctl, int *domain_out, int *type_out, int *protocol_out) {
+	strseg_t spec;
+	const struct socket_type_entry *e;
+	
+	// Need one non-empty argument
+	if (!strseg_tok_next(&ctl->command, '\t', &spec) || !spec.len) {
+		ctl->command_error= "Expected socket type";
+		return false;
+	}
+	// Tested in order of most commonly used
+	for (e= socket_types; e->name.len; e++) {
+		if (0 == strseg_cmp(spec, e->name)) {
+			if (domain_out)   *domain_out=   e->dom;
+			if (type_out)     *type_out=     e->typ;
+			if (protocol_out) *protocol_out= e->proto;
+			return true;
+		}
+	}
+	ctl->command_error= "Unknown/unsupported socket type";
+	return false;
+}

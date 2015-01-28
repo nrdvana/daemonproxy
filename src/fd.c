@@ -9,11 +9,13 @@
 
 // Describes a named file handle
 
-#define FD_TYPE_UNDEF  0
-#define FD_TYPE_FILE   1
-#define FD_TYPE_PIPE_R 2
-#define FD_TYPE_PIPE_W 3
-#define FD_TYPE_SPECIAL 4
+#define FD_TYPE_UNDEF     0
+#define FD_TYPE_FILE      1
+#define FD_TYPE_PIPE_R    2
+#define FD_TYPE_PIPE_W    3
+#define FD_TYPE_SPECIAL   4
+#define FD_TYPE_SOCKPAIR  5
+#define FD_TYPE_SOCKBOUND 6
 
 struct fd_s {
 	int size;
@@ -210,7 +212,7 @@ fd_t * fd_get_pipe_peer(fd_t *fd) {
 
 // Open a pipe from one named FD to another
 // returns a ref to the read end, which holds a ref to the write end.
-fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
+fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2, bool socket) {
 	// Find any existing FD object by these names
 	fd_t *f1, *old1= fd_by_name(name1);
 	fd_t *f2, *old2= fd_by_name(name2);
@@ -235,11 +237,19 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 
 	f1->flags.pipe= true;
 	f1->flags.read= true;
+	if (socket) {
+		f1->flags.write= true;
+		f1->flags.socket= true;
+	}
 	f1->fd= num1;
 	f1->attr.pipe.peer= f2;
 
 	f2->flags.pipe= true;
 	f2->flags.write= true;
+	if (socket) {
+		f1->flags.read= true;
+		f1->flags.socket= true;
+	}
 	f2->fd= num2;
 	f2->attr.pipe.peer= f1;
 	
