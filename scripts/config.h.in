@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <arpa/inet.h>
 
 // Maximum length for service or fd names (plus NUL)
 #define NAME_BUF_SIZE                32

@@ -1896,10 +1896,12 @@ const struct socket_type_entry {
 	{ STRSEG_LITERAL("TCP"),            AF_INET, SOCK_STREAM, 0 },
 	{ STRSEG_LITERAL("UDP"),            AF_INET, SOCK_DGRAM,  0 },
 	{ STRSEG_LITERAL("UNIX_STREAM"),    AF_UNIX, SOCK_STREAM, 0 },
+	{ STRSEG_LITERAL("INET_STREAM"),    AF_INET, SOCK_STREAM, 0 },
 	{ STRSEG_LITERAL("UNIX_DGRAM"),     AF_UNIX, SOCK_DGRAM,  0 },
+	{ STRSEG_LITERAL("INET_DGRAM"),     AF_INET, SOCK_DGRAM,  0 },
 #ifdef SOCK_SEQPACKET
-	{ STRSEG_LITERAL("INET_SEQPACKET"), AF_INET, SOCK_SEQPACKET, 0 },
 	{ STRSEG_LITERAL("UNIX_SEQPACKET"), AF_UNIX, SOCK_SEQPACKET, 0 },
+	{ STRSEG_LITERAL("INET_SEQPACKET"), AF_INET, SOCK_SEQPACKET, 0 },
 #endif
 	{ {NULL,0}, 0, 0, 0 }
 };
@@ -1925,4 +1927,102 @@ bool ctl_get_arg_socktype(controller_t *ctl, int *domain_out, int *type_out, int
 	}
 	ctl->command_error= "Unknown/unsupported socket type";
 	return false;
+}
+
+bool strseg_parse_sockaddr(strseg_t spec, int addr_family, struct sockaddr_storage *a_out) {
+	strseg_t addr;
+	int64_t port_int;
+	char name_buf[255];
+	
+	if (spec.len <= 0) return false;
+	
+	if (addr_family == AF_UNIX) {
+		struct sockaddr_un a;
+		memset(&a, 0, sizeof(a));
+		
+		if (spec.len >= sizeof(a.sun_path))
+			return false;
+		memcpy(a.sun_path, spec.data, spec.len);
+		a.sun_path[spec.len]= '\0';
+		
+		// Save result to caller's variable
+		if (a_out) memcpy(a_out, &a, sizeof(a));
+		return true;
+	}
+	else if (addr_family == AF_INET) {
+		struct sockaddr_in a;
+		memset(&a, 0, sizeof(a));
+		
+		// Check for addr:port notation
+		addr= STRSEG("");
+		if (strseg_tok_next(&spec, ':', &addr) && spec.len) {
+			if (!strseg_atoi(&spec, &port_int))
+				return false;
+			a.sin_port= htons((short) port_int);
+		}
+		
+		// Convert address
+		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
+			return false;
+		memcpy(name_buf, addr.data, addr.len);
+		name_buf[addr.len]= '\0';
+		if (inet_pton(addr_family, name_buf, &a.sin_addr) <= 0)
+			// TODO: handle host names
+			return false;
+		
+		// Save result to caller's variable
+		if (a_out) memcpy(a_out, &a, sizeof(a));
+		return true;
+	}
+#if 0
+	// TODO: correctly parse IPV6 addrs in the following formats:
+	//   nn:nn::nn
+	//   [nn:nn::nn]:port
+	//   hostname
+	//   hostname:port
+	else if (addr_family == AF_INET6) {
+		struct sockaddr_in6 a;
+		memset(&a, 0, sizeof(a));
+
+		// Check for addr:port notation
+		addr= STRSEG("");
+		...;
+		// Convert address
+		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
+			return false;
+		memcpy(name_buf, addr.data, addr.len);
+		name_buf[addr.len]= '\0';
+		if (inet_pton(addr_family, name_buf, &a.sin6_addr) <= 0)
+			// TODO: handle host names
+			return false;
+		
+		// Save result to caller's variable
+		if (a_out) memcpy(a_out, &a, sizeof(a));
+		return true;
+	}
+#endif
+	return false;
+}
+
+bool ctl_get_arg_sockaddr(controller_t *ctl, int addr_family, struct sockaddr_storage *a_out) {
+	strseg_t spec;
+	
+	// Need one non-empty argument
+	if (!strseg_tok_next(&ctl->command, '\t', &spec) || !spec.len) {
+		ctl->command_error= "Expected socket address";
+		return false;
+	}
+	
+	// '-' means no address.  We set the address type to UNSPEC
+	if (spec.len == 1 && spec.data[0] == '-') {
+		if (a_out) a_out->ss_family= AF_UNSPEC;
+		return true;
+	}
+	
+	if (!strseg_parse_sockaddr(spec, addr_family, a_out)) {
+		ctl->command_error= "Invalid socket address";
+		return false;
+	}
+	
+	return true;
 }
