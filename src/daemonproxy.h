@@ -311,6 +311,10 @@ typedef struct fd_flags_s {
 		nonblock: 1,
 		pipe: 1,
 		socket: 1,
+		sock_inet: 1,
+		sock_inet6: 1,
+		sock_dgram: 1,
+		sock_seq: 1,
 		special: 1,
 		is_const: 1;
 } fd_flags_t;
@@ -335,7 +339,7 @@ fd_t *      fd_get_pipe_peer(fd_t *fd);
 
 // Open a pipe from one named FD to another
 // returns a ref to the write-end, which has a pointer to the read-end.
-fd_t * fd_new_pipe(strseg_t name1, int fd1, strseg_t name2, int fd2, bool socket);
+fd_t * fd_new_pipe(strseg_t name1, int fd1, strseg_t name2, int fd2, fd_flags_t *flags);
 
 // Open a file on the given name, possibly closing a handle by that name
 fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path);

@@ -72,7 +72,6 @@ COMMAND(ctl_cmd_svc_delete,          "service.delete");
 COMMAND(ctl_cmd_socket_create,       "socket.create");
 COMMAND(ctl_cmd_socket_delete,       "socket.delete");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
-COMMAND(ctl_cmd_fd_socketpair,       "fd.socketpair");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
 COMMAND(ctl_cmd_chdir,               "chdir");
@@ -719,68 +718,97 @@ bool ctl_state_dump_signals(controller_t *ctl) {
 }
 
 /*
-=item fd.pipe NAME_READ NAME_WRITE
+=item fd.pipe NAME_READ NAME_WRITE FLAGS
 
 Create a pipe, with the read-end named NAME_READ and write-end named
 NAME_WRITE.  Re-using an existing name will close the old handle.
+
+FLAGS can be a comma-delimited combination of: nonblock, unix, inet, inet6,
+tcp, udp, dgram, seqpacket.  If any of the socket flags are used the pipe will
+be a bi-directional socketpair().  Default socket domain is unix.  Default
+socket type is stream.
 
 =cut
 */
 bool ctl_cmd_fd_pipe(controller_t *ctl) {
 	fd_t *fd;
 	int pair[2];
-	strseg_t read_side, write_side;
+	strseg_t read_side, write_side, opts, opt;
+	fd_flags_t flags;
+	int sock_domain, sock_type, sock_proto;
+	memset(&flags, 0, sizeof(flags));
 	
 	if (!ctl_get_arg_fd(ctl, false, true, &read_side, NULL)
 		|| !ctl_get_arg_fd(ctl, false, true, &write_side, NULL))
 		return false;
 	
-	if (0 != pipe(pair)) {
-		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
-			"pipe() failed: %s", strerror(errno));
-		ctl->command_error= ctl->command_error_buf;
-		return false;
+	// Check for optional flags
+	if (ctl_get_arg(ctl, &opts)) {
+		#define STRMATCH(flag) (opt.len == strlen(flag) && 0 == memcmp(opt.data, flag, opt.len))
+		while (strseg_tok_next(&opts, ',', &opt)) {
+			if (!opt.len) continue;
+			
+			switch (opt.data[0]) {
+			case '-':
+				if (opt.len == 1) { continue; }
+			case 'u':
+				if (STRMATCH("unix"))  { flags.socket= true; flags.sock_inet= false; continue; }
+				if (STRMATCH("udp"))   { flags.socket= true; flags.sock_inet= true; flags.sock_dgram= true; continue; }
+				break;
+			case 't':
+				if (STRMATCH("tcp"))   { flags.socket= true; flags.sock_inet= true; flags.sock_dgram= false; continue; }
+				break;
+			case 'd':
+				if (STRMATCH("dgram")) { flags.socket= true; flags.sock_dgram= true; continue; }
+				break;
+			case 'i':
+				if (STRMATCH("inet"))  { flags.socket= true; flags.sock_inet= true; continue; }
+			#ifdef AF_INET6
+				if (STRMATCH("inet6")) { flags.socket= true; flags.sock_inet6= true; continue; }
+			#endif
+				break;
+			case 's':
+				if (STRMATCH("stream"))    { flags.socket= true; flags.sock_dgram= false; flags.sock_seq= false; continue; }
+				if (STRMATCH("seqpacket")) { flags.socket= true; flags.sock_seq= true; continue; }
+				break;
+			case 'n':
+				if (STRMATCH("nonblock")) { flags.nonblock= true; continue; }
+				break;
+			}
+			
+			snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+				"unknown flag \"%.*s\"\n", opt.len, opt.data);
+			ctl->command_error= ctl->command_error_buf;
+			return false;
+		}
+		#undef STRMATCH
 	}
 	
-	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1], false);
-	if (!fd) {
-		close(pair[0]);
-		close(pair[1]);
-		ctl->command_error= "failed to create pipe";
-		return false;
+	if (flags.socket) {
+		sock_domain= flags.sock_inet? AF_INET
+		#ifdef AF_INET6
+			: flags.sock_inet6? AF_INET6
+		#endif
+			: AF_UNIX;
+		sock_type=   flags.sock_dgram? SOCK_DGRAM : flags.sock_seq? SOCK_SEQPACKET : SOCK_STREAM;
+		sock_proto= 0;
+		if (0 != socketpair(sock_domain, sock_type, sock_proto, pair)) {
+			snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+				"socketpair() failed: %s", strerror(errno));
+			ctl->command_error= ctl->command_error_buf;
+			return false;
+		}
+	}
+	else {
+		if (0 != pipe(pair)) {
+			snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+				"pipe() failed: %s", strerror(errno));
+			ctl->command_error= ctl->command_error_buf;
+			return false;
+		}
 	}
 	
-	ctl_notify_fd_state(NULL, fd);
-	ctl_notify_fd_state(NULL, fd_get_pipe_peer(fd));
-	return true;
-}
-
-/*
-=item fd.socketpair TYPE NAME1 NAME2
-
-Create a pair of connected sockets.  The only supported type is UNIX_STREAM.
-Re-using an existing name will close the old handle.
-
-=cut
-*/
-bool ctl_cmd_fd_socketpair(controller_t *ctl) {
-	fd_t *fd;
-	int pair[2], s_domain, s_type, s_protocol;
-	strseg_t name1, name2;
-	
-	if (!ctl_get_arg_socktype(ctl, &s_domain, &s_type, &s_protocol)
-		|| !ctl_get_arg_fd(ctl, false, true, &name1, NULL)
-		|| !ctl_get_arg_fd(ctl, false, true, &name2, NULL))
-		return false;
-	
-	if (0 != socketpair(s_domain, s_type, s_protocol, pair)) {
-		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
-			"socketpair() failed: %s", strerror(errno));
-		ctl->command_error= ctl->command_error_buf;
-		return false;
-	}
-	
-	fd= fd_new_pipe(name1, pair[0], name2, pair[1], true);
+	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1], &flags);
 	if (!fd) {
 		close(pair[0]);
 		close(pair[1]);
@@ -830,6 +858,7 @@ bool ctl_cmd_fd_open(controller_t *ctl) {
 	memset(&flags, 0, sizeof(flags));
 	#define STRMATCH(flag) (opt.len == strlen(flag) && 0 == memcmp(opt.data, flag, opt.len))
 	while (strseg_tok_next(&opts, ',', &opt)) {
+		if (!opt.len) continue;
 		switch (opt.data[0]) {
 		case 'a':
 			if (STRMATCH("append")) { flags.append= true; continue; }

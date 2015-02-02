@@ -1,8 +1,8 @@
   * New command chdir allows controller to re-home daemonproxy
-  * New command fd.socketpair allows for bi-directional pipes
-  * New magic filehandle 'control.sock' gives equivlent of control.command
+  * fd.pipe now has optional FLAGS, which can be used to make socketpairs
+  * New magic filehandle 'control.socket' gives equivlent of control.command
      and control.event on a single handle.
-  * control.command and control.event are now aliases for control.sock,
+  * control.command and control.event are now aliases for control.socket,
      with any un-used direction shutdown.
 
 2014-07-11	Version 1.1.0
