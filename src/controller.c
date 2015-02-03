@@ -73,6 +73,7 @@ COMMAND(ctl_cmd_socket_create,       "socket.create");
 COMMAND(ctl_cmd_socket_delete,       "socket.delete");
 COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
+COMMAND(ctl_cmd_fd_socket,           "fd.socket");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
 COMMAND(ctl_cmd_chdir,               "chdir");
 COMMAND(ctl_cmd_exit,                "exit");
@@ -114,7 +115,7 @@ static bool ctl_get_arg_ts(controller_t *ctl, int64_t *ts);
 static bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, service_t **svc_out);
 static bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out);
 static bool ctl_get_arg_signal(controller_t *ctl, int *sig_out);
-static bool ctl_get_arg_socktype(controller_t *ctl, int *domain_out, int *type_out, int *protocol_out);
+static bool ctl_get_arg_sockaddr(controller_t *ctl, int addr_family, struct sockaddr_storage *a_out, int *len_out);
 
 //
 // Here we define a static hash table of commands, and methods to access them.
@@ -908,6 +909,139 @@ bool ctl_cmd_fd_open(controller_t *ctl) {
 	}
 
 	fd= fd_new_file(fdname, f, flags, path);
+	if (!fd) {
+		close(f);
+		ctl->command_error= "Unable to allocate new file descriptor object";
+		return false;
+	}
+
+	ctl_notify_fd_state(NULL, fd);
+	return true;
+}
+
+/*
+=item fd.socket NAME FLAG1,FLAG2,.. ADDRSPEC
+
+Creates a socket and binds it to an address.  Re-using an existing name will
+close the old handle.  FLAGS may be unix,udp,tcp,inet,inet6,stream,dgram,
+seqpacket,nonblock,mkdir,bind,listen.  If listen or bind are not specified,
+then ADDRSPEC is ignored.  listen implies bind.
+
+=cut
+*/
+bool ctl_cmd_fd_socket(controller_t *ctl) {
+	int f;
+	int sock_domain, sock_type, sock_proto, listen_cnt;
+	bool bind_it;
+	fd_flags_t flags;
+	fd_t *fd;
+	strseg_t fdname, opts, opt, addrspec;
+
+	if (!ctl_get_arg_fd(ctl, false, true, &fdname, NULL))
+		return false;
+	
+	if (!ctl_get_arg(ctl, &opts)) {
+		ctl->command_error= "missing flags argument";
+		return false;
+	}
+	
+	memset(&flags, 0, sizeof(flags));
+	bind_it= false;
+	listen_cnt= 0;
+	#define STRMATCH(flag) (opt.len == strlen(flag) && 0 == memcmp(opt.data, flag, opt.len))
+	flags.socket= true;
+	while (strseg_tok_next(&opts, ',', &opt)) {
+		if (!opt.len) continue;
+		switch (opt.data[0]) {
+		case 'b':
+			if (STRMATCH("bind"))  { bind_it= true; continue; }
+			break;
+		case 'l':
+			if (STRMATCH("listen")) { listen_cnt= 16; bind_it= true; continue; } // TODO: allow listen=N
+			break;
+		case 'u':
+			if (STRMATCH("unix"))  { flags.sock_inet= false; continue; }
+			if (STRMATCH("udp"))   { flags.sock_inet= true; flags.sock_dgram= true; continue; }
+			break;
+		case 't':
+			if (STRMATCH("tcp"))   { flags.sock_inet= true; flags.sock_dgram= false; continue; }
+			break;
+		case 'd':
+			if (STRMATCH("dgram")) { flags.sock_dgram= true; continue; }
+			break;
+		case 'i':
+			if (STRMATCH("inet"))  { flags.sock_inet= true; continue; }
+		#ifdef AF_INET6
+			if (STRMATCH("inet6")) { flags.socket= true; flags.sock_inet6= true; continue; }
+		#endif
+			break;
+		case 's':
+			if (STRMATCH("stream"))    { flags.sock_dgram= false; flags.sock_seq= false; continue; }
+			if (STRMATCH("seqpacket")) { flags.sock_seq= true; continue; }
+			break;
+		case 'n':
+			if (STRMATCH("nonblock")) { flags.nonblock= true; continue; }
+			break;
+		case 'm':
+			if (STRMATCH("mkdir")) { flags.mkdir= true; continue; }
+			break;
+		}
+		
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"unknown flag \"%.*s\"\n", opt.len, opt.data);
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
+	#undef STRMATCH
+	
+	sock_domain= flags.sock_inet? AF_INET
+	#ifdef AF_INET6
+		: flags.sock_inet6? AF_INET6
+	#endif
+		: AF_UNIX;
+	sock_type=   flags.sock_dgram? SOCK_DGRAM : flags.sock_seq? SOCK_SEQPACKET : SOCK_STREAM;
+	sock_proto= 0;
+
+	struct sockaddr_storage addr;
+	int addrlen= sizeof(addr);
+	
+	if (ctl_get_arg(ctl, &addrspec)) {
+		bind_it= true;
+		if (!strseg_parse_sockaddr(&addrspec, sock_domain, &addr, &addrlen)) {
+			ctl->command_error= "invalid address";
+			return false;
+		}
+	}
+	else if (bind_it) {
+		ctl->command_error= "expected address argument";
+		return false;
+	}
+
+	if (ctl_peek_arg(ctl, NULL)) {
+		ctl->command_error= "unexpected argument after address";
+		return false;
+	}
+
+	if (flags.mkdir && sock_domain == AF_UNIX)
+		// we don't check success on this.  we just let open() fail and check that.
+		create_missing_dirs(((struct sockaddr_un*)&addr)->sun_path);
+
+	const char *failed= ((f= socket(sock_domain, sock_type, sock_proto)) < 0)? "socket"
+		: (bind_it && bind(f, (struct sockaddr*) &addr, addrlen) < 0)? "bind"
+		: (bind_it && listen_cnt && listen(f, listen_cnt) < 0)? "listen"
+		: (flags.nonblock && fcntl(f, F_SETFL, O_NONBLOCK) < 0)? "fcntl(O_NONBLOCK)"
+		: NULL;
+	
+	if (failed) {
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"%s: %s", failed, strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		
+		if (f >= 0) close(f);
+		return false;
+	}
+
+	fd= fd_new_file(fdname, f, flags, addrspec);
 	if (!fd) {
 		close(f);
 		ctl->command_error= "Unable to allocate new file descriptor object";
@@ -1917,141 +2051,3 @@ bool ctl_get_arg_signal(controller_t *ctl, int *sig_out) {
 	return true;
 }
 
-const struct socket_type_entry {
-	const strseg_t name;
-	int dom, typ, proto;
-} socket_types[]= {
-	{ STRSEG_LITERAL("UNIX"),           AF_UNIX, SOCK_STREAM, 0 },
-	{ STRSEG_LITERAL("TCP"),            AF_INET, SOCK_STREAM, 0 },
-	{ STRSEG_LITERAL("UDP"),            AF_INET, SOCK_DGRAM,  0 },
-	{ STRSEG_LITERAL("UNIX_STREAM"),    AF_UNIX, SOCK_STREAM, 0 },
-	{ STRSEG_LITERAL("INET_STREAM"),    AF_INET, SOCK_STREAM, 0 },
-	{ STRSEG_LITERAL("UNIX_DGRAM"),     AF_UNIX, SOCK_DGRAM,  0 },
-	{ STRSEG_LITERAL("INET_DGRAM"),     AF_INET, SOCK_DGRAM,  0 },
-#ifdef SOCK_SEQPACKET
-	{ STRSEG_LITERAL("UNIX_SEQPACKET"), AF_UNIX, SOCK_SEQPACKET, 0 },
-	{ STRSEG_LITERAL("INET_SEQPACKET"), AF_INET, SOCK_SEQPACKET, 0 },
-#endif
-	{ {NULL,0}, 0, 0, 0 }
-};
-
-
-bool ctl_get_arg_socktype(controller_t *ctl, int *domain_out, int *type_out, int *protocol_out) {
-	strseg_t spec;
-	const struct socket_type_entry *e;
-	
-	// Need one non-empty argument
-	if (!strseg_tok_next(&ctl->command, '\t', &spec) || !spec.len) {
-		ctl->command_error= "Expected socket type";
-		return false;
-	}
-	// Tested in order of most commonly used
-	for (e= socket_types; e->name.len; e++) {
-		if (0 == strseg_cmp(spec, e->name)) {
-			if (domain_out)   *domain_out=   e->dom;
-			if (type_out)     *type_out=     e->typ;
-			if (protocol_out) *protocol_out= e->proto;
-			return true;
-		}
-	}
-	ctl->command_error= "Unknown/unsupported socket type";
-	return false;
-}
-
-bool strseg_parse_sockaddr(strseg_t spec, int addr_family, struct sockaddr_storage *a_out) {
-	strseg_t addr;
-	int64_t port_int;
-	char name_buf[255];
-	
-	if (spec.len <= 0) return false;
-	
-	if (addr_family == AF_UNIX) {
-		struct sockaddr_un a;
-		memset(&a, 0, sizeof(a));
-		
-		if (spec.len >= sizeof(a.sun_path))
-			return false;
-		memcpy(a.sun_path, spec.data, spec.len);
-		a.sun_path[spec.len]= '\0';
-		
-		// Save result to caller's variable
-		if (a_out) memcpy(a_out, &a, sizeof(a));
-		return true;
-	}
-	else if (addr_family == AF_INET) {
-		struct sockaddr_in a;
-		memset(&a, 0, sizeof(a));
-		
-		// Check for addr:port notation
-		addr= STRSEG("");
-		if (strseg_tok_next(&spec, ':', &addr) && spec.len) {
-			if (!strseg_atoi(&spec, &port_int))
-				return false;
-			a.sin_port= htons((short) port_int);
-		}
-		
-		// Convert address
-		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
-			return false;
-		memcpy(name_buf, addr.data, addr.len);
-		name_buf[addr.len]= '\0';
-		if (inet_pton(addr_family, name_buf, &a.sin_addr) <= 0)
-			// TODO: handle host names
-			return false;
-		
-		// Save result to caller's variable
-		if (a_out) memcpy(a_out, &a, sizeof(a));
-		return true;
-	}
-#if 0
-	// TODO: correctly parse IPV6 addrs in the following formats:
-	//   nn:nn::nn
-	//   [nn:nn::nn]:port
-	//   hostname
-	//   hostname:port
-	else if (addr_family == AF_INET6) {
-		struct sockaddr_in6 a;
-		memset(&a, 0, sizeof(a));
-
-		// Check for addr:port notation
-		addr= STRSEG("");
-		...;
-		// Convert address
-		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
-			return false;
-		memcpy(name_buf, addr.data, addr.len);
-		name_buf[addr.len]= '\0';
-		if (inet_pton(addr_family, name_buf, &a.sin6_addr) <= 0)
-			// TODO: handle host names
-			return false;
-		
-		// Save result to caller's variable
-		if (a_out) memcpy(a_out, &a, sizeof(a));
-		return true;
-	}
-#endif
-	return false;
-}
-
-bool ctl_get_arg_sockaddr(controller_t *ctl, int addr_family, struct sockaddr_storage *a_out) {
-	strseg_t spec;
-	
-	// Need one non-empty argument
-	if (!strseg_tok_next(&ctl->command, '\t', &spec) || !spec.len) {
-		ctl->command_error= "Expected socket address";
-		return false;
-	}
-	
-	// '-' means no address.  We set the address type to UNSPEC
-	if (spec.len == 1 && spec.data[0] == '-') {
-		if (a_out) a_out->ss_family= AF_UNSPEC;
-		return true;
-	}
-	
-	if (!strseg_parse_sockaddr(spec, addr_family, a_out)) {
-		ctl->command_error= "Invalid socket address";
-		return false;
-	}
-	
-	return true;
-}

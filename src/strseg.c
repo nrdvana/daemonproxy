@@ -96,3 +96,81 @@ bool strseg_parse_size(strseg_t *string, int64_t *val) {
 	*val *= mul;
 	return true;
 }
+
+bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_storage *a_out, int *len_out) {
+	strseg_t addr;
+	int64_t port_int;
+	char name_buf[255];
+	
+	if (string->len <= 0) return false;
+	
+	if (addr_family == AF_UNIX) {
+		struct sockaddr_un a;
+		memset(&a, 0, sizeof(a));
+		
+		if (string->len >= sizeof(a.sun_path))
+			return false;
+		memcpy(a.sun_path, string->data, string->len);
+		a.sun_path[string->len]= '\0';
+		
+		// Save result to caller's variable
+		if (a_out) memcpy(a_out, &a, sizeof(a));
+		if (len_out) *len_out= sizeof(a);
+		return true;
+	}
+	else if (addr_family == AF_INET) {
+		struct sockaddr_in a;
+		memset(&a, 0, sizeof(a));
+		
+		// Check for addr:port notation
+		addr= STRSEG("");
+		if (strseg_tok_next(string, ':', &addr) && string->len) {
+			if (!strseg_atoi(string, &port_int))
+				return false;
+			a.sin_port= htons((short) port_int);
+		}
+		
+		// Convert address
+		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
+			return false;
+		memcpy(name_buf, addr.data, addr.len);
+		name_buf[addr.len]= '\0';
+		if (inet_pton(addr_family, name_buf, &a.sin_addr) <= 0)
+			// TODO: handle host names
+			return false;
+		
+		// Save result to caller's variable
+		if (a_out) memcpy(a_out, &a, sizeof(a));
+		if (len_out) *len_out= sizeof(a);
+		return true;
+	}
+#if 0
+	// TODO: correctly parse IPV6 addrs in the following formats:
+	//   nn:nn::nn
+	//   [nn:nn::nn]:port
+	//   hostname
+	//   hostname:port
+	else if (addr_family == AF_INET6) {
+		struct sockaddr_in6 a;
+		memset(&a, 0, sizeof(a));
+
+		// Check for addr:port notation
+		addr= STRSEG("");
+		...;
+		// Convert address
+		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
+			return false;
+		memcpy(name_buf, addr.data, addr.len);
+		name_buf[addr.len]= '\0';
+		if (inet_pton(addr_family, name_buf, &a.sin6_addr) <= 0)
+			// TODO: handle host names
+			return false;
+		
+		// Save result to caller's variable
+		if (a_out) memcpy(a_out, &a, sizeof(a));
+		if (len_out) *len_out= sizeof(a);
+		return true;
+	}
+#endif
+	return false;
+}
