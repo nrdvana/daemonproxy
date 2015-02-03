@@ -115,7 +115,6 @@ static bool ctl_get_arg_ts(controller_t *ctl, int64_t *ts);
 static bool ctl_get_arg_service(controller_t *ctl, bool existing, strseg_t *name_out, service_t **svc_out);
 static bool ctl_get_arg_fd(controller_t *ctl, bool existing, bool assignable, strseg_t *name_out, fd_t **fd_out);
 static bool ctl_get_arg_signal(controller_t *ctl, int *sig_out);
-static bool ctl_get_arg_sockaddr(controller_t *ctl, int addr_family, struct sockaddr_storage *a_out, int *len_out);
 
 //
 // Here we define a static hash table of commands, and methods to access them.
@@ -922,10 +921,16 @@ bool ctl_cmd_fd_open(controller_t *ctl) {
 /*
 =item fd.socket NAME FLAG1,FLAG2,.. ADDRSPEC
 
-Creates a socket and binds it to an address.  Re-using an existing name will
-close the old handle.  FLAGS may be unix,udp,tcp,inet,inet6,stream,dgram,
-seqpacket,nonblock,mkdir,bind,listen.  If listen or bind are not specified,
-then ADDRSPEC is ignored.  listen implies bind.
+Creates a socket and optionally binds it to an address and optionally starts
+a listen queue for it.  Re-using an existing name will close the old handle.
+FLAGS may be unix,udp,tcp,inet,inet6,stream,dgram,seqpacket,nonblock,mkdir,
+bind,listen.  listen implies bind.  Providing ADDRSPEC implies bind.  The
+default socket type is unix,stream if FLAGS doesn't pick one.  mkdir only
+takes effect if the socket type is unix.
+
+There is no way to start a connection TO an address with daemonproxy, nor is
+one planned, because connecting would entail a state machine and that
+can be better handled within a service.
 
 =cut
 */

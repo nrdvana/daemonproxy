@@ -37,6 +37,10 @@ bool strseg_atoi(strseg_t *str, int64_t *int_out);
 // parse integer with size suffix, returning true if extracted any digits
 bool strseg_parse_size(strseg_t *string, int64_t *val);
 
+// parse any socket address
+bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_storage *a_out, int *len_out);
+
+
 //----------------------------------------------------------------------------
 // daemonproxy.c interface
 
