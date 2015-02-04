@@ -1719,12 +1719,13 @@ bool ctl_notify_svc_auto_up(controller_t *ctl, const char *name, int64_t interva
 /*
 =item fd.state NAME TYPE FLAGS DESCRIPTION
 
-TYPE is 'file', 'pipe', 'special', or 'deleted'.  Deleted means the file
+TYPE is 'file', 'pipe', 'socket', 'special', or 'deleted'.  Deleted means the file
 handle has just been removed and no longer exists.  Type 'file' has FLAGS
 that match the flags used to open it (though possibly in a different order).
-Type 'pipe' has flags of 'to' or 'from'.  DESCRIPTION is the filename
-(possibly truncated), the pipe-peer handle name, or a free-form string
-describing the handle.
+Type 'pipe' refers to both pipes and socketpairs.  Flags for a pipe are 'to' or 'from',
+but if it is a socketpair it also has flags for the domain and type.
+DESCRIPTION is the filename (possibly truncated), the pipe-peer handle name,
+the bound socket address, or a free-form string describing the handle.
 
 =cut
 */
@@ -1735,11 +1736,27 @@ bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
 	
 	if (flags.pipe) {
 		peer= fd_get_pipe_peer(fd);
-		return ctl_write(ctl, "fd.state	%s	pipe	%s	%s\n",
-			name, flags.write? "to":"from", peer? fd_get_name(peer) : "?");
+		return ctl_write(ctl, "fd.state" "\t" "%s" "\t" "pipe" "\t" "%s%s%s%s" "\t" "%s\n",
+			name,
+			!flags.socket? ""
+				: flags.sock_inet? "inet,"
+				: flags.sock_inet6? "inet6,"
+				: "unix,",
+			!flags.socket? ""
+				: flags.sock_dgram? "dgram,"
+				: flags.sock_seq? "seqpacket,"
+				: "stream,",
+			flags.nonblock? "nonblock," : "",
+			flags.write || flags.socket? "to":"from",
+			peer? fd_get_name(peer) : "?"
+		);
+	}
+	else if (flags.socket) {
+		// TODO:
+		return true;
 	}
 	else {
-		return ctl_write(ctl, "fd.state	%s	%s	%s%s%s%s%s%s	%s\n",
+		return ctl_write(ctl, "fd.state" "\t" "%s" "\t" "%s" "\t" "%s%s%s%s%s%s" "\t" "%s\n",
 			name, flags.special? "special" : "file",
 			(flags.write? (flags.read? "read,write":"write"):"read"),
 			(flags.append? ",append":""), (flags.create? ",create":""),
