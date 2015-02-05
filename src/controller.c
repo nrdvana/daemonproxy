@@ -1752,21 +1752,28 @@ bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd) {
 		peer= fd_get_pipe_peer(fd);
 		return ctl_write(ctl, "fd.state" "\t" "%s" "\t" "pipe" "\t" "%s%s%s%s" "\t" "%s\n",
 			name,
-			!flags.socket? ""
-				: flags.sock_inet? "inet,"
-				: flags.sock_inet6? "inet6,"
-				: "unix,",
-			!flags.socket? ""
-				: flags.sock_dgram? "dgram,"
-				: flags.sock_seq? "seqpacket,"
-				: "stream,",
+			!flags.socket? "" : flags.sock_inet? "inet," : flags.sock_inet6? "inet6," : "unix,",
+			!flags.socket? "" : flags.sock_dgram? "dgram," : flags.sock_seq? "seqpacket," : "stream,",
 			flags.nonblock? "nonblock," : "",
-			flags.write || flags.socket? "to":"from",
+			(flags.write || flags.socket)? "to":"from",
 			peer? fd_get_name(peer) : "?"
 		);
 	}
 	else if (flags.socket) {
-		// TODO:
+		char listenbuf[32];
+		if (flags.listen)
+			snprintf(listenbuf, sizeof(listenbuf), ",listen=%d", flags.listen);
+		return ctl_write(ctl, "fd.state" "\t" "%s" "\t" "%s" "\t" "%s%s%s%s%s%s" "\t" "%s\n",
+			name,
+			flags.special? "special" : "socket",
+			flags.sock_inet? "inet" : flags.sock_inet6? "inet6" : "unix",
+			flags.sock_dgram? ",dgram" : flags.sock_seq? ",seqpacket" : ",stream",
+			flags.bind? ",bind" : "",
+			flags.listen? listenbuf : "",
+			flags.mkdir? ",mkdir" : "",
+			flags.nonblock? ",nonblock" : "",
+			fd_get_file_path(fd)
+		);
 		return true;
 	}
 	else {

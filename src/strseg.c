@@ -107,6 +107,7 @@ bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_st
 	if (addr_family == AF_UNIX) {
 		struct sockaddr_un a;
 		memset(&a, 0, sizeof(a));
+		a.sun_family= AF_UNIX;
 		
 		if (string->len >= sizeof(a.sun_path))
 			return false;
@@ -121,6 +122,7 @@ bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_st
 	else if (addr_family == AF_INET) {
 		struct sockaddr_in a;
 		memset(&a, 0, sizeof(a));
+		a.sin_family= AF_INET;
 		
 		// Check for addr:port notation
 		addr= STRSEG("");
@@ -153,6 +155,7 @@ bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_st
 	else if (addr_family == AF_INET6) {
 		struct sockaddr_in6 a;
 		memset(&a, 0, sizeof(a));
+		a.sin6_family= AF_INET6;
 
 		// Check for addr:port notation
 		addr= STRSEG("");
