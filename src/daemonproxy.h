@@ -28,6 +28,10 @@ typedef struct strseg_s {
 // extract one token from string_input (delimited by sep) and place it into tok_out
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out);
 
+// truncate the string at the first occurence of sep, and return the remainder (not including sep)
+// returns true only if sep exists.
+bool strseg_split_1(strseg_t *string_inout, char sep, strseg_t *remainder_out);
+
 // strcmp() for strseg_t structs
 int  strseg_cmp(strseg_t a, strseg_t b);
 

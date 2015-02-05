@@ -733,7 +733,7 @@ socket type is stream.
 bool ctl_cmd_fd_pipe(controller_t *ctl) {
 	fd_t *fd;
 	int pair[2];
-	strseg_t read_side, write_side, opts, opt;
+	strseg_t read_side, write_side, opt, opts;
 	fd_flags_t flags;
 	int sock_domain, sock_type, sock_proto;
 	memset(&flags, 0, sizeof(flags));
@@ -745,8 +745,10 @@ bool ctl_cmd_fd_pipe(controller_t *ctl) {
 	// Check for optional flags
 	if (ctl_get_arg(ctl, &opts)) {
 		#define STRMATCH(flag) (opt.len == strlen(flag) && 0 == memcmp(opt.data, flag, opt.len))
-		while (strseg_tok_next(&opts, ',', &opt)) {
-			if (!opt.len) continue;
+		while (opts.len > 0) {
+			opt= opts;
+			strseg_split_1(&opt, ',', &opts);
+			if (opt.len <= 0) continue;
 			
 			switch (opt.data[0]) {
 			case '-':

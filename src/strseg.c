@@ -17,6 +17,19 @@ int strseg_cmp(strseg_t a, strseg_t b) {
 		: 0;
 }
 
+/** Remove the next token from a delimited string.
+ *
+ * This function has slightly odd behavior.  It takes the first string and
+ * consumes characters up to the first separator.  It assigns this range
+ * (minus the separator) to the tok_out string, if given.
+ *
+ *  **If the input string is empty** an empty token will be returned, and the
+ * input length **will be set to -1**.  This odd behavior handles the case
+ * where the string "foo\tbar\t" actually has 3 fields, and the third is empty.
+ * The consequence is that an empty string contains one empty token, and also
+ * that the length of the string can go negative.  (it would perhaps be better
+ * to use a NULL data pointer to indicate all tokens are consumed)
+ */
 bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out) {
 	const char *p= string_inout->data;
 	int len;
@@ -34,6 +47,29 @@ bool strseg_tok_next(strseg_t *string_inout, char sep, strseg_t *tok_out) {
 	string_inout->data+= len + 1;
 	string_inout->len -= len + 1;
 	return true;
+}
+
+/** Split a string on the next occurrence of a separator character
+ *
+ * Returns true if the separator character exists, in which case it
+ * truncates the input string at that character and sets remainder_out
+ * to the portion of the original string following the separator
+ * (or the empty string if there is no separator)
+ *
+ * remainder_out is required.
+ */
+bool strseg_split_1(strseg_t *string_inout, char sep, strseg_t *remainder_out) {
+	const char *p, *lim;
+	for (p= string_inout->data, lim= p + string_inout->len; p < lim; p++) {
+		if (*p == sep) {
+			remainder_out->data= p + 1;
+			remainder_out->len=  lim - remainder_out->data;
+			string_inout->len=   p - string_inout->data;
+			return true;
+		}
+	}
+	remainder_out->len= 0;
+	return false;
 }
 
 bool strseg_atoi(strseg_t *string, int64_t *val) {
