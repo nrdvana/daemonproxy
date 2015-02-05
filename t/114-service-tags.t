@@ -24,7 +24,6 @@ $dp->response_like( qr!^service.tags\tfoo\tcolor=blue$!, 'overwrite tags' );
 $dp->send('service.tags', 'foo');
 $dp->response_like( qr!^service.tags\tfoo\t$!, 'unset tags' );
 
-$dp->send("terminate	0");
-$dp->exit_is( 0 );
+$dp->terminate_ok;
 
 done_testing;

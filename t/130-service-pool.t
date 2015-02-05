@@ -11,13 +11,11 @@ my $dp;
 
 $dp= Test::DaemonProxy->new;
 $dp->run('-i', '--service-pool', '20x1K');
-$dp->send("terminate	0");
-$dp->exit_is( 0 );
+$dp->terminate_ok;
 
 $dp= Test::DaemonProxy->new;
 $dp->run('-i', '--service-pool', '5x200');
-$dp->send("terminate	0");
-$dp->exit_is( 0 );
+$dp->terminate_ok;
 
 $dp= Test::DaemonProxy->new;
 $dp->run('-i', '--service-pool', '6');
@@ -47,7 +45,6 @@ for (2..7) {
 	$dp->recv( qr/^service.state	service$_	deleted/m );
 }
 
-$dp->send('terminate', 0);
-$dp->exit_is( 0 );
+$dp->terminate_ok;
 
 done_testing;

@@ -46,7 +46,7 @@ subtest unix => sub {
 		or diag("connect: $!");
 	send($sock, "data", 0);
 	
-	$dp->recv_ok( qr/^service.state\ttest_unix.*exit\t0/m, 'test script accepted connection' );
+	$dp->recv_ok( qr/^service.state\ttest_unix.*exit\t0/m, 'test script accepted connection and received data' );
 	
 	$dp->send('fd.socket', 'fd1', 'unix,mkdir', "$tempdir/foo/bar/baz");
 	$dp->recv_ok( qr|^fd.state\tfd1\tsocket\tunix,stream,bind,mkdir\t\Q$tempdir\E/foo/bar/baz$|m, 'socket bound to path' );

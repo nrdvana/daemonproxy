@@ -105,10 +105,17 @@ sub _quote_str {
 
 sub send {
 	my $self= shift;
+	croak "argument has embedded newline or tab" if grep { /[\t\n]/ } @_;
 	my $msg= join("\t", @_);
 	Test::More::note("send: "._quote_str($msg));
 	local $SIG{PIPE}= sub {};
 	$self->dp_stdin->print($msg."\n");
+}
+
+sub terminate_ok {
+	my $self= shift;
+	$self->send('terminate', 0);
+	$self->exit_is( 0 );
 }
 
 sub _read_more {
