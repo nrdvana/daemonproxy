@@ -3,7 +3,8 @@
 use strict;
 use warnings;
 use Test::More;
-use lib 't/lib';
+use FindBin;
+use lib "$FindBin::Bin/lib";
 use Test::DaemonProxy;
 use Time::HiRes 'sleep', 'clock_gettime', 'CLOCK_MONOTONIC';
 
