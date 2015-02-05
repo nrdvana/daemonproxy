@@ -936,11 +936,10 @@ can be better handled within a service.
 */
 bool ctl_cmd_fd_socket(controller_t *ctl) {
 	int f;
-	int sock_domain, sock_type, sock_proto, listen_cnt;
-	bool bind_it;
+	int sock_domain, sock_type, sock_proto;
 	fd_flags_t flags;
 	fd_t *fd;
-	strseg_t fdname, opts, opt, addrspec;
+	strseg_t fdname, opts, opt, optval, addrspec;
 
 	if (!ctl_get_arg_fd(ctl, false, true, &fdname, NULL))
 		return false;
@@ -951,18 +950,33 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 	}
 	
 	memset(&flags, 0, sizeof(flags));
-	bind_it= false;
-	listen_cnt= 0;
+	memset(&addrspec, 0, sizeof(addrspec));
 	#define STRMATCH(flag) (opt.len == strlen(flag) && 0 == memcmp(opt.data, flag, opt.len))
 	flags.socket= true;
 	while (strseg_tok_next(&opts, ',', &opt)) {
 		if (!opt.len) continue;
+		// If option has an '=', break it into name=value
+		optval= opt, strseg_tok_next(&optval, '=', &opt);
 		switch (opt.data[0]) {
 		case 'b':
-			if (STRMATCH("bind"))  { bind_it= true; continue; }
+			if (STRMATCH("bind"))  { flags.bind= true; continue; }
 			break;
 		case 'l':
-			if (STRMATCH("listen")) { listen_cnt= 16; bind_it= true; continue; } // TODO: allow listen=N
+			if (STRMATCH("listen")) {
+				flags.bind= true;
+				if (optval.len > 0) {
+					int64_t val;
+					if (!strseg_atoi(&optval, &val) || val >= (1<<16) || val <= 0) {
+						ctl->command_error= "invalid listen queue length";
+						return false;
+					}
+					flags.listen= (uint16_t) val;
+				}
+				else {
+					flags.listen= 32;
+				}
+				continue;
+			}
 			break;
 		case 'u':
 			if (STRMATCH("unix"))  { flags.sock_inet= false; continue; }
@@ -1011,13 +1025,13 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 	int addrlen= sizeof(addr);
 	
 	if (ctl_get_arg(ctl, &addrspec)) {
-		bind_it= true;
+		flags.bind= true;
 		if (!strseg_parse_sockaddr(&addrspec, sock_domain, &addr, &addrlen)) {
 			ctl->command_error= "invalid address";
 			return false;
 		}
 	}
-	else if (bind_it) {
+	else if (flags.bind) {
 		ctl->command_error= "expected address argument";
 		return false;
 	}
@@ -1032,8 +1046,8 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 		create_missing_dirs(((struct sockaddr_un*)&addr)->sun_path);
 
 	const char *failed= ((f= socket(sock_domain, sock_type, sock_proto)) < 0)? "socket"
-		: (bind_it && bind(f, (struct sockaddr*) &addr, addrlen) < 0)? "bind"
-		: (bind_it && listen_cnt && listen(f, listen_cnt) < 0)? "listen"
+		: (flags.bind && bind(f, (struct sockaddr*) &addr, addrlen) < 0)? "bind"
+		: (flags.listen && listen(f, flags.listen) < 0)? "listen"
 		: (flags.nonblock && fcntl(f, F_SETFL, O_NONBLOCK) < 0)? "fcntl(O_NONBLOCK)"
 		: NULL;
 	

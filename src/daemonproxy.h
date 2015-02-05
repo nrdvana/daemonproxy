@@ -319,8 +319,10 @@ typedef struct fd_flags_s {
 		sock_inet6: 1,
 		sock_dgram: 1,
 		sock_seq: 1,
+		bind: 1,
 		special: 1,
 		is_const: 1;
+	uint16_t listen;
 } fd_flags_t;
 
 void fd_init();
