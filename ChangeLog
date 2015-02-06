@@ -1,10 +1,13 @@
-  * New command chdir allows controller to re-home daemonproxy
-  * fd.pipe now has optional FLAGS, which can be used to make socketpairs
-  * New command fd.socket allows creating and binding a socket
+  * Errors in config file are now logged.  (in fact, all erroneous commands
+     from any controller get logged, now)
+  * Fixed handling of blank lines in config file.
+  * New command chdir allows controller to re-home daemonproxy.
+  * fd.pipe now has optional FLAGS, which can be used to make socketpairs.
+  * New command fd.socket allows creating and binding a socket.
   * New magic filehandle 'control.socket' gives equivlent of control.command
      and control.event on a single handle.
   * control.command and control.event are now aliases for control.socket,
-     with any un-used direction shutdown.
+     with any un-used direction shutdown().
 
 2014-07-11	Version 1.1.0
 
