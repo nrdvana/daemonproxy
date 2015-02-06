@@ -426,6 +426,17 @@ bool ctl_state_next_command(controller_t *ctl) {
 	return true;
 }
 
+static bool entirely_whitespace(strseg_t str) {
+	int i;
+	for (i= 0; i < str.len; i++) {
+		switch (str.data[i]) {
+		case ' ': case '\t': case '\r': case '\n': case '\0': break;
+		default: return false;
+		}
+	}
+	return true;
+}
+
 /** Dispatch the controller's current command
  *
  * The current command string was found in ctl_state_next_command, and now
@@ -447,22 +458,14 @@ bool ctl_state_run_command(controller_t *ctl) {
 	// (for example, the 'statedump' command)
 	ctl->state_fn= ctl_state_end_command;
 	
-	// Ignore overflow lines, empty lines, lines starting with #, and lines that start with whitespace
-	if (ctl->recv_buf[0] == '\n'
-		|| ctl->recv_buf[0] == '\r'
-		|| ctl->recv_buf[0] == '#'
-		|| ctl->recv_buf[0] == ' '
-		|| ctl->recv_buf[0] == '\t'
-	) {
-		log_trace("Ignoring comment line");
-		ctl->recv_overflow= false;
-	}
 	// check for command overflow
-	else if (ctl->recv_overflow) {
-		ctl_notify_error(ctl, "line too long");
-		log_error("controller[%d] command exceeds buffer size");
+	if (ctl->recv_overflow) {
+		ctl->recv_overflow= false;
+		if (ctl->recv_buf[0] != '#') { // long comments not an error
+			ctl_notify_error(ctl, "line too long");
+			log_error("controller[%d] command exceeds buffer size", ctl->id);
+		}
 	}
-	// else try to parse and dispatch it
 	else {
 		// ctl->command is the un-parsed portion of our command.
 		ctl->command.data= ctl->recv_buf;
@@ -470,19 +473,29 @@ bool ctl_state_run_command(controller_t *ctl) {
 		ctl->command_error= "unknown error";
 		
 		// We first parse the command name
-		if (strseg_tok_next(&ctl->command, '\t', &ctl->command_name)) {
-			// look up the command to see if it exists
-			cmd= ctl_find_command(ctl->command_name);
-			if (!cmd) {
+		strseg_tok_next(&ctl->command, '\t', &ctl->command_name);
+		// look up the command to see if it exists
+		cmd= ctl_find_command(ctl->command_name);
+		if (!cmd) {
+			// suppress non-error cases:
+			// 1. ignore lines starting with '#'
+			// 2. ignore lines containing nothing but whitespace
+			if (ctl->recv_buf[0] == '#') {
+				log_trace("Ignoring comment line");
+			} else if (entirely_whitespace((strseg_t){ ctl->recv_buf, ctl->line_len - 1 })) {
+				log_trace("Ignoring blank line");
+			}
+			// else its an error
+			else {
 				ctl_notify_error(ctl, "Unknown command: %.*s", ctl->command_name.len, ctl->command_name.data);
-				log_error("controller[%d] sent unknown command %.*s", ctl->command_name.len, ctl->command_name.data);
+				log_error("controller[%d] sent unknown command %.*s", ctl->id, ctl->command_name.len, ctl->command_name.data);
 			}
-			// dispatch it (returns false if it encounters an error, and sets ctl->command_error)
-			else if (!cmd->fn(ctl)) {
-				ctl_notify_error(ctl, "%s, for command \"%.*s%s\"", ctl->command_error, ctl->line_len > 30? 30 : ctl->line_len, ctl->recv_buf, ctl->line_len > 30? "...":"");
-				log_error("controller[%d] command failed: '%.*s'%s", ctl->id, ctl->line_len > 90? 90 : ctl->line_len, ctl->recv_buf, ctl->line_len > 90? "...":"");
-				log_error("  with error: '%.*s'", ctl->command_error);
-			}
+		}
+		// dispatch it (returns false if it encounters an error, and sets ctl->command_error)
+		else if (!cmd->fn(ctl)) {
+			ctl_notify_error(ctl, "%s, for command \"%.*s%s\"", ctl->command_error, ctl->line_len > 30? 30 : ctl->line_len, ctl->recv_buf, ctl->line_len > 30? "...":"");
+			log_error("controller[%d] command failed: '%.*s'%s", ctl->id, ctl->line_len > 90? 90 : ctl->line_len, ctl->recv_buf, ctl->line_len > 90? "...":"");
+			log_error("  with error: '%s'", ctl->command_error);
 		}
 	}
 	return true;
