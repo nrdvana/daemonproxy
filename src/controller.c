@@ -189,7 +189,7 @@ controller_t *ctl_alloc() {
  * Initialize and bind a controller object to a pair of in/out handles.
  */
 bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
-	log_debug("creating client %d with handles %d,%d", ctl - client, recv_fd, send_fd);
+	log_debug("creating client %d with handles %d,%d", ctl->id, recv_fd, send_fd);
 	// file descriptors must be nonblocking
 	if (recv_fd != -1)
 		if (fcntl(recv_fd, F_SETFL, O_NONBLOCK)) {
@@ -387,7 +387,7 @@ bool ctl_state_next_command(controller_t *ctl) {
 			// In case its a comment, preserve comment character (long comments are not an error)
 			ctl->recv_overflow= true;
 			ctl->recv_buf_pos= 1;
-			log_trace("line overflows buffer, ignoring remainder");
+			log_debug("controller[%d] command length exceeds %d bytes, discarding", ctl->id, CONTROLLER_RECV_BUF_SIZE);
 			return true;
 		}
 		log_trace("no command ready");
@@ -421,7 +421,7 @@ bool ctl_state_next_command(controller_t *ctl) {
 	// We now have a complete line
 	ctl->line_len= eol - ctl->recv_buf + 1;
 	*eol= '\0';
-	log_debug("client[%d] command: \"%s\"", ctl->id, ctl->recv_buf);
+	log_debug("controller[%d] command: \"%s\"", ctl->id, ctl->recv_buf);
 	ctl->state_fn= ctl_state_run_command;
 	return true;
 }
@@ -458,8 +458,10 @@ bool ctl_state_run_command(controller_t *ctl) {
 		ctl->recv_overflow= false;
 	}
 	// check for command overflow
-	else if (ctl->recv_overflow)
+	else if (ctl->recv_overflow) {
 		ctl_notify_error(ctl, "line too long");
+		log_error("controller[%d] command exceeds buffer size");
+	}
 	// else try to parse and dispatch it
 	else {
 		// ctl->command is the un-parsed portion of our command.
@@ -471,11 +473,16 @@ bool ctl_state_run_command(controller_t *ctl) {
 		if (strseg_tok_next(&ctl->command, '\t', &ctl->command_name)) {
 			// look up the command to see if it exists
 			cmd= ctl_find_command(ctl->command_name);
-			if (!cmd)
+			if (!cmd) {
 				ctl_notify_error(ctl, "Unknown command: %.*s", ctl->command_name.len, ctl->command_name.data);
+				log_error("controller[%d] sent unknown command %.*s", ctl->command_name.len, ctl->command_name.data);
+			}
 			// dispatch it (returns false if it encounters an error, and sets ctl->command_error)
-			else if (!cmd->fn(ctl))
+			else if (!cmd->fn(ctl)) {
 				ctl_notify_error(ctl, "%s, for command \"%.*s%s\"", ctl->command_error, ctl->line_len > 30? 30 : ctl->line_len, ctl->recv_buf, ctl->line_len > 30? "...":"");
+				log_error("controller[%d] command failed: '%.*s'%s", ctl->id, ctl->line_len > 90? 90 : ctl->line_len, ctl->recv_buf, ctl->line_len > 90? "...":"");
+				log_error("  with error: '%.*s'", ctl->command_error);
+			}
 		}
 	}
 	return true;
