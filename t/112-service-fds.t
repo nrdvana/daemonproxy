@@ -14,17 +14,16 @@ $dp->run('-i');
 
 # Set args initially
 $dp->send('service.fds', 'foo', 'null', 'null', 'null');
-$dp->response_like( qr!^service.fds\tfoo\tnull\tnull\tnull$!, 'set fds' );
+$dp->response_like( qr!^service.fds\tfoo\tnull\tnull\tnull$!m, 'set fds' );
 
 # should be able to overwrite it
 $dp->send('service.fds', 'foo', 'null', 'stdout', 'stdout');
-$dp->response_like( qr!^service.fds\tfoo\tnull\tstdout\tstdout$!, 'overwrite fds' );
+$dp->response_like( qr!^service.fds\tfoo\tnull\tstdout\tstdout$!m, 'overwrite fds' );
 
 # read it again
 $dp->send('service.fds', 'foo');
-$dp->response_like( qr!^service.fds\tfoo\t$!, 'unset fds' );
+$dp->response_like( qr!^service.fds\tfoo\t$!m, 'unset fds' );
 
-$dp->send('terminate', 0);
-$dp->exit_is( 0 );
+$dp->terminate_ok;
 
 done_testing;

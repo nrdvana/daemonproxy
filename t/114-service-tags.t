@@ -14,15 +14,15 @@ $dp->run('-i');
 
 # Set args initially
 $dp->send('service.tags', 'foo', 'mytag');
-$dp->response_like( qr!^service.tags\tfoo\tmytag$!, 'set tags' );
+$dp->response_like( qr!^service.tags\tfoo\tmytag$!m, 'set tags' );
 
 # should be able to overwrite it
 $dp->send('service.tags', 'foo', 'color=blue');
-$dp->response_like( qr!^service.tags\tfoo\tcolor=blue$!, 'overwrite tags' );
+$dp->response_like( qr!^service.tags\tfoo\tcolor=blue$!m, 'overwrite tags' );
 
 # unset it
 $dp->send('service.tags', 'foo');
-$dp->response_like( qr!^service.tags\tfoo\t$!, 'unset tags' );
+$dp->response_like( qr!^service.tags\tfoo\t$!m, 'unset tags' );
 
 $dp->terminate_ok;
 

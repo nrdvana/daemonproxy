@@ -168,13 +168,59 @@ int main(int argc, char** argv) {
 	return main_exitcode;
 }
 
+static bool setup_interactive_mode() {
+	controller_t *ctl;
+	fd_t *stdin_fd= fd_by_name(STRSEG("stdin"));
+	fd_t *stdout_fd= fd_by_name(STRSEG("stdout"));
+
+	if (!stdin_fd || !stdout_fd) {
+		log_error("stdin/stdout not available");
+		return false;
+	}
+
+	if (!(ctl= ctl_new(0, 1))) {
+		log_error("Failed to allocate controller");
+		return false;
+	}
+
+	// if command stream is interrupted, do not execute the final command
+	interactive_controller= ctl;
+	ctl_set_auto_final_newline(ctl, false);
+
+	// stdin is used now, so make the named "stdin" handle a dup of /dev/null
+	// if dup() fails, they become -1, which is the desired fallback.
+	
+	fd_to_dev_null(stdin_fd);
+	fd_to_dev_null(stdout_fd);
+	
+	// ctl_write is not guaranteed to finish without blocking, but in practice
+	// this should all fit into a single write, and it isn't critical anyway.
+	ctl_write(ctl, "info\tdaemonproxy version %d.%d.%d%s (git %.8s%s)\n"
+		"info\tInteractive mode.  Use ^D or 'exit' to terminate.  See 'man daemonproxy' for command syntax.\n",
+		version_major, version_minor, version_release, version_suffix, version_git_head, version_git_dirty? "+":""
+	);
+	
+	return true;
+}
+
 void main_notify_controller_freed(controller_t *ctl) {
 	if (interactive_controller && ctl == interactive_controller) {
-		log_debug("interactive controller was freed");
 		// treat this as an exit request
 		if (!opt_terminate_guard) {
+			log_info("interactive session ended");
+			service_t *svc= NULL;
+			while ((svc= svc_iter_next(svc, ""))) {
+				pid_t pid= svc_get_pid(svc);
+				int64_t reap_ts= svc_get_reap_ts(svc);
+				if (pid && !reap_ts) {
+					log_warn("service still running: %s\t%5d", svc_get_name(svc), (int)pid);
+				}
+			}
 			main_terminate= true;
 			wake->next= wake->now;
+		}
+		else {
+			log_warn("interactive session ended, but not exiting due to terminate-guard");
 		}
 		interactive_controller= NULL;
 	}
@@ -242,33 +288,6 @@ static bool register_open_fds() {
 		}
 	}
 	return result;
-}
-
-static bool setup_interactive_mode() {
-	controller_t *ctl;
-	fd_t *stdin_fd= fd_by_name(STRSEG("stdin"));
-	fd_t *stdout_fd= fd_by_name(STRSEG("stdout"));
-
-	if (!stdin_fd || !stdout_fd) {
-		log_error("stdin/stdout not available");
-		return false;
-	}
-
-	if (!(ctl= ctl_new(0, 1))) {
-		log_error("Failed to allocate controller");
-		return false;
-	}
-
-	// if command stream is interrupted, do not execute the final command
-	interactive_controller= ctl;
-	ctl_set_auto_final_newline(ctl, false);
-
-	// stdin is used now, so make the named "stdin" handle a dup of /dev/null
-	// if dup() fails, they become -1, which is the desired fallback.
-	
-	fd_to_dev_null(stdin_fd);
-	fd_to_dev_null(stdout_fd);
-	return true;
 }
 
 static void fd_to_dev_null(fd_t *fd) {
