@@ -374,11 +374,14 @@ void show_version(char **argv) {
 	localtime_r(&version_build_ts, &cal);
 	printf("daemonproxy version %d.%d.%d%s\n"
 		" build timestamp: %lld (%4d-%02d-%02d %02d:%02d:%02d)\n"
-		" git HEAD: %s%s\n",
+		" git HEAD: %s%s\n"
+		"%s\n%s",
 		version_major, version_minor, version_release, version_suffix,
 		(long long) version_build_ts,
 		cal.tm_year+1900, cal.tm_mon+1, cal.tm_mday, cal.tm_hour, cal.tm_min, cal.tm_sec,
-		version_git_head, version_git_dirty? " (dirty)":"");
+		version_git_head, version_git_dirty? " (dirty)":"",
+		copyright, license
+	);
 	
 	// now exit, unless they also specified exec-on-exit
 	fatal(EXIT_NO_OP, "");

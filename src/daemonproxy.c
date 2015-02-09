@@ -10,9 +10,16 @@ bool     main_terminate= false;
 int      main_exitcode= 0;
 controller_t *interactive_controller;
 
-wake_t main_wake;
+wake_t   main_wake; // global used for tracking things that should wake the main loop
+wake_t  *wake= &main_wake; // this is exported to other modules
 
-wake_t *wake= &main_wake;
+const char * copyright=
+	"Copyright (C) 2014-2015  Michael Conrad";
+const char * license=
+	"Distributed under GPLv2.  See LICENSE.\n"
+	"This is free software: you are free to change and redistribute it.\n"
+	"There is NO WARRANTY, to the extent permitted by law.\n";
+
 
 // Parse options and apply to global vars; calls fatal() on failure.
 bool set_exec_on_exit(strseg_t arguments_tsv);
@@ -27,16 +34,13 @@ int main(int argc, char** argv) {
 	pid_t pid;
 	struct timeval tv;
 	service_t *svc;
-	wake_t wake_instance;
+	memset(wake, 0, sizeof(*wake));
 	
 	log_init();
 	svc_init();
 	fd_init();
 	ctl_init();
 
-	memset(&wake_instance, 0, sizeof(wake_instance));
-	wake= &wake_instance;
-	
 	// Special defaults when running as init
 	if (getpid() == 1) {
 		opt_config_file= CONFIG_FILE_DEFAULT_PATH;
@@ -197,11 +201,15 @@ static bool setup_interactive_mode() {
 	fd_to_dev_null(stdout_fd);
 	
 	// ctl_write is not guaranteed to finish without blocking, but in practice
-	// this should all fit into a single write, and it isn't critical anyway.
-	ctl_write(ctl, "info\tdaemonproxy version %d.%d.%d%s (git %.8s%s)\n"
-		"info\tInteractive mode.  Use ^D or 'exit' to terminate.  See 'man daemonproxy' for command syntax.\n",
-		version_major, version_minor, version_release, version_suffix, version_git_head, version_git_dirty? "+":""
-	);
+	// this should all fit into the pipe, and it isn't critical anyway.
+	
+	ctl_write(ctl, "info\tdaemonproxy version %d.%d.%d%s (git %.8s%s)\n",
+		version_major, version_minor, version_release, version_suffix, version_git_head, version_git_dirty? "+":"");
+	ctl_write(ctl, "info\t%s\n", copyright);
+	strseg_t text= STRSEG(license), line;
+	while (strseg_tok_next(&text, '\n', &line) && line.len > 0)
+		ctl_write(ctl, "info\t%.*s\n", line.len, line.data);
+	ctl_write(ctl, "info\tInteractive mode.  Use ^D or 'exit' to terminate.  See 'man daemonproxy' for command syntax.\n");
 	
 	return true;
 }

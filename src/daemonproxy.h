@@ -93,6 +93,9 @@ extern const time_t  version_build_ts;
 extern const char *  version_git_head;
 extern const bool    version_git_dirty;
 
+extern const char *  copyright;
+extern const char *  license;
+
 //----------------------------------------------------------------------------
 // options.c interface
 
