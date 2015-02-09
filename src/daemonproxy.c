@@ -97,6 +97,14 @@ int main(int argc, char** argv) {
 		else
 			daemonize();
 	}
+	
+	// Rearrange stdour/stderr handles so that FD number 1 and 2 go to a
+	// nonblocking pipe, and a forked job pumps the pipe to the original
+	// stderr.  The destination can be changed later.
+	if (log_spawn_relay(fd_get('stderr'), NULL, &pipe_to_relay))
+		log_set_stderr(pipe_to_relay, true);
+	else
+		log_error("Unable to start async logging; daemonproxy is vulnerable to blocking on STDERR");
 
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
@@ -348,8 +356,8 @@ int64_t gettime_mon_frac() {
  *
  * Else we exit with the exitcode passed to us.
  *
- * Note that the final log message (or more) might be lost because STDERR
- * is non-blocking.
+ * Note that the final log message (or more) might be lost if logging hasn't
+ * been directed anywhere yet and if STDERR isn't usable.
  */
 void fatal(int exitcode, const char *msg, ...) {
 	char msgbuf[1024], numbuf[12];
@@ -357,11 +365,12 @@ void fatal(int exitcode, const char *msg, ...) {
 	va_list val;
 	strseg_t args, arg;
 	char **argv;
-
+	
 	if (msg && msg[0]) {
 		va_start(val, msg);
 		vsnprintf(msgbuf, sizeof(msgbuf), msg, val);
 		va_end(val);
+		msgbuf[sizeof(msgbuf)-1]= '\0';
 	}
 	else msgbuf[0]= '\0';
 

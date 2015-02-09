@@ -1420,18 +1420,20 @@ bool ctl_cmd_log_filter(controller_t *ctl) {
 }
 
 /*
-=item log.dest fd FD_NAME
+=item log.dest fd FD_NAME  --DEPRECATED--
 
 Redirect daaemonproxy's logging to named file descriptor.  FD_NAME must be a
 valid name, but it does not need to exist yet.  The logging system will check
 this name until it is available, and then resume logging.  Likewise if the
 descriptor by that name is deleted or re-used.
 
-WARNING: the file descriptor will be put into non-blocking mode, so it is best
-not to share this descriptor with other processes, especially processes that
-might reset it to a blocking state and cause daemonproxy to hang on a blocked
-logging pipe. (However, if you're one of those types who preferrs your daemons
-freeze up when the logging is interrupted, then here's your workaround.)
+The new improved way to redirect daemonproxy logging is to start a service
+that reads from the pipe "daemonproxy.log".  Thus daemonproxy is always
+writing to the same pipe and there is less chance for screwy behavior.
+
+To maintain backward compatibility, this command creates a service called
+"_daemonproxy_log_forwarder" which runs "cat" reading from daemonproxy.log and
+writing to the named descriptor.
 
 =cut
 */

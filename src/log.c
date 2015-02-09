@@ -7,12 +7,11 @@
 #include "daemonproxy.h"
 
 int  log_filter= LOG_LEVEL_DEBUG;
-char log_dest_fd_name_buf[NAME_BUF_SIZE];
-strseg_t log_dest_fd_name= (strseg_t){ log_dest_fd_name_buf, 0 };
 char log_buffer[1024];
-int  log_buf_pos= 0;
-int  log_fd= 2;
+int  log_msg_len= 0;
+int  log_flush_pos= 0;
 int  log_msg_lost= 0;
+bool log_nonblock_safe= false;
 
 const char * log_level_names[]= { "none", "trace", "debug", "info", "warning", "error", "fatal" };
 
@@ -20,59 +19,6 @@ const char * log_level_name(int level) {
 	if (level >= LOG_FILTER_NONE && level <= LOG_LEVEL_FATAL)
 		return log_level_names[level - LOG_FILTER_NONE];
 	return "unknown";
-}
-
-static bool log_flush();
-static bool log_fd_attach();
-
-void log_init() {
-	log_fd= 2;
-	log_fd_attach();
-}
-
-int log_get_fd() {
-	return log_fd;
-}
-
-void log_fd_reset() {
-	if (log_fd >= 0) {
-		FD_CLR(log_fd, &wake->fd_write);
-		log_fd= -1;
-	}
-}
-
-void log_fd_set_name(strseg_t name) {
-	log_fd_reset();
-
-	assert(name.len < sizeof(log_dest_fd_name_buf));
-	memcpy(log_dest_fd_name_buf, name.data, name.len);
-	log_dest_fd_name_buf[name.len]= '\0';
-	log_dest_fd_name.len= name.len;
-	
-	log_fd_attach();
-}
-
-static bool log_fd_attach() {
-	fd_t *fd;
-	// If the FD the log was going to got closed, log_fd is set to -1.
-	// To resume logging, we check to see if the named FD has become available
-	// again.
-	// Note: log module gets initialized before fd module, but log_dest_fd_name
-	// doesn't get set until afterward.
-	if (log_fd < 0 && log_dest_fd_name.len > 0 && (fd= fd_by_name(log_dest_fd_name)))
-		log_fd= fd_get_fdnum(fd);
-
-	if (log_fd < 0)
-		return false;
-	
-	if (fcntl(log_fd, F_SETFL, O_NONBLOCK))
-		log_error("unable to set log fd to nonblocking mode!  logging might block daemonproxy!");
-
-	if (log_buf_pos > 0)
-		FD_SET(log_fd, &wake->fd_write);
-	else
-		FD_CLR(log_fd, &wake->fd_write);
-	return true;
 }
 
 bool log_level_by_name(strseg_t name, int *lev) {
@@ -85,40 +31,56 @@ bool log_level_by_name(strseg_t name, int *lev) {
 	return false;
 }
 
+static bool log_flush();
+
+void log_init() {
+}
+
+// Stage a log message in the logging buffer.  Returns true if entire message
+// was queued, or false if it didn't fit.  If it doesn't fit, we increment a
+// count of "lost messages", and when the log becomes writable again we first
+// write a message saying how many were lost.
+//
+// Note: NEVER CALL fatal() from this function or any sub-call.
+//
 bool log_write(int level, const char *msg, ...) {
 	char *p, *limit;
 	int n;
 	va_list val;
 	
-	if (log_filter >= level)
+	if (log_filter >= level) // is message level squelched?
 		return true;
 
-	if (log_msg_lost) {
+	// if we already have a full pipe and an un-flushed message, discard this message
+	if (log_msg_len) {
 		log_msg_lost++;
 		return false;
 	}
 
-	p= log_buffer + log_buf_pos;
-	limit= log_buffer + sizeof(log_buffer);
-	
-	n= snprintf(p , limit - p, "%s: ", log_level_name(level));
-	if (n >= limit - p) {
-		log_msg_lost++;
-		return false;
+	// Prefix with log level, except for "info" which would be redundant.
+	if (level != LOG_LEVEL_INFO) {
+		n= snprintf(log_buffer, sizeof(log_buffer), "%s: ", log_level_name(level));
+		log_msg_len+= n;
 	}
-	p+= n;
 	va_start(val, msg);
-	n= vsnprintf(p, limit - p, msg, val);
+	n= vsnprintf(log_buffer + log_msg_len, sizeof(log_buffer) - log_msg_len, msg, val);
 	va_end(val);
-	if (n >= limit - p) {
+	if (log_msg_len < sizeof(log_buffer))
+		log_buffer[log_msg_len]= "\n";
+	log_msg_len+= n + 1;
+
+	// If our sprintf would have overflowed, then mark this as a lost message
+	// but, still try to flush it so the "lost message" message gets sent.
+	if (log_msg_len > sizeof(log_buffer)) {
 		log_msg_lost++;
+		log_msg_len= 0;
+		log_flush();
 		return false;
 	}
-	p+= n;
-	*p++ = '\n';
-	log_buf_pos= p - log_buffer;
-	log_flush();
-	return true;
+	else {
+		log_flush();
+		return true;
+	}
 }
 
 
@@ -140,20 +102,21 @@ void log_set_filter(int value) {
 }
 
 void log_run() {
-	if (log_fd < 0 && !log_fd_attach())
-		return;
-
-	if (FD_ISSET(log_fd, &wake->fd_write)) {
-		FD_CLR(log_fd, &wake->fd_write);
+	if (log_w_fd > 0 && FD_ISSET(log_w_fd, &wake->fd_write)) {
+		FD_CLR(log_w_fd, &wake->fd_write);
 		log_flush();
 	}
 }
 
+// Note: NEVER CALL fatal() from this function or any sub-call.
 static bool log_flush() {
 	int n;
 	
-	while (log_buf_pos > 0) {
-		n= write(log_fd, log_buffer, log_buf_pos);
+	while (log_flush_pos < log_msg_len) {
+		if (!log_nonblock_safe) alarm(1);
+		n= write(2, log_buffer + log_flush_pos, log_msg_len - log_flush_pos);
+		if (!log_nonblock_safe) alarm(0);
+		
 		if (n < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
 				FD_SET(log_fd, &wake->fd_write);
@@ -162,20 +125,20 @@ static bool log_flush() {
 			}
 			return false;
 		}
-		if (n > 0 && n < log_buf_pos)
-			memmove(log_buffer, log_buffer + n, log_buf_pos - n);
-		log_buf_pos -= n;
+		log_flush_pos += n;
 		
-		// If messages were lost, and we've freed up some buffer space,
+		// If messages were lost, and we're able to write again,
 		// see if we can append the message saying that we lost messages
-		if (log_msg_lost) {
-			n= snprintf(log_buffer + log_buf_pos, sizeof(log_buffer) - log_buf_pos, "warning: lost %d log messages\n", log_msg_lost);
-			if (n < sizeof(log_buffer) - log_buf_pos) {
-				log_buf_pos+= n;
+		if (log_msg_lost && sizeof(log_buffer) - log_msg_len > 0) {
+			n= snprintf(log_buffer + log_msg_len, sizeof(log_buffer) - log_msg_len, "warning: lost %d log messages\n", log_msg_lost);
+			if (n < sizeof(log_buffer) - log_msg_len) {
+				log_msg_len+= n;
 				log_msg_lost= 0;
 			}
 		}
 	}
+	// completely flushed.  reset buffer.
+	log_flush_pos= log_msg_len= 0;
 	return true;
 }
 

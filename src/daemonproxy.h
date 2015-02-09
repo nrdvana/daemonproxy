@@ -135,14 +135,11 @@ bool log_write(int level, const char * msg, ...);
 // Perform anything needed per main loop iteration related to logging
 void log_run();
 
-// Find out what fd number the log is writing
-int  log_get_fd();
-
-// Tell logger the named destination FD might have changed
-void log_fd_reset();
-
-// Redirect logging to new named FD
-void log_fd_set_name(strseg_t name);
+// dup() the given file descriptor onto fd #1 and #2.
+// If the new fd is locally-controlled and set to nonblocking, then set
+// is_nonblock_safe to true so that the logging code won't need to call
+// alarm() for every message.
+bool log_set_stderr(int fd, bool is_nonblock_safe);
 
 extern int log_filter;
 
