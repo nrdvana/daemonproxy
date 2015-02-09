@@ -1,6 +1,7 @@
   * Errors in config file are now logged.  (in fact, all erroneous commands
      from any controller get logged, now)
   * Fixed handling of blank lines in config file.
+  * Services running when daemonproxy terminates are logged.
   * New command chdir allows controller to re-home daemonproxy.
   * fd.pipe now has optional FLAGS, which can be used to make socketpairs.
   * New command fd.socket allows creating and binding a socket.
@@ -8,6 +9,8 @@
      and control.event on a single handle.
   * control.command and control.event are now aliases for control.socket,
      with any un-used direction shutdown().
+  * Environment variables for exec-on-exit feature are now DAEMONPROXY_ERROR
+     and DAEMONPROXY_EXITCODE.
 
 2014-07-11	Version 1.1.0
 

@@ -352,25 +352,24 @@ int64_t gettime_mon_frac() {
  * is non-blocking.
  */
 void fatal(int exitcode, const char *msg, ...) {
-	char buffer[1024];
+	char msgbuf[1024], numbuf[12];
 	int i;
 	va_list val;
 	strseg_t args, arg;
 	char **argv;
-	
+
 	if (msg && msg[0]) {
 		va_start(val, msg);
-		vsnprintf(buffer, sizeof(buffer), msg, val);
+		vsnprintf(msgbuf, sizeof(msgbuf), msg, val);
 		va_end(val);
-	} else {
-		buffer[0]= '\0';
 	}
-	
+	else msgbuf[0]= '\0';
+
 	if (opt_exec_on_exit) {
 		// Pass params to child as environment vars
-		setenv("INIT_FRAME_ERROR", buffer, 1);
-		sprintf(buffer, "%d", exitcode);
-		setenv("INIT_FRAME_EXITCODE", buffer, 1);
+		snprintf(numbuf, sizeof(numbuf), "%d", exitcode);
+		setenv("DAEMONPROXY_EXITCODE", numbuf, 1);
+		setenv("DAEMONPROXY_ERROR", msgbuf, 1);
 		// count argument list
 		args= opt_exec_on_exit_args;
 		for (i= 0; strseg_tok_next(&args, '\0', NULL); i++);
@@ -391,8 +390,8 @@ void fatal(int exitcode, const char *msg, ...) {
 		log_error("Unable to exec \"%s\": %s", argv[0], strerror(errno));
 	}
 
-	if (msg && msg[0])
-		log_write(LOG_LEVEL_FATAL, "%s%s", opt_terminate_guard? "(attempting to continue) ":"", buffer);
+	if (msgbuf[0])
+		log_write(LOG_LEVEL_FATAL, "%s%s", opt_terminate_guard? "(attempting to continue) ":"", msgbuf);
 
 	if (!opt_terminate_guard) {
 		log_running_services();
