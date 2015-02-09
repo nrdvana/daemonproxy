@@ -155,6 +155,9 @@ const char * log_level_name(int level);
 // Parse log level name into integer
 bool log_level_by_name(strseg_t name, int *lev);
 
+//Dump a list of all running services as info: messages
+void log_running_services();
+
 #define log_error(args...) log_write(LOG_LEVEL_ERROR, args)
 #define log_warn(args...)  log_write(LOG_LEVEL_WARN,  args)
 #define log_info(args...)  log_write(LOG_LEVEL_INFO,  args)

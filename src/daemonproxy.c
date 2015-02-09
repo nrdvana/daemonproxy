@@ -29,6 +29,11 @@ int main(int argc, char** argv) {
 	service_t *svc;
 	wake_t wake_instance;
 	
+	log_init();
+	svc_init();
+	fd_init();
+	ctl_init();
+
 	memset(&wake_instance, 0, sizeof(wake_instance));
 	wake= &wake_instance;
 	
@@ -40,8 +45,6 @@ int main(int argc, char** argv) {
 	
 	umask(077);
 
-	log_init();
-	
 	// parse arguments, overriding default values
 	parse_opts(argv+1);
 	
@@ -49,8 +52,7 @@ int main(int argc, char** argv) {
 	if (!opt_interactive && !opt_config_file && !opt_socket_path)
 		fatal(EXIT_BAD_OPTIONS, "require -i or -c or -S");
 	
-	// Initialize file descriptor object pool and indexes
-	fd_init();
+	// Initialize file descriptor object pool
 	if (opt_fd_pool_count > 0 && opt_fd_pool_size_each > 0)
 		if (!fd_preallocate(opt_fd_pool_count, opt_fd_pool_size_each))
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate file descriptor objects");
@@ -63,14 +65,12 @@ int main(int argc, char** argv) {
 	// Set up signal handlers and signal mask and signal self-pipe
 	sig_init();
 	
-	// Initialize service object pool and indexes
-	svc_init();
+	// Initialize service object pool
 	if (opt_svc_pool_count > 0 && opt_svc_pool_size_each > 0)
 		if (!svc_preallocate(opt_svc_pool_count, opt_svc_pool_size_each))
 			fatal(EXIT_INVALID_ENVIRONMENT, "Unable to preallocate service objects");
 
 	// Initialize controller object pool
-	ctl_init();
 	control_socket_init();
 
 	if (opt_socket_path && !control_socket_start(STRSEG(opt_socket_path)))
@@ -165,6 +165,9 @@ int main(int argc, char** argv) {
 	
 	if (opt_exec_on_exit)
 		fatal(main_exitcode, "terminated normally");
+
+	log_info("daemonproxy exiting");
+	log_running_services();
 	return main_exitcode;
 }
 
@@ -208,14 +211,6 @@ void main_notify_controller_freed(controller_t *ctl) {
 		// treat this as an exit request
 		if (!opt_terminate_guard) {
 			log_info("interactive session ended");
-			service_t *svc= NULL;
-			while ((svc= svc_iter_next(svc, ""))) {
-				pid_t pid= svc_get_pid(svc);
-				int64_t reap_ts= svc_get_reap_ts(svc);
-				if (pid && !reap_ts) {
-					log_warn("service still running: %s\t%5d", svc_get_name(svc), (int)pid);
-				}
-			}
 			main_terminate= true;
 			wake->next= wake->now;
 		}
@@ -388,14 +383,19 @@ void fatal(int exitcode, const char *msg, ...) {
 		argv[i]= NULL; // required by spec
 		// exec child
 		sig_reset_for_exec();
+		log_warn("daemonproxy exec_on_exit to '%s'", argv[0]);
+		log_running_services();
 		execvp(argv[0], argv);
 		// If that failed... continue?  we might be screwed here.
 		sig_init();
 		log_error("Unable to exec \"%s\": %s", argv[0], strerror(errno));
 	}
-	
-	if (buffer[0])
+
+	if (msg && msg[0])
 		log_write(LOG_LEVEL_FATAL, "%s%s", opt_terminate_guard? "(attempting to continue) ":"", buffer);
-	if (!opt_terminate_guard)
+
+	if (!opt_terminate_guard) {
+		log_running_services();
 		exit(exitcode);
+	}
 }

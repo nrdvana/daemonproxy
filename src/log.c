@@ -121,6 +121,18 @@ bool log_write(int level, const char *msg, ...) {
 	return true;
 }
 
+
+void log_running_services() {
+	service_t *svc= NULL;
+	while ((svc= svc_iter_next(svc, ""))) {
+		pid_t pid= svc_get_pid(svc);
+		int64_t reap_ts= svc_get_reap_ts(svc);
+		if (pid && !reap_ts) {
+			log_warn("service '%s' running as pid %d", svc_get_name(svc), (int) pid);
+		}
+	}
+}
+
 void log_set_filter(int value) {
 	log_filter= (value > LOG_LEVEL_FATAL)? LOG_LEVEL_FATAL
 		: (value < LOG_FILTER_NONE)? LOG_FILTER_NONE
