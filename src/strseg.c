@@ -134,7 +134,6 @@ bool strseg_parse_size(strseg_t *string, int64_t *val) {
 }
 
 bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_storage *a_out, int *len_out) {
-	strseg_t addr;
 	int64_t port_int;
 	char name_buf[255];
 	
@@ -153,6 +152,8 @@ bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_st
 		// Save result to caller's variable
 		if (a_out) memcpy(a_out, &a, sizeof(a));
 		if (len_out) *len_out= sizeof(a);
+		string->data+= string->len;
+		string->len= 0;
 		return true;
 	}
 	else if (addr_family == AF_INET) {
@@ -160,23 +161,36 @@ bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_st
 		memset(&a, 0, sizeof(a));
 		a.sin_family= AF_INET;
 		
-		// Check for addr:port notation
-		addr= STRSEG("");
-		if (strseg_tok_next(string, ':', &addr) && string->len) {
+		if (string->len <= 0) return false;
+		// '*' means INADDR_ANY
+		if (string->data[0] == '*') {
+			a.sin_addr.s_addr= INADDR_ANY;
+			string->data++;
+			string->len--;
+		}
+		else {
+			const char *p, *lim;
+			for (p= string->data, lim= p + string->len; p < lim; p++) {
+				if (*p != '.' && (*p < '0' || *p > '9')) break;
+			}
+			int n= p - string->data;
+			if (n <= 0 || n >= sizeof(name_buf))
+				return false;
+			memcpy(name_buf, string->data, n);
+			name_buf[n]= '\0';
+			if (inet_pton(addr_family, name_buf, &a.sin_addr) <= 0)
+				return false;
+			string->data+= n;
+			string->len-= n;
+		}
+		// Check for :port notation
+		if (string->len > 0 && string->data[0] == ':') {
+			string->len--;
+			string->data++;
 			if (!strseg_atoi(string, &port_int))
 				return false;
 			a.sin_port= htons((short) port_int);
 		}
-		
-		// Convert address
-		if (addr.len <= 0 || addr.len >= sizeof(name_buf))
-			return false;
-		memcpy(name_buf, addr.data, addr.len);
-		name_buf[addr.len]= '\0';
-		if (inet_pton(addr_family, name_buf, &a.sin_addr) <= 0)
-			// TODO: handle host names
-			return false;
-		
 		// Save result to caller's variable
 		if (a_out) memcpy(a_out, &a, sizeof(a));
 		if (len_out) *len_out= sizeof(a);
@@ -186,8 +200,7 @@ bool strseg_parse_sockaddr(strseg_t *string, int addr_family, struct sockaddr_st
 	// TODO: correctly parse IPV6 addrs in the following formats:
 	//   nn:nn::nn
 	//   [nn:nn::nn]:port
-	//   hostname
-	//   hostname:port
+	//   *:port
 	else if (addr_family == AF_INET6) {
 		struct sockaddr_in6 a;
 		memset(&a, 0, sizeof(a));

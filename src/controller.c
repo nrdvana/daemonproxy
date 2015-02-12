@@ -1048,7 +1048,8 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 	
 	if (ctl_get_arg(ctl, &addrspec)) {
 		flags.bind= true;
-		if (!strseg_parse_sockaddr(&addrspec, sock_domain, &addr, &addrlen)) {
+		opt= addrspec;
+		if (!strseg_parse_sockaddr(&opt, sock_domain, &addr, &addrlen) || opt.len) {
 			ctl->command_error= "invalid address";
 			return false;
 		}

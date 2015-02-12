@@ -59,8 +59,8 @@ subtest tcp => sub {
 	$dp->recv_ok( qr/^fd.state\tfd2\tsocket\tinet,stream\t?$/m, 'socket created' );
 	
 	$dp->send('fd.socket', 'fd2', 'tcp,listen=11', '*:11203');
-	$dp->recv_ok( qr/^fd.state\tfd2\tsocket\tinet,stream,bind,listen=11\t*:11203$/m, 'socket bound to port 11203' )
-		or die;
+	$dp->recv_ok( qr/^fd.state\tfd2\tsocket\tinet,stream,bind,listen=11\t\*:11203$/m, 'socket bound to port 11203' );
+		#or die;
 	
 	my $script= '
 	$|=1;
@@ -79,12 +79,13 @@ subtest tcp => sub {
 	my $dest_addr= Socket::sockaddr_in(11203, Socket::inet_aton('127.0.0.1'));
 	ok( connect($sock, $dest_addr), 'connect succeeded' )
 		or diag("connect: $!");
+	local $SIG{PIPE}= sub {};
 	send($sock, "data", 0)
 		or diag("send: $!");
 	
 	$dp->recv_ok( qr/^service.state\ttest_tcp.*exit\t0/m, 'test script accepted connection and received data' );
 	
-	$dp->send('fd.socket', 'fd2b', 'tcp', '*.11203');
+	$dp->send('fd.socket', 'fd2b', 'tcp', '*:11203');
 	$dp->recv_ok( qr/^error\t.*bind/m, 'can\'t bind second socket to same port' );
 };
 
@@ -93,13 +94,13 @@ subtest udp => sub {
 	$dp->recv_ok( qr/^fd.state\tfd3\tsocket\tinet,dgram\t?$/m, 'socket created' );
 	
 	$dp->send('fd.socket', 'fd3', 'udp', '*:10203');
-	$dp->recv_ok( qr/^fd.state\tfd3\tsocket\tinet,dgram,bind\t*:10203$/m, 'socket bound to port 10203' )
+	$dp->recv_ok( qr/^fd.state\tfd3\tsocket\tinet,dgram,bind\t\*:10203$/m, 'socket bound to port 10203' )
 		or die;
 	
 	my $script= '
 	$|=1;
 	use strict; use warnings; use Socket;
-	recv($sock, my $buf, 999, 0);
+	recv(STDIN, my $buf, 999, 0) or die "recv: $!";
 	exit($buf eq "data"? 0 : 1);
 	';
 	$script =~ s/[\t\n+]/ /g;
