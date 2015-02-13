@@ -13,6 +13,20 @@ controller_t *interactive_controller;
 wake_t   main_wake; // global used for tracking things that should wake the main loop
 wake_t  *wake= &main_wake; // this is exported to other modules
 
+void wake_on_fd(int fd, bool read, bool write) {
+	if (read)
+		FD_SET(fd, &wake->fd_read);
+	if (write)
+		FD_SET(fd, &wake->fd_write);
+	if (fd > wake->max_fd)
+		wake->max_fd= fd;
+}
+
+void wake_by_time(int64_t ts) {
+	if (wake->next - ts > 0)
+		wake->next= ts;
+}
+
 const char * copyright=
 	"Copyright (C) 2014-2015  Michael Conrad";
 const char * license=

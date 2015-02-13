@@ -72,6 +72,9 @@ typedef struct wake_s {
 } wake_t;
 
 extern wake_t *wake;
+void wake_on_fd(int fd, bool read, bool write);
+void wake_by_time(int64_t ts);
+
 extern bool    main_terminate;
 extern int     main_exitcode;
 
