@@ -384,9 +384,6 @@ fd_t * fd_iter_next(fd_t *current, const char *from_name);
 // Initialize signal-related things
 void sig_init();
 
-// Enable or disable receipt of signals
-void sig_enable(bool enable);
-
 // Reset signal handling after fork() before exec()
 void sig_reset_for_exec();
 

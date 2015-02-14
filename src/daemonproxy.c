@@ -127,9 +127,7 @@ int main(int argc, char** argv) {
 		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
 		wake->max_fd= -1;
 		
-		sig_enable(false);
-		
-		// report signals and set read-wake on signal fd
+		// collect new signals since last iteration and set read-wake on signal fd
 		sig_run(wake);
 		
 		// reap all zombies, possibly waking services
@@ -153,8 +151,6 @@ int main(int argc, char** argv) {
 		ctl_run(wake);
 		
 		log_run();
-		
-		sig_enable(true);
 		
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)

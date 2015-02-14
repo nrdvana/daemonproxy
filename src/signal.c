@@ -10,7 +10,7 @@
 pid_t sig_main_pid= 0;
 int sig_wake_rd= -1;
 int sig_wake_wr= -1;
-volatile int signal_error= 0;
+sigset_t sig_mask_orig;
 
 typedef struct sig_status_s {
 	int signum;
@@ -19,12 +19,32 @@ typedef struct sig_status_s {
 } sig_status_t;
 
 #define SIGNAL_STATUS_SLOTS 16
-volatile sig_status_t signals[SIGNAL_STATUS_SLOTS];
-volatile int signals_count= 0;
-static sigset_t sig_mask;
+sig_status_t signals[SIGNAL_STATUS_SLOTS];
+
+volatile sig_status_t new_signals[SIGNAL_STATUS_SLOTS];
+volatile int signal_error= 0;
+
+static void record_signal(sig_status_t *sigarray, int element_count, int sig, int64_t ts, int count);
+static void merge_new_signals();
+
+void record_signal(sig_status_t *signals, int slots, int sig, int64_t ts, int count) {
+	int i;
+	for (i= 0; i < slots-1 && signals[i].signum != 0; i++)
+		if (signals[i].signum == sig)
+			break;
+	// claim slot, or overwrite last slot if none are free
+	if (signals[i].signum == sig) {
+		signals[i].last_received_ts= ts;
+		signals[i].number_pending++;
+	}
+	else {
+		signals[i].signum= sig;
+		signals[i].last_received_ts= ts;
+		signals[i].number_pending= 1;
+	}
+}
 
 void sig_handler(int sig) {
-	int i;
 	static int64_t prev= 0;
 	int64_t now= gettime_mon_frac();
 	
@@ -35,29 +55,26 @@ void sig_handler(int sig) {
 		kill(getpid(), sig);
 	}
 
-	if (sig != SIGCHLD) {
-		// We have a requirement that no two signals share a timestamp.
-		if (now == prev) now++;
-		// We also use '0' as a NULL value, so avoid it
-		if (!now) now++;
-		prev= now;
-		// See if we have a slot for this signal already
-		for (i= 0; i < signals_count; i++)
-			if (signals[i].signum == sig)
-				break;
-		// Not seen before? allocate next signal slot
-		if (i == signals_count) {
-			if (signals_count < SIGNAL_STATUS_SLOTS)
-				signals_count++;
-			else // none free? fail by re-using final slot
-				signals[--i].number_pending= 0;
-			signals[i].signum= sig;
-		}
-		// Record the receipt of the signal in the slot
-		signals[i].number_pending++;
-		signals[i].last_received_ts= now;
+	// We have a requirement that no two signals share a timestamp.
+	if (now == prev) now++;
+	// We also use '0' as a NULL value, so avoid it
+	if (!now) now++;
+
+	record_signal((sig_status_t*)new_signals, sizeof(new_signals)/sizeof(*new_signals), sig, now, 1);
+	prev= now;
+
+	// put character in pipe to wake main loop
+	if (write(sig_wake_wr, "", 1) != 1)
+		signal_error= errno;
+}
+
+void sig_handler_wake_only(int sig) {
+	// Make absolutely sure a forked child never runs the parent's
+	// signal handler
+	if (getpid() != sig_main_pid) {
+		sig_reset_for_exec();
+		kill(getpid(), sig);
 	}
-	
 	// put character in pipe to wake main loop
 	if (write(sig_wake_wr, "", 1) != 1)
 		signal_error= errno;
@@ -89,8 +106,9 @@ struct signal_spec_s {
 	{ SIGUSR1, sig_handler },
 	{ SIGUSR2, sig_handler },
 	{ SIGQUIT, sig_handler },
-	{ SIGCHLD, sig_handler },
-	{ SIGPIPE, SIG_IGN },
+	{ SIGCHLD, sig_handler_wake_only },
+	{ SIGALRM, sig_handler_wake_only },
+	{ SIGPIPE, sig_handler_wake_only },
 	{ SIGABRT, fatal_sig_handler },
 	{ SIGFPE,  fatal_sig_handler },
 	{ SIGILL,  fatal_sig_handler },
@@ -138,19 +156,7 @@ void sig_init() {
 	}
 	
 	// capture our signal mask
-	if (!sigprocmask(SIG_SETMASK, NULL, &sig_mask) == 0)
-		perror("sigprocmask(all)");
-}
-
-void sig_enable(bool enable) {
-	sigset_t mask;
-	
-	if (enable)
-		mask= sig_mask;
-	else
-		sigfillset(&mask);
-	
-	if (sigprocmask(SIG_SETMASK, &mask, NULL) != 0)
+	if (!sigprocmask(SIG_SETMASK, NULL, &sig_mask_orig) == 0)
 		perror("sigprocmask(all)");
 }
 
@@ -194,6 +200,33 @@ void sig_run() {
 	FD_SET(sig_wake_rd, &wake->fd_read);
 	if (sig_wake_rd > wake->max_fd)
 		wake->max_fd= sig_wake_rd;
+	
+	// Capture all new signals
+	merge_new_signals();
+}
+
+void merge_new_signals() {
+	int i;
+	sigset_t mask;
+	
+	// Block all signals, briefly
+	sigfillset(&mask);
+	if (sigprocmask(SIG_SETMASK, &mask, &mask) != 0)
+		log_error("sigprocmask: %m");
+
+	// Add any new signals to the known signals
+	for (i= 0; i < sizeof(new_signals)/sizeof(*new_signals); i++) {
+		if (!new_signals[i].number_pending)
+			break;
+		record_signal(signals, sizeof(signals)/sizeof(*signals),
+			new_signals[i].signum, new_signals[i].last_received_ts, new_signals[i].number_pending);
+	}
+	// Clean slate
+	memset(&new_signals, 0, sizeof(new_signals));
+
+	//restore normal signal mask
+	if (sigprocmask(SIG_SETMASK, &mask, &mask) != 0)
+		log_error("sigprocmask: %m");
 }
 
 /** Get the next event (in chronological order) from the specified timestamp.
@@ -208,7 +241,7 @@ void sig_run() {
 bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *count_out) {
 	int i, oldest;
 	// first, find oldest with nonzero count
-	for (i= 0, oldest= -1; i < signals_count; i++) {
+	for (i= 0, oldest= -1; i < sizeof(signals)/sizeof(*signals); i++) {
 		if (signals[i].number_pending > 0
 			&& (since_ts == 0 || signals[i].last_received_ts - since_ts > 0)
 			&& (oldest < 0 || signals[oldest].last_received_ts - signals[i].last_received_ts > 0)
@@ -228,7 +261,7 @@ bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *co
  */
 void sig_mark_seen(int signum, int count) {
 	int i;
-	for (i= 0; i < signals_count; i++) {
+	for (i= 0; i < sizeof(signals)/sizeof(*signals); i++) {
 		if (signals[i].signum == signum) {
 			signals[i].number_pending-= count;
 			if (signals[i].number_pending < 0)
