@@ -46,6 +46,7 @@ subtest unix => sub {
 	ok( connect($sock, Socket::sockaddr_un("$tempdir/test2.sock")), 'connect succeeded' )
 		or diag("connect: $!");
 	send($sock, "data", 0);
+	close($sock);
 	
 	$dp->recv_ok( qr/^service.state\ttest_unix.*exit\t0/m, 'test script accepted connection and received data' );
 	
@@ -87,14 +88,20 @@ subtest tcp => sub {
 	
 	$dp->send('fd.socket', 'fd2b', 'tcp', '*:11203');
 	$dp->recv_ok( qr/^error\t.*bind/m, 'can\'t bind second socket to same port' );
+	
+	$dp->send('fd.delete', 'fd2');
+	$dp->recv_ok( qr/^fd.state\tfd2\tdeleted$/m, 'fd2 gone' );
+	
+	$dp->send('fd.socket', 'fd2b', 'tcp', '*:11203');
+	$dp->recv_ok( qr/^fd.state\tfd2b\tsocket\tinet,stream,bind\t\*:11203$/m, 'can bind now that its free' );
 };
 
 subtest udp => sub {
 	$dp->send('fd.socket', 'fd3', 'udp');
 	$dp->recv_ok( qr/^fd.state\tfd3\tsocket\tinet,dgram\t?$/m, 'socket created' );
 	
-	$dp->send('fd.socket', 'fd3', 'udp', '*:10203');
-	$dp->recv_ok( qr/^fd.state\tfd3\tsocket\tinet,dgram,bind\t\*:10203$/m, 'socket bound to port 10203' )
+	$dp->send('fd.socket', 'fd3', 'udp', '127.0.0.1:10203');
+	$dp->recv_ok( qr/^fd.state\tfd3\tsocket\tinet,dgram,bind\t127.0.0.1:10203$/m, 'socket bound to port 10203' )
 		or die;
 	
 	my $script= '
@@ -116,8 +123,7 @@ subtest udp => sub {
 	
 	$dp->recv_ok( qr/^service.state\ttest_udp.*exit\t0/m, 'test script received datagram' );
 	
-	$dp->send('fd.socket', 'fd3b', 'udp', '*:10203');
-	$dp->recv_ok( qr/^error\t.*bind/m, 'can\'t bind second socket to same port' );
+	$dp->send('fd.delete', 'fd3');
 };
 
 $dp->terminate_ok;

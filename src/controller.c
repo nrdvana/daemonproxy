@@ -1068,7 +1068,9 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 		// we don't check success on this.  we just let open() fail and check that.
 		create_missing_dirs(((struct sockaddr_un*)&addr)->sun_path);
 
+	int i_true= 1;
 	const char *failed= ((f= socket(sock_domain, sock_type, sock_proto)) < 0)? "socket"
+		: (flags.bind && setsockopt(f, SOL_SOCKET, SO_REUSEADDR, &i_true, sizeof(i_true)) < 0)? "setsockopt"
 		: (flags.bind && bind(f, (struct sockaddr*) &addr, addrlen) < 0)? "bind"
 		: (flags.listen && listen(f, flags.listen) < 0)? "listen"
 		: (flags.nonblock && fcntl(f, F_SETFL, O_NONBLOCK) < 0)? "fcntl(O_NONBLOCK)"
