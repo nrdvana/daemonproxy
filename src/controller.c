@@ -9,15 +9,22 @@
 struct controller_s;
 typedef bool ctl_state_fn_t(struct controller_s *);
 
+// One for current (possibly partial) message, and one for a possible
+// following message while we look for the end of the first message.
+#define CONTROLLER_RECV_MAX_ANCILLARY_FD 2
+
 struct controller_s {
 	ctl_state_fn_t *state_fn;
 	int id;
 	
 	int  recv_fd;
+	bool recv_is_socket;
 	bool append_final_newline;
 	char recv_buf[CONTROLLER_RECV_BUF_SIZE];
 	int  recv_buf_pos;
 	bool recv_overflow;
+	int  recv_ancillary_fd[CONTROLLER_RECV_MAX_ANCILLARY_FD];
+	int  recv_ancillary_fd_count;
 	
 	int  send_fd;
 	char send_buf[CONTROLLER_SEND_BUF_SIZE];
@@ -34,9 +41,9 @@ struct controller_s {
 	const char *command_error; // error message set by commands
 	char     command_error_buf[64];// buffer in case we want to write a custom error msg
 	
-	int     command_substate;
-	char    statedump_current[NAME_BUF_SIZE];
-	int64_t statedump_ts;
+	int     command_substate;  // generic state machine variable for long-running commands
+	char    statedump_current[NAME_BUF_SIZE]; // state for the statedump command
+	int64_t statedump_ts;      // state for the statedump command
 };
 
 controller_t client[CONTROLLER_MAX_CLIENTS];
@@ -88,6 +95,7 @@ COMMAND(ctl_cmd_terminate,           "terminate");
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
 static bool ctl_out_buf_ready(controller_t *ctl);
+static void ctl_read_ancillary_fds(controller_t *ctl, struct msghdr *msg);
 
 //
 // These "get_arg" functions are convenience for the command implementations,
@@ -168,7 +176,7 @@ controller_t *ctl_new(int recv_fd, int send_fd) {
 
 /* Allocate the next unused controller from the static pool.
  *
- * Returns false if there are no free objects int he pool.
+ * Returns false if there are no free objects in the pool.
  */
 controller_t *ctl_alloc() {
 	int i;
@@ -187,23 +195,31 @@ controller_t *ctl_alloc() {
 /* Constructor (not including alloc)
  *
  * Initialize and bind a controller object to a pair of in/out handles.
+ * The object should be freshly wiped by ctl_alloc, with only the id and
+ * state_fn assigned.
  */
 bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
+	bool is_socket= false;
+	int i;
 	log_debug("creating client %d with handles %d,%d", ctl->id, recv_fd, send_fd);
 	// file descriptors must be nonblocking
-	if (recv_fd != -1)
-		if (fcntl(recv_fd, F_SETFL, O_NONBLOCK)) {
+	if (recv_fd != -1) {
+		socklen_t len= sizeof(i);
+		is_socket= (0 == getsockopt(recv_fd, SOL_SOCKET, SO_TYPE, &i, &len));
+		if ((i= fcntl(recv_fd, F_GETFL)) < 0 || fcntl(recv_fd, F_SETFL, i|O_NONBLOCK) < 0) {
 			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
+	}
 	if (send_fd != -1 && send_fd != recv_fd)
-		if (fcntl(send_fd, F_SETFL, O_NONBLOCK)) {
+		if ((i= fcntl(recv_fd, F_GETFL)) < 0 || fcntl(send_fd, F_SETFL, i|O_NONBLOCK) < 0) {
 			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
 	// initialize object
 	ctl->state_fn= &ctl_state_next_command;
 	ctl->recv_fd= recv_fd;
+	ctl->recv_is_socket= is_socket;
 	ctl->send_fd= send_fd;
 	ctl->write_timeout_reset= CONTROLLER_WRITE_TIMEOUT>>1;
 	ctl->write_timeout_close= CONTROLLER_WRITE_TIMEOUT;
@@ -220,6 +236,11 @@ void ctl_dtor(controller_t *ctl) {
 		close(ctl->recv_fd);
 	if (ctl->send_fd >= 0 && ctl->send_fd != ctl->recv_fd)
 		close(ctl->send_fd);
+	int i;
+	for (i= 0; i < ctl->recv_ancillary_fd_count; i++) {
+		log_warn("closing leftover ancillary file descriptor %d", ctl->recv_ancillary_fd[i]);
+		close(ctl->recv_ancillary_fd[i]);
+	}
 	ctl->state_fn= ctl_state_free;
 }
 
@@ -1829,7 +1850,25 @@ bool ctl_read_more(controller_t *ctl) {
 	int n, e;
 	if (ctl->recv_fd < 0 || ctl->recv_buf_pos >= CONTROLLER_RECV_BUF_SIZE)
 		return false;
-	n= read(ctl->recv_fd, ctl->recv_buf + ctl->recv_buf_pos, CONTROLLER_RECV_BUF_SIZE - ctl->recv_buf_pos);
+	if (ctl->recv_is_socket) {
+		char control_buf[64];
+		struct msghdr msg;
+		struct iovec  iov;
+		memset(&msg, 0, sizeof(msg));
+		memset(&iov, 0, sizeof(iov));
+		iov.iov_base= ctl->recv_buf + ctl->recv_buf_pos;
+		iov.iov_len=  CONTROLLER_RECV_BUF_SIZE - ctl->recv_buf_pos;
+		msg.msg_iov= &iov;
+		msg.msg_iovlen= 1;
+		msg.msg_control= control_buf;
+		msg.msg_controllen= sizeof(control_buf);
+		n= recvmsg(ctl->recv_fd, &msg, 0);
+		if (msg.msg_controllen > 0)
+			ctl_read_ancillary_fds(ctl, &msg);
+	}
+	else {
+		n= read(ctl->recv_fd, ctl->recv_buf + ctl->recv_buf_pos, CONTROLLER_RECV_BUF_SIZE - ctl->recv_buf_pos);
+	}
 	if (n <= 0) {
 		e= errno;
 		log_trace("controller[%d] input read failed: %d %s", ctl->id, n, strerror(e));
@@ -1846,6 +1885,30 @@ bool ctl_read_more(controller_t *ctl) {
 	ctl->recv_buf_pos += n;
 	log_trace("controller[%d] read %d bytes (%d in recv buf)", ctl->id, n, ctl->recv_buf_pos);
 	return true;
+}
+
+void ctl_read_ancillary_fds(controller_t *ctl, struct msghdr *msg) {
+	// Find any new FD which has been delivered to us
+	// We store at most 2 of them (one for the current message which might not be
+	// complete, and one for the next message which might deliver ancillary data
+	// as we get the remainder of the first message)
+	struct cmsghdr *cmsg;
+	for (cmsg= CMSG_FIRSTHDR(msg); cmsg; cmsg= CMSG_NXTHDR(msg, cmsg)) {
+		if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+			int i, fd, num_fd= (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+			for (i= 0; i < num_fd; i++) {
+				fd= ((int*) CMSG_DATA(cmsg))[i];
+				log_debug("Received ancillary file descriptor %d", fd);
+				if (ctl->recv_ancillary_fd_count < CONTROLLER_RECV_MAX_ANCILLARY_FD)
+					ctl->recv_ancillary_fd[ctl->recv_ancillary_fd_count++]= fd;
+				else {
+					// Close any FD we don't have room for
+					log_error("No room for ancillary file descriptor %d", fd);
+					close(fd);
+				}
+			}
+		}
+	}
 }
 
 // Try to write data to a controller, nonblocking.
