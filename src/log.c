@@ -65,9 +65,6 @@ static bool log_fd_attach() {
 	if (log_fd < 0)
 		return false;
 	
-	if (fcntl(log_fd, F_SETFL, O_NONBLOCK))
-		log_error("unable to set log fd to nonblocking mode!  logging might block daemonproxy!");
-
 	if (log_buf_pos > 0)
 		FD_SET(log_fd, &wake->fd_write);
 	else
@@ -151,9 +148,25 @@ void log_run() {
 
 static bool log_flush() {
 	int n;
+	struct itimerval t;
+	// If we failed to write to the log once, don't try again until the
+	//  main loop calls log_run.
+	if (log_fd < 0 || FD_ISSET(log_fd, &wake->fd_write))
+		return false;
 	
 	while (log_buf_pos > 0) {
+		// Use timer+signal to break hung write()s.  Not good to set to nonblocking
+		//  mode because it might be the terminal, and can't do nonblocking if it's
+		//  an actual file, anyway.
+		memset(&t, 0, sizeof(t));
+		t.it_value.tv_usec= 100000;
+		setitimer(ITIMER_REAL, &t, NULL);
+		
 		n= write(log_fd, log_buffer, log_buf_pos);
+		
+		memset(&t, 0, sizeof(t));
+		setitimer(ITIMER_REAL, &t, NULL);
+		
 		if (n < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
 				FD_SET(log_fd, &wake->fd_write);
