@@ -82,6 +82,7 @@ COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_socket,           "fd.socket");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
+COMMAND(ctl_cmd_fd_xfer,             "fd.xfer");
 COMMAND(ctl_cmd_chdir,               "chdir");
 COMMAND(ctl_cmd_exit,                "exit");
 COMMAND(ctl_cmd_log_filter,          "log.filter");
@@ -1109,6 +1110,58 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 	fd= fd_new_file(fdname, f, flags, addrspec);
 	if (!fd) {
 		close(f);
+		ctl->command_error= "Unable to allocate new file descriptor object";
+		return false;
+	}
+
+	ctl_notify_fd_state(NULL, fd);
+	return true;
+}
+
+bool ctl_cmd_fd_xfer(controller_t *ctl) {
+	fd_t *fd;
+	int new_fd, i, fl;
+	fd_flags_t flags;
+	strseg_t fdname;
+
+	if (ctl->recv_ancillary_fd_count <= 0) {
+		ctl->command_error= "No ancillary file descriptor received";
+		return false;
+	}
+
+	// TODO: should redesign controller ancillary mechanism to auto-discard
+	//  leftover FDs after the message they came with is gone.
+	new_fd= ctl->recv_ancillary_fd[0];
+	--ctl->recv_ancillary_fd_count;
+	for (i= 0; i < ctl->recv_ancillary_fd_count; i++)
+		ctl->recv_ancillary_fd[i]= ctl->recv_ancillary_fd[i+1];
+
+	if (!ctl_get_arg_fd(ctl, false, true, &fdname, NULL)) {
+		close(new_fd);
+		return false;
+	}
+
+	memset(&flags, 0, sizeof(flags));
+	if ((fl= fcntl(new_fd, F_GETFD)) < 0                // get CLOEXEC + unknown others
+		|| fcntl(new_fd, F_SETFD, fl & ~FD_CLOEXEC) < 0 // clear CLOEXEC
+		|| (fl= fcntl(new_fd, F_GETFL)) < 0             // get the fl flags
+	) {
+		close(new_fd);
+		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+			"fcntl failed: %s", strerror(errno));
+		ctl->command_error= ctl->command_error_buf;
+		return false;
+	}
+	flags.read=     ((fl & O_WRONLY) == O_WRONLY)? 0 : 1;
+	flags.write=    ((fl & O_WRONLY) == O_WRONLY || (fl & O_RDWR) == O_RDWR)? 1 : 0;
+	flags.nonblock= (fl & O_NONBLOCK);
+	flags.append=   (fl & O_APPEND);
+	flags.create=   (fl & O_CREAT);
+	flags.trunc=    (fl & O_TRUNC);
+
+	fd= fd_new_file(fdname, new_fd, flags, STRSEG("<from controller>"));
+	if (!fd) {
+		close(new_fd);
 		ctl->command_error= "Unable to allocate new file descriptor object";
 		return false;
 	}
