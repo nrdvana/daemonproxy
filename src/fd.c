@@ -280,7 +280,6 @@ fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path) {
 	// it worked, so delete the old one, if any
 	if (old) fd_delete(old);
 	
-	f->flags= flags;
 	f->fd= fdnum;
 	f->flags= flags;
 	// copy as much of path into the buffer as we can.
@@ -288,6 +287,13 @@ fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path) {
 	f->attr.file.path= append_elipses(f->buffer + name.len + 1, buf_free, path);
 	
 	return f;
+}
+
+fd_t * fd_new_unknown(strseg_t name, int fdnum) {
+	fd_flags_t flags;
+	memset(&flags, 0, sizeof(flags));
+	fd_load_flags(&flags, fdnum);
+	return fd_new_file(name, fdnum, flags, STRSEG("unknown"));
 }
 
 const char* append_elipses(char *buffer, int bufsize, strseg_t source) {
@@ -340,4 +346,31 @@ fd_t * fd_iter_next(fd_t *current, const char *from_name) {
 			node= RBTreeNode_GetNext(s.Nearest);
 	}
 	return node? (fd_t *) node->Object : NULL;
+}
+
+// Use syscalls to introspect a file handle, and store the discovered information in flags
+void fd_load_flags(fd_flags_t *flags, int fh) {
+	int fl= fcntl(fh, F_GETFL); // get the fl flags
+	if (fl >= 0) {
+		flags->read=     ((fl & O_WRONLY) == O_WRONLY)? 0 : 1;
+		flags->write=    ((fl & O_WRONLY) == O_WRONLY || (fl & O_RDWR) == O_RDWR)? 1 : 0;
+		flags->nonblock= (fl & O_NONBLOCK);
+		flags->append=   (fl & O_APPEND);
+		flags->create=   (fl & O_CREAT);
+		flags->trunc=    (fl & O_TRUNC);
+	}
+	int i;
+	socklen_t len= sizeof(i);
+	if (0 == getsockopt(fh, SOL_SOCKET, SO_TYPE, &i, &len)) {
+		struct sockaddr_storage addr;
+		flags->socket= true;
+		if (i == SOCK_DGRAM) flags->sock_dgram= true;
+		else if (i == SOCK_SEQPACKET) flags->sock_seq= true;
+		
+		len= sizeof(addr);
+		if (getsockname(fh, (struct sockaddr*) &addr, &len) == 0) {
+			if (addr.ss_family == AF_INET) flags->sock_inet= true;
+			else if (addr.ss_family == AF_INET6) flags->sock_inet6= true;
+		}
+	}
 }

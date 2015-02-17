@@ -1121,7 +1121,6 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 bool ctl_cmd_fd_xfer(controller_t *ctl) {
 	fd_t *fd;
 	int new_fd, i, fl;
-	fd_flags_t flags;
 	strseg_t fdname;
 
 	if (ctl->recv_ancillary_fd_count <= 0) {
@@ -1141,25 +1140,18 @@ bool ctl_cmd_fd_xfer(controller_t *ctl) {
 		return false;
 	}
 
-	memset(&flags, 0, sizeof(flags));
+	// turn off CLOEXEC flag
 	if ((fl= fcntl(new_fd, F_GETFD)) < 0                // get CLOEXEC + unknown others
 		|| fcntl(new_fd, F_SETFD, fl & ~FD_CLOEXEC) < 0 // clear CLOEXEC
-		|| (fl= fcntl(new_fd, F_GETFL)) < 0             // get the fl flags
 	) {
-		close(new_fd);
 		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
 			"fcntl failed: %s", strerror(errno));
 		ctl->command_error= ctl->command_error_buf;
+		close(new_fd);
 		return false;
 	}
-	flags.read=     ((fl & O_WRONLY) == O_WRONLY)? 0 : 1;
-	flags.write=    ((fl & O_WRONLY) == O_WRONLY || (fl & O_RDWR) == O_RDWR)? 1 : 0;
-	flags.nonblock= (fl & O_NONBLOCK);
-	flags.append=   (fl & O_APPEND);
-	flags.create=   (fl & O_CREAT);
-	flags.trunc=    (fl & O_TRUNC);
 
-	fd= fd_new_file(fdname, new_fd, flags, STRSEG("<from controller>"));
+	fd= fd_new_unknown(fdname, new_fd);
 	if (!fd) {
 		close(new_fd);
 		ctl->command_error= "Unable to allocate new file descriptor object";

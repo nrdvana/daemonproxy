@@ -338,6 +338,9 @@ typedef struct fd_flags_s {
 	uint16_t listen;
 } fd_flags_t;
 
+// Use syscalls to introspect a file handle, and store the discovered information in flags
+void fd_load_flags(fd_flags_t *flags, int fh);
+
 void fd_init();
 
 // Initialize the fd pool from a static chunk of memory
@@ -362,6 +365,9 @@ fd_t * fd_new_pipe(strseg_t name1, int fd1, strseg_t name2, int fd2, fd_flags_t 
 
 // Open a file on the given name, possibly closing a handle by that name
 fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path);
+
+// Add an entry for an existing file descriptor which we don't know the details of
+fd_t * fd_new_unknown(strseg_t name, int fdnum);
 
 // Close and free a FD object
 void fd_delete(fd_t *fd);
