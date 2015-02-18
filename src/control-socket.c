@@ -98,7 +98,7 @@ bool control_socket_start(strseg_t path) {
 		log_error("bind(control_socket, %s: %s", control_socket_addr.sun_path, strerror(errno));
 	else if (listen(control_socket, 2) < 0)
 		log_error("listen(control_socket): %s", strerror(errno));
-	else if (fcntl(control_socket, F_SETFL, O_NONBLOCK) < 0)
+	else if (!fd_set_nonblock(control_socket))
 		log_error("fcntl(control_socket, O_NONBLOCK): %s", strerror(errno));
 	else {
 		FD_SET(control_socket, &wake->fd_read);

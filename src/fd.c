@@ -210,6 +210,12 @@ fd_t * fd_get_pipe_peer(fd_t *fd) {
 	return fd->flags.pipe? fd->attr.pipe.peer : NULL;
 }
 
+bool fd_set_nonblock(int fdnum) {
+	int i;
+	return (i= fcntl(fdnum, F_GETFL)) >= 0
+		&& fcntl(fdnum, F_SETFL, i|O_NONBLOCK) >= 0;
+}
+
 // Open a pipe from one named FD to another
 // returns a ref to the read end, which holds a ref to the write end.
 fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2, fd_flags_t *flags) {
@@ -220,18 +226,6 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2, fd_flags_
 	// Fail if either name exists as a constant
 	if ((old1 && old1->flags.is_const) || (old2 && old2->flags.is_const))
 		return NULL;
-	
-	// Fail if nonblock requested and can't be granted
-	if (flags->nonblock) {
-		if (fcntl(num1, F_SETFL, O_NONBLOCK)) {
-			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
-			return NULL;
-		}
-		if (fcntl(num2, F_SETFL, O_NONBLOCK)) {
-			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
-			return NULL;
-		}
-	}
 	
 	// Allocate new FD objects
 	f1= fd_new(sizeof(fd_t) + name1.len + 1, name1);

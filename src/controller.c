@@ -207,13 +207,13 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	if (recv_fd != -1) {
 		socklen_t len= sizeof(i);
 		is_socket= (0 == getsockopt(recv_fd, SOL_SOCKET, SO_TYPE, &i, &len));
-		if ((i= fcntl(recv_fd, F_GETFL)) < 0 || fcntl(recv_fd, F_SETFL, i|O_NONBLOCK) < 0) {
+		if (!fd_set_nonblock(recv_fd)) {
 			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
 	}
 	if (send_fd != -1 && send_fd != recv_fd)
-		if ((i= fcntl(recv_fd, F_GETFL)) < 0 || fcntl(send_fd, F_SETFL, i|O_NONBLOCK) < 0) {
+		if (!fd_set_nonblock(send_fd)) {
 			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
@@ -851,6 +851,14 @@ bool ctl_cmd_fd_pipe(controller_t *ctl) {
 			return false;
 		}
 	}
+	if (flags.nonblock) {
+		if (!fd_set_nonblock(pair[0]) || !fd_set_nonblock(pair[1])) {
+			snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
+				"fcntl(O_NONBLOCK) failed: %s", strerror(errno));
+			ctl->command_error= ctl->command_error_buf;
+			return false;
+		}
+	}
 	
 	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1], &flags);
 	if (!fd) {
@@ -1095,7 +1103,7 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 		: (flags.bind && setsockopt(f, SOL_SOCKET, SO_REUSEADDR, &i_true, sizeof(i_true)) < 0)? "setsockopt"
 		: (flags.bind && bind(f, (struct sockaddr*) &addr, addrlen) < 0)? "bind"
 		: (flags.listen && listen(f, flags.listen) < 0)? "listen"
-		: (flags.nonblock && fcntl(f, F_SETFL, O_NONBLOCK) < 0)? "fcntl(O_NONBLOCK)"
+		: (flags.nonblock && !fd_set_nonblock(f))? "fcntl(O_NONBLOCK)"
 		: NULL;
 	
 	if (failed) {

@@ -341,6 +341,8 @@ typedef struct fd_flags_s {
 // Use syscalls to introspect a file handle, and store the discovered information in flags
 void fd_load_flags(fd_flags_t *flags, int fh);
 
+bool fd_set_nonblock(int fdnum);
+
 void fd_init();
 
 // Initialize the fd pool from a static chunk of memory

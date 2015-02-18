@@ -135,11 +135,11 @@ void sig_init() {
 	memset((void*)signals, 0, sizeof(signals));
 
 	// Create pipe and set non-blocking
-	if (pipe(pipe_fd)
-		|| fcntl(pipe_fd[0], F_SETFD, FD_CLOEXEC)
-		|| fcntl(pipe_fd[1], F_SETFD, FD_CLOEXEC)
-		|| fcntl(pipe_fd[0], F_SETFL, O_NONBLOCK)
-		|| fcntl(pipe_fd[1], F_SETFL, O_NONBLOCK)
+	if (pipe(pipe_fd) < 0
+		|| fcntl(pipe_fd[0], F_SETFD, FD_CLOEXEC) < 0
+		|| fcntl(pipe_fd[1], F_SETFD, FD_CLOEXEC) < 0
+		|| !fd_set_nonblock(pipe_fd[0])
+		|| !fd_set_nonblock(pipe_fd[1])
 	) {
 		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: %s", strerror(errno));
 	}
