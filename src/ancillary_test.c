@@ -18,7 +18,8 @@ int main() {
 		close(fd[1]);
 		receiver(fd[0]);
 		wait(&wstat);
-		if (wstat) { fprintf(stderr, "child exitied %d\n", wstat); abort(); }
+		fprintf(stderr, "child exited %d\n", wstat);
+		if (wstat) { abort(); }
 	}
 	else {
 		close(fd[0]);
@@ -27,6 +28,7 @@ int main() {
 	return 0;
 }
 
+// Send some messages and then exit.
 void sender(int fd) {
 	char str[]= "0123456789012345678901234567890123456789";
 	struct msghdr msg;
@@ -37,6 +39,7 @@ void sender(int fd) {
 	int n;
 	if (pipe(new_fds) || pipe(new_fds+2)) { perror("pipe"); abort(); }
 
+	// Send 20 bytes with no ancillary data
 	n= send(fd, str, 20, 0);
 	fprintf(stderr, "send: %d (%m)\n", n);
 
@@ -52,6 +55,7 @@ void sender(int fd) {
 	cmsg->cmsg_level= SOL_SOCKET;
 	cmsg->cmsg_type=  SCM_RIGHTS;
 
+	// Send 7 bytes with 2 ancillary file descriptors
 	msg.msg_controllen= cmsg->cmsg_len= CMSG_LEN(sizeof(int)*2);
 	((int*) CMSG_DATA(cmsg))[0]= new_fds[0];
 	((int*) CMSG_DATA(cmsg))[1]= new_fds[1];
@@ -59,14 +63,17 @@ void sender(int fd) {
 	fprintf(stderr, "sendmsg: %d (%m)\n", n);
 	msg.msg_controllen= cmsg->cmsg_len;
 	
+	// Send 7 bytes with one ancillary file descriptor
 	msg.msg_controllen= cmsg->cmsg_len= CMSG_LEN(sizeof(int)*1);
 	((int*) CMSG_DATA(cmsg))[0]= new_fds[2];
 	n= sendmsg(fd, &msg, 0);
 	fprintf(stderr, "sendmsg: %d (%m)\n", n);
 
+	// Send 10 bytes with no ancillary payload
 	n= send(fd, str, 10, 0);
 	fprintf(stderr, "send: %d (%m)\n", n);
 
+	// Send 7 bytes with 5 ancillary file descriptors
 	msg.msg_controllen= cmsg->cmsg_len= CMSG_LEN(sizeof(int)*5);
 	((int*) CMSG_DATA(cmsg))[0]= new_fds[0];
 	((int*) CMSG_DATA(cmsg))[1]= new_fds[1];
@@ -83,16 +90,15 @@ void sender(int fd) {
 
 void read_ancillary_fds(struct msghdr *msg) {
 	// Find any new FD which has been delivered to us
-	// We store at most 2 of them (one for the current message which might not be
-	// complete, and one for the next message which might deliver ancillary data
-	// as we get the remainder of the first message)
+	// Determine the number of descriptors by the payload size of cmsg.
+	// I haven't been able to determine whether this is a safe thing to do or not...
 	struct cmsghdr *cmsg;
 	for (cmsg= CMSG_FIRSTHDR(msg); cmsg; cmsg= CMSG_NXTHDR(msg, cmsg)) {
 		if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
 			int i, fd, num_fd= (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
 			for (i= 0; i < num_fd; i++) {
 				fd= ((int*) CMSG_DATA(cmsg))[i];
-				fprintf(stderr, "received ancillary file descriptor %d\n", fd);
+				fprintf(stderr, "  received ancillary file descriptor %d\n", fd);
 				//close(fd);
 			}
 		}
@@ -106,6 +112,8 @@ void receiver(int fd) {
 	struct cmsghdr *cmsg;
 	int n;
 	
+	// Let the sender send all their data.  We want to see in what sequence
+	// we receive the ancillary data in relation to the bytes of the stream.
 	sleep(2);
 	while (1) {
 		memset(&msg, 0, sizeof(msg));
