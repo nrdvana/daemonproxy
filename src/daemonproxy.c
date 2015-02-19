@@ -13,16 +13,7 @@ controller_t *interactive_controller;
 wake_t   main_wake; // global used for tracking things that should wake the main loop
 wake_t  *wake= &main_wake; // this is exported to other modules
 
-void wake_on_fd(int fd, bool read, bool write) {
-	if (read)
-		FD_SET(fd, &wake->fd_read);
-	if (write)
-		FD_SET(fd, &wake->fd_write);
-	if (fd > wake->max_fd)
-		wake->max_fd= fd;
-}
-
-void wake_by_time(int64_t ts) {
+void wake_at_time(int64_t ts) {
 	if (wake->next - ts > 0)
 		wake->next= ts;
 }
@@ -46,7 +37,6 @@ static void daemonize();
 int main(int argc, char** argv) {
 	int wstat, ret;
 	pid_t pid;
-	struct timeval tv;
 	service_t *svc;
 	memset(wake, 0, sizeof(*wake));
 	
@@ -120,13 +110,9 @@ int main(int argc, char** argv) {
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
 	wake->now= gettime_mon_frac();
-	FD_ZERO(&wake->fd_read);
-	FD_ZERO(&wake->fd_write);
-	FD_ZERO(&wake->fd_err);
 	while (!main_terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
 		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
-		wake->max_fd= -1;
 		
 		// collect new signals since last iteration and set read-wake on signal fd
 		sig_run(wake);
@@ -156,23 +142,19 @@ int main(int argc, char** argv) {
 		// Wait until an event or the next time a state machine needs to run
 		// (state machines edit wake.next)
 		wake->now= gettime_mon_frac();
+		int delay= 0;
 		if (wake->next - wake->now > 0) {
-			tv.tv_sec= (long)((wake->next - wake->now) >> 32);
-			tv.tv_usec= (long)((((wake->next - wake->now)&0xFFFFFFFFLL) * 1000000) >> 32);
-			log_trace("wait up to %d.%d sec", tv.tv_sec, tv.tv_usec);
+			delay= (int)(((wake->next - wake->now) >> 10) * 1000 >> 22);
+			log_trace("wait up to %d msec", delay);
 		}
-		else
-			tv.tv_sec= tv.tv_usec= 0;
 		
-		ret= select(wake->max_fd+1, &wake->fd_read, &wake->fd_write, &wake->fd_err, &tv);
+		ret= poll(wake->poll_slots, sizeof(wake->poll_slots)/sizeof(*wake->poll_slots), delay);
 		if (ret < 0) {
 			// shouldn't ever fail, but if not EINTR, at least log it and prevent
 			// looping too fast
 			if (errno != EINTR) {
-				log_error("select: %s", strerror(errno));
-				tv.tv_usec= 500000;
-				tv.tv_sec= 0;
-				select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
+				log_error("poll: %s", strerror(errno));
+				usleep(500000);
 			}
 		}
 		wake->now= gettime_mon_frac();

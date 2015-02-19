@@ -11,8 +11,8 @@ char log_dest_fd_name_buf[NAME_BUF_SIZE];
 strseg_t log_dest_fd_name= (strseg_t){ log_dest_fd_name_buf, 0 };
 char log_buffer[1024];
 int  log_buf_pos= 0;
-int  log_fd= 2;
 int  log_msg_lost= 0;
+#define log_io WAKE_LOGGER_SLOT
 
 const char * log_level_names[]= { "none", "trace", "debug", "info", "warning", "error", "fatal" };
 
@@ -26,19 +26,17 @@ static bool log_flush();
 static bool log_fd_attach();
 
 void log_init() {
-	log_fd= 2;
+	log_io->fd= 2;
 	log_fd_attach();
 }
 
 int log_get_fd() {
-	return log_fd;
+	return log_io->fd;
 }
 
 void log_fd_reset() {
-	if (log_fd >= 0) {
-		FD_CLR(log_fd, &wake->fd_write);
-		log_fd= -1;
-	}
+	log_io->fd= -1;
+	log_io->events= 0;
 }
 
 void log_fd_set_name(strseg_t name) {
@@ -59,17 +57,16 @@ static bool log_fd_attach() {
 	// again.
 	// Note: log module gets initialized before fd module, but log_dest_fd_name
 	// doesn't get set until afterward.
-	if (log_fd < 0 && log_dest_fd_name.len > 0 && (fd= fd_by_name(log_dest_fd_name)))
-		log_fd= fd_get_fdnum(fd);
+	if (log_io->fd < 0 && log_dest_fd_name.len > 0 && (fd= fd_by_name(log_dest_fd_name)))
+		log_io->fd= fd_get_fdnum(fd);
 
-	if (log_fd < 0)
-		return false;
+	// If pending messages for this new file descriptor, try writing them.
+	if (log_io->fd >= 0) {
+		log_io->events= 0;
+		log_flush();
+	}
 	
-	if (log_buf_pos > 0)
-		FD_SET(log_fd, &wake->fd_write);
-	else
-		FD_CLR(log_fd, &wake->fd_write);
-	return true;
+	return log_io->fd >= 0;
 }
 
 bool log_level_by_name(strseg_t name, int *lev) {
@@ -137,11 +134,10 @@ void log_set_filter(int value) {
 }
 
 void log_run() {
-	if (log_fd < 0 && !log_fd_attach())
+	if (log_io->fd < 0 && !log_fd_attach())
 		return;
-
-	if (FD_ISSET(log_fd, &wake->fd_write)) {
-		FD_CLR(log_fd, &wake->fd_write);
+	if (log_io->revents & POLLOUT) {
+		log_io->events= 0; // clear the wake request until flush fails again
 		log_flush();
 	}
 }
@@ -151,7 +147,7 @@ static bool log_flush() {
 	struct itimerval t;
 	// If we failed to write to the log once, don't try again until the
 	//  main loop calls log_run.
-	if (log_fd < 0 || FD_ISSET(log_fd, &wake->fd_write))
+	if (log_io->fd < 0 || (log_io->events & POLLOUT))
 		return false;
 	
 	while (log_buf_pos > 0) {
@@ -162,17 +158,14 @@ static bool log_flush() {
 		t.it_value.tv_usec= 100000;
 		setitimer(ITIMER_REAL, &t, NULL);
 		
-		n= write(log_fd, log_buffer, log_buf_pos);
+		n= write(log_io->fd, log_buffer, log_buf_pos);
 		
 		memset(&t, 0, sizeof(t));
 		setitimer(ITIMER_REAL, &t, NULL);
 		
 		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-				FD_SET(log_fd, &wake->fd_write);
-				if (log_fd > wake->max_fd)
-					wake->max_fd= log_fd;
-			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+				log_io->events |= POLLOUT;
 			return false;
 		}
 		if (n > 0 && n < log_buf_pos)
@@ -189,6 +182,7 @@ static bool log_flush() {
 			}
 		}
 	}
+	log_io->events= 0; // no need to wake when writeable
 	return true;
 }
 

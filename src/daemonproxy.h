@@ -64,16 +64,18 @@ int64_t gettime_mon_frac();
 void fatal(int exitcode, const char * msg, ...);
 
 typedef struct wake_s {
-	fd_set fd_read, fd_write, fd_err;
-	int max_fd;
+	struct pollfd poll_slots[3+CONTROLLER_MAX_CLIENTS*2];
 	// times might wrap! (in theory) never compare times with > >= < <=, only differences.
 	int64_t now;  // current time according to main loop
 	int64_t next; // time when we next need to process something
 } wake_t;
 
+#define WAKE_SIGNAL_SLOT (wake->poll_slots+0)
+#define WAKE_LOGGER_SLOT (wake->poll_slots+1)
+#define WAKE_SOCKET_SLOT (wake->poll_slots+2)
+#define WAKE_CTL_SLOT(x) (wake->poll_slots+3+(x)*2)
 extern wake_t *wake;
-void wake_on_fd(int fd, bool read, bool write);
-void wake_by_time(int64_t ts);
+static inline void wake_at(int64_t ts) { if (wake->next - ts > 0) wake->next= ts; }
 
 extern bool    main_terminate;
 extern int     main_exitcode;

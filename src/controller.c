@@ -19,6 +19,7 @@ struct controller_s {
 	
 	int  recv_fd;
 	bool recv_is_socket;
+	struct pollfd *io_wake_r;
 	bool append_final_newline;
 	char recv_buf[CONTROLLER_RECV_BUF_SIZE];
 	int  recv_buf_pos;
@@ -27,6 +28,7 @@ struct controller_s {
 	int  recv_ancillary_fd_count;
 	
 	int  send_fd;
+	struct pollfd *io_wake_w;
 	char send_buf[CONTROLLER_SEND_BUF_SIZE];
 	int  send_buf_pos;
 	bool send_overflow;
@@ -212,11 +214,13 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 			return false;
 		}
 	}
+
 	if (send_fd != -1 && send_fd != recv_fd)
 		if (!fd_set_nonblock(send_fd)) {
 			log_error("fcntl(O_NONBLOCK): %s", strerror(errno));
 			return false;
 		}
+
 	// initialize object
 	ctl->state_fn= &ctl_state_next_command;
 	ctl->recv_fd= recv_fd;
@@ -224,6 +228,10 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 	ctl->send_fd= send_fd;
 	ctl->write_timeout_reset= CONTROLLER_WRITE_TIMEOUT>>1;
 	ctl->write_timeout_close= CONTROLLER_WRITE_TIMEOUT;
+	ctl->io_wake_r= WAKE_CTL_SLOT(ctl->id);
+	ctl->io_wake_w= (send_fd == recv_fd)? ctl->io_wake_r : ctl->io_wake_r+1;
+	ctl->io_wake_r->fd= recv_fd;
+	ctl->io_wake_w->fd= send_fd;
 	return true;
 }
 
@@ -243,6 +251,8 @@ void ctl_dtor(controller_t *ctl) {
 		close(ctl->recv_ancillary_fd[i]);
 	}
 	ctl->state_fn= ctl_state_free;
+	ctl->io_wake_r->fd= -1;
+	ctl->io_wake_w->fd= -1;
 }
 
 /* Free a controller object, by returning it to the pool.
@@ -270,19 +280,13 @@ void ctl_run() {
 
 		if (ctl->recv_fd >= 0) {
 			// if waiting on input buffer, try reading more now
-			if (FD_ISSET(ctl->recv_fd, &wake->fd_read) || FD_ISSET(ctl->recv_fd, &wake->fd_err)) {
-				FD_CLR(ctl->recv_fd, &wake->fd_read);
-				FD_CLR(ctl->recv_fd, &wake->fd_err);
+			if (ctl->io_wake_r->revents & (POLLIN|POLLERR|POLLHUP))
 				ctl_read_more(ctl);
-			}
 		}
 		if (ctl->send_fd >= 0) {
 			// if waiting on output buffer, try flushing now
-			if (FD_ISSET(ctl->send_fd, &wake->fd_write) || FD_ISSET(ctl->send_fd, &wake->fd_err)) {
-				FD_CLR(ctl->send_fd, &wake->fd_write);
-				FD_CLR(ctl->send_fd, &wake->fd_err);
+			if (ctl->io_wake_w->revents & (POLLOUT|POLLERR|POLLHUP))
 				ctl_flush_outbuf(ctl);
-			}
 		}
 		// Run (max 10) iterations of state machine while state returns true.
 		// The arbitrary limit of 10 helps keep our timestamps and signal
@@ -310,6 +314,9 @@ void ctl_run() {
 		// non-null state means client is allocated
 		if (!ctl->state_fn)
 			continue;
+
+		ctl->io_wake_r->events= 0;
+		ctl->io_wake_w->events= 0;
 		
 		// If anything was left un-written, wake on writable pipe
 		// Also, set/check timeout for writes
@@ -343,15 +350,10 @@ void ctl_run() {
 					next_check_ts= ctl->send_blocked_ts + ctl->write_timeout_reset;
 				}
 				
-				if (wake->next - next_check_ts > 0) {
-					log_trace("wake in %d ms to check timeout", (next_check_ts - wake->now) * 1000 >> 32 );
-					wake->next= next_check_ts;
-				}
+				log_trace("wake in %d ms to check timeout", (next_check_ts - wake->now) * 1000 >> 32 );
+				wake_at(next_check_ts);
 				log_trace("wake on controller[%d] send_fd", i);
-				FD_SET(ctl->send_fd, &wake->fd_write);
-				FD_SET(ctl->send_fd, &wake->fd_err);
-				if (ctl->send_fd > wake->max_fd)
-					wake->max_fd= ctl->send_fd;
+				ctl->io_wake_w->events |= POLLOUT;
 			}
 			else if (ctl->recv_buf_pos)
 				// we might have flushed data that was blocking us from processing
@@ -362,10 +364,7 @@ void ctl_run() {
 		// (this could also be the config file, initially)
 		if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE) {
 			log_trace("wake on controller[%d] recv_fd", i);
-			FD_SET(ctl->recv_fd, &wake->fd_read);
-			FD_SET(ctl->recv_fd, &wake->fd_err);
-			if (ctl->recv_fd > wake->max_fd)
-				wake->max_fd= ctl->recv_fd;
+			ctl->io_wake_r->events |= POLLIN;
 		}
 	}
 }
@@ -1931,6 +1930,8 @@ bool ctl_read_more(controller_t *ctl) {
 			// EOF.  Close file descriptor
 			close(ctl->recv_fd);
 			ctl->recv_fd= -1;
+			if (ctl->io_wake_r != ctl->io_wake_w || ctl->send_fd == -1)
+				ctl->io_wake_r->fd= -1;
 		}
 		errno= e;
 		return false;
@@ -2093,6 +2094,8 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 				log_debug("controller[%d] outbuf write failed: %s", ctl->id, strerror(errno));
 				close(ctl->send_fd);
 				ctl->send_fd= -1;
+				if (ctl->io_wake_w != ctl->io_wake_r || ctl->recv_fd == -1)
+					ctl->io_wake_w->fd= -1;
 				return true;  // the buffer is now "flushed" for all practical purposes
 			}
 		}

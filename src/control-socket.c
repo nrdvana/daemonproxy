@@ -6,43 +6,42 @@
 #include "config.h"
 #include "daemonproxy.h"
 
-int control_socket= -1;
+#define listen_io WAKE_SOCKET_SLOT
 struct sockaddr_un control_socket_addr;
 
 void control_socket_init() {
 	memset(&control_socket_addr, 0, sizeof(control_socket_addr));
 	control_socket_addr.sun_family= AF_UNIX;
+	listen_io->fd= -1;
 }
 
 void control_socket_run() {
 	int client;
 	controller_t *ctl;
 	
-	if (control_socket >= 0) {
-		if (FD_ISSET(control_socket, &wake->fd_read)) {
+	if (listen_io->fd >= 0) {
+		if (listen_io->revents & POLLIN) {
 			log_debug("control_socket is ready for accept()");
 			ctl= ctl_alloc();
 			if (!ctl) {
-				log_warn("No free controllers to accpet socket connection");
-				if (wake->now + (5LL << 32) < wake->next)
-					wake->next= wake->now + (5LL << 32);
-				FD_CLR(control_socket, &wake->fd_read);
+				log_warn("No free controller handlers to accpet socket connection");
+				wake_at(wake->now + (5LL << 32));
+				listen_io->events= 0;
 				return;
 			}
-			client= accept(control_socket, NULL, NULL);
+			client= accept(listen_io->fd, NULL, NULL);
 			if (client < 0) {
-				log_debug("accept: %s", strerror(errno));
+				log_error("accept: %s", strerror(errno));
 				ctl_free(ctl);
 			}
 			if (!ctl_ctor(ctl, client, client)) {
+				log_error("can't create controller handler");
 				ctl_dtor(ctl);
 				ctl_free(ctl);
 				close(client);
 			}
 		}
-		FD_SET(control_socket, &wake->fd_read);
-		if (control_socket > wake->max_fd)
-			wake->max_fd= control_socket;
+		listen_io->events |= POLLIN;
 	}
 }
 
@@ -72,7 +71,7 @@ bool control_socket_start(strseg_t path) {
 	}
 
 	// If currently listening, clean that up first
-	if (control_socket >= 0)
+	if (listen_io->fd >= 0)
 		control_socket_stop();
 	
 	// copy new name into address
@@ -88,22 +87,20 @@ bool control_socket_start(strseg_t path) {
 		return false;
 	
 	// create the unix socket
-	control_socket= socket(PF_UNIX, SOCK_STREAM, 0);
-	if (control_socket < 0) {
+	listen_io->fd= socket(PF_UNIX, SOCK_STREAM, 0);
+	if (listen_io->fd < 0) {
 		log_error("socket: %s", strerror(errno));
 		return false;
 	}
 	
-	if (bind(control_socket, (struct sockaddr*) &control_socket_addr, (socklen_t) sizeof(control_socket_addr)) < 0)
-		log_error("bind(control_socket, %s: %s", control_socket_addr.sun_path, strerror(errno));
-	else if (listen(control_socket, 2) < 0)
+	if (bind(listen_io->fd, (struct sockaddr*) &control_socket_addr, (socklen_t) sizeof(control_socket_addr)) < 0)
+		log_error("bind(control_socket, %s): %s", control_socket_addr.sun_path, strerror(errno));
+	else if (listen(listen_io->fd, 2) < 0)
 		log_error("listen(control_socket): %s", strerror(errno));
-	else if (!fd_set_nonblock(control_socket))
+	else if (!fd_set_nonblock(listen_io->fd))
 		log_error("fcntl(control_socket, O_NONBLOCK): %s", strerror(errno));
 	else {
-		FD_SET(control_socket, &wake->fd_read);
-		if (control_socket > wake->max_fd)
-			wake->max_fd= control_socket;
+		listen_io->events |= POLLIN;
 		return true;
 	}
 	
@@ -112,10 +109,9 @@ bool control_socket_start(strseg_t path) {
 }
 
 void control_socket_stop() {
-	if (control_socket >= 0) {
-		FD_CLR(control_socket, &wake->fd_read);
-		close(control_socket);
-		control_socket= -1;
+	if (listen_io->fd >= 0) {
+		close(listen_io->fd);
+		listen_io->fd= -1;
 		remove_any_socket(control_socket_addr.sun_path);
 	};
 }
