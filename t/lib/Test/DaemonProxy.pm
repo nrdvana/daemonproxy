@@ -34,12 +34,11 @@ sub temp_path {
 
 sub new {
 	my $class= shift;
-	return bless { timeout => 0.5, pipe_count => 3 }, $class;
+	return bless { timeout => 0.5 }, $class;
 }
 
 sub dp_pid        { $_[0]{dp_pid} }
 *pid= *dp_pid;
-sub pipe_count    { $_[0]{pipe_count} }
 sub dp_fds        { $_[0]{dp_fds} }
 sub dp_stdin      { $_[0]{dp_fds}[0]{handle} }
 sub dp_stdout     { $_[0]{dp_fds}[1]{handle} }
@@ -55,16 +54,15 @@ sub run {
 		if @argv && (ref $argv[-1]||'') eq 'HASH';
 	my @parent_fds;
 	my @child_fds;
-	my $pipe_count= $self->pipe_count;
-	for (my $i= 0; $i < $pipe_count; $i++) {
+	for (my $i= 0; $i < 3 || defined $opts{"fd_$i"}; $i++) {
 		if ($opts{"fd_$i"}) {
 			my ($f1, $f2)= (ref $opts{"fd_$i"} eq 'ARRAY')? @{ $opts{"fd_$i"} } : ( $opts{"fd_$i"}, undef );
 			push @child_fds, $f1;
-			push @parent_fds, { handle => $f2, input => 0, output => 0, buffer => '' };
+			push @parent_fds, { handle => $f2, buffer => '' };
 		}
 		else {
 			pipe(my ($r,  $w)) or die "pipe: $!";
-			push @parent_fds, { handle => $i? $r : $w, input => $i == 0, output => $i != 0, buffer => '' };
+			push @parent_fds, { handle => $i? $r : $w, buffer => '' };
 			push @child_fds,  $i? $w : $r;
 		}
 	}
@@ -72,23 +70,25 @@ sub run {
 	# Launch DaemonProxy instance
 	defined ($self->{dp_pid}= fork()) or die "fork: $!";
 	if ($self->dp_pid == 0) {
-		for (my $i= 0; $i < $pipe_count; $i++) {
+		for (my $i= 0; $i < @child_fds; $i++) {
 			POSIX::dup2(fileno($child_fds[$i]), $i)
 				or die "dup pipe to $i: $!";
 		}
-		POSIX::close($_) for ($pipe_count .. 1023);
+		POSIX::close($_) for (scalar @child_fds .. 1023);
 		my @strace= !$opts{strace}? ()
 			: $opts{strace} eq '1'? ('strace')
+			: ref $opts{strace} eq 'ARRAY'? ('strace', @{$opts{strace}})
 			: ('strace', '-e', 'trace='.$opts{strace});
 		exec(@strace, $self->binary_path, @argv)
 			or warn "exec(daemonproxy): $!";
 		# make a sharp exit, without running cleanup code that could interfere with the parent process
-		exec('/bin/false') || POSIX::_exit(2);
+		POSIX::_exit(2);
 	}
 	
 	for (@parent_fds) {
-		$_->{handle}->autoflush(1) if $_->{input};
-		$_->{handle}->blocking(0)  if $_->{output};
+		next unless defined $_->{handle};
+		$_->{handle}->autoflush(1);
+		$_->{handle}->blocking(0) unless $_ eq $parent_fds[0];
 	}
 	$self->{dp_fds}= \@parent_fds;
 	1;
