@@ -64,7 +64,7 @@ int64_t gettime_mon_frac();
 void fatal(int exitcode, const char * msg, ...);
 
 typedef struct wake_s {
-	fd_set fd_read, fd_write, fd_err;
+	fd_set fd_read, fd_write, fd_err, fd_ready_read, fd_ready_write, fd_ready_err;
 	int max_fd;
 	// times might wrap! (in theory) never compare times with > >= < <=, only differences.
 	int64_t now;  // current time according to main loop
@@ -72,8 +72,51 @@ typedef struct wake_s {
 } wake_t;
 
 extern wake_t *wake;
-void wake_on_fd(int fd, bool read, bool write);
-void wake_by_time(int64_t ts);
+
+static inline void wake_on_readable(int fd) {
+	FD_SET(fd, &wake->fd_read);
+	FD_SET(fd, &wake->fd_err);
+	if (fd > wake->max_fd)
+		wake->max_fd= fd;
+}
+
+static inline void wake_on_writeable(int fd) {
+	FD_SET(fd, &wake->fd_write);
+	FD_SET(fd, &wake->fd_err);
+	if (fd > wake->max_fd)
+		wake->max_fd= fd;
+}
+
+static inline void wake_on_fd(int fd) {
+	FD_SET(fd, &wake->fd_read);
+	FD_SET(fd, &wake->fd_write);
+	FD_SET(fd, &wake->fd_err);
+	if (fd > wake->max_fd)
+		wake->max_fd= fd;
+}
+
+static inline void wake_cancel_fd(int fd) {
+	FD_CLR(fd, &wake->fd_read);
+	FD_CLR(fd, &wake->fd_write);
+	FD_CLR(fd, &wake->fd_err);
+}
+
+static inline bool woke_on_readable(int fd) {
+	return FD_ISSET(fd, &wake->fd_ready_read) || FD_ISSET(fd, &wake->fd_ready_err);
+}
+
+static inline bool woke_on_writeable(int fd) {
+	return FD_ISSET(fd, &wake->fd_ready_write) || FD_ISSET(fd, &wake->fd_ready_err);
+}
+
+static inline bool woke_on_fd(int fd) {
+	return FD_ISSET(fd, &wake->fd_ready_read) || FD_ISSET(fd, &wake->fd_ready_write) || FD_ISSET(fd, &wake->fd_ready_err);
+}
+
+static inline void wake_at_time(int64_t ts) {
+	if (wake->next - ts > 0)
+		wake->next= ts;
+}
 
 extern bool    main_terminate;
 extern int     main_exitcode;

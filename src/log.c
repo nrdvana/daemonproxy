@@ -13,6 +13,7 @@ char log_buffer[1024];
 int  log_buf_pos= 0;
 int  log_fd= 2;
 int  log_msg_lost= 0;
+bool log_blocked= false;
 
 const char * log_level_names[]= { "none", "trace", "debug", "info", "warning", "error", "fatal" };
 
@@ -35,10 +36,8 @@ int log_get_fd() {
 }
 
 void log_fd_reset() {
-	if (log_fd >= 0) {
-		FD_CLR(log_fd, &wake->fd_write);
-		log_fd= -1;
-	}
+	log_fd= -1;
+	log_blocked= true;
 }
 
 void log_fd_set_name(strseg_t name) {
@@ -62,14 +61,16 @@ static bool log_fd_attach() {
 	if (log_fd < 0 && log_dest_fd_name.len > 0 && (fd= fd_by_name(log_dest_fd_name)))
 		log_fd= fd_get_fdnum(fd);
 
-	if (log_fd < 0)
+	if (log_fd < 0) {
+		log_blocked= true;
 		return false;
-	
-	if (log_buf_pos > 0)
-		FD_SET(log_fd, &wake->fd_write);
-	else
-		FD_CLR(log_fd, &wake->fd_write);
-	return true;
+	}
+	else {
+		log_blocked= false;
+		if (log_buf_pos > 0)
+			log_flush();
+		return true;
+	}
 }
 
 bool log_level_by_name(strseg_t name, int *lev) {
@@ -140,10 +141,14 @@ void log_run() {
 	if (log_fd < 0 && !log_fd_attach())
 		return;
 
-	if (FD_ISSET(log_fd, &wake->fd_write)) {
-		FD_CLR(log_fd, &wake->fd_write);
+	if (woke_on_writeable(log_fd))
+		log_blocked= false;
+
+	if (!log_blocked)
 		log_flush();
-	}
+
+	if (log_blocked)
+		wake_on_writeable(log_fd);
 }
 
 static bool log_flush() {
@@ -151,7 +156,7 @@ static bool log_flush() {
 	struct itimerval t;
 	// If we failed to write to the log once, don't try again until the
 	//  main loop calls log_run.
-	if (log_fd < 0 || FD_ISSET(log_fd, &wake->fd_write))
+	if (log_fd < 0 || log_blocked)
 		return false;
 	
 	while (log_buf_pos > 0) {
@@ -168,11 +173,8 @@ static bool log_flush() {
 		setitimer(ITIMER_REAL, &t, NULL);
 		
 		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-				FD_SET(log_fd, &wake->fd_write);
-				if (log_fd > wake->max_fd)
-					wake->max_fd= log_fd;
-			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+				log_blocked= true;
 			return false;
 		}
 		if (n > 0 && n < log_buf_pos)

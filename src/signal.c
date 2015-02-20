@@ -193,13 +193,11 @@ void sig_run() {
 	}
 	
 	// Empty the signal pipe
-	if (FD_ISSET(sig_wake_rd, &wake->fd_read))
+	if (woke_on_readable(sig_wake_rd))
 		while (read(sig_wake_rd, tmp, sizeof(tmp)) > 0);
 	
 	// Wake on the signal pipe
-	FD_SET(sig_wake_rd, &wake->fd_read);
-	if (sig_wake_rd > wake->max_fd)
-		wake->max_fd= sig_wake_rd;
+	wake_on_readable(sig_wake_rd);
 	
 	// Capture all new signals
 	merge_new_signals();

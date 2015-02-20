@@ -268,22 +268,14 @@ void ctl_run() {
 		if (!ctl->state_fn)
 			continue;
 
-		if (ctl->recv_fd >= 0) {
-			// if waiting on input buffer, try reading more now
-			if (FD_ISSET(ctl->recv_fd, &wake->fd_read) || FD_ISSET(ctl->recv_fd, &wake->fd_err)) {
-				FD_CLR(ctl->recv_fd, &wake->fd_read);
-				FD_CLR(ctl->recv_fd, &wake->fd_err);
-				ctl_read_more(ctl);
-			}
-		}
-		if (ctl->send_fd >= 0) {
-			// if waiting on output buffer, try flushing now
-			if (FD_ISSET(ctl->send_fd, &wake->fd_write) || FD_ISSET(ctl->send_fd, &wake->fd_err)) {
-				FD_CLR(ctl->send_fd, &wake->fd_write);
-				FD_CLR(ctl->send_fd, &wake->fd_err);
-				ctl_flush_outbuf(ctl);
-			}
-		}
+		// if waiting on input buffer, try reading more now
+		if (ctl->recv_fd >= 0 && woke_on_readable(ctl->recv_fd))
+			ctl_read_more(ctl);
+
+		// if waiting on output buffer, try flushing now
+		if (ctl->send_fd >= 0 && woke_on_writeable(ctl->send_fd))
+			ctl_flush_outbuf(ctl);
+
 		// Run (max 10) iterations of state machine while state returns true.
 		// The arbitrary limit of 10 helps keep our timestamps and signal
 		// delivery and reaped procs current.  (also mitigates infinite loops)
@@ -348,10 +340,7 @@ void ctl_run() {
 					wake->next= next_check_ts;
 				}
 				log_trace("wake on controller[%d] send_fd", i);
-				FD_SET(ctl->send_fd, &wake->fd_write);
-				FD_SET(ctl->send_fd, &wake->fd_err);
-				if (ctl->send_fd > wake->max_fd)
-					wake->max_fd= ctl->send_fd;
+				wake_on_writeable(ctl->send_fd);
 			}
 			else if (ctl->recv_buf_pos)
 				// we might have flushed data that was blocking us from processing
@@ -362,10 +351,7 @@ void ctl_run() {
 		// (this could also be the config file, initially)
 		if (ctl->recv_fd >= 0 && ctl->recv_buf_pos < CONTROLLER_RECV_BUF_SIZE) {
 			log_trace("wake on controller[%d] recv_fd", i);
-			FD_SET(ctl->recv_fd, &wake->fd_read);
-			FD_SET(ctl->recv_fd, &wake->fd_err);
-			if (ctl->recv_fd > wake->max_fd)
-				wake->max_fd= ctl->recv_fd;
+			wake_on_readable(ctl->recv_fd);
 		}
 	}
 }

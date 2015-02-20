@@ -13,20 +13,6 @@ controller_t *interactive_controller;
 wake_t   main_wake; // global used for tracking things that should wake the main loop
 wake_t  *wake= &main_wake; // this is exported to other modules
 
-void wake_on_fd(int fd, bool read, bool write) {
-	if (read)
-		FD_SET(fd, &wake->fd_read);
-	if (write)
-		FD_SET(fd, &wake->fd_write);
-	if (fd > wake->max_fd)
-		wake->max_fd= fd;
-}
-
-void wake_by_time(int64_t ts) {
-	if (wake->next - ts > 0)
-		wake->next= ts;
-}
-
 const char * copyright=
 	"Copyright (C) 2014-2015  Michael Conrad";
 const char * license=
@@ -48,7 +34,18 @@ int main(int argc, char** argv) {
 	pid_t pid;
 	struct timeval tv;
 	service_t *svc;
+	
+	// initialize wake structure, which is owned by main
 	memset(wake, 0, sizeof(*wake));
+	// just in case, but probably redundant
+	FD_ZERO(&wake->fd_read);
+	FD_ZERO(&wake->fd_write);
+	FD_ZERO(&wake->fd_err);
+	FD_ZERO(&wake->fd_ready_read);
+	FD_ZERO(&wake->fd_ready_write);
+	FD_ZERO(&wake->fd_ready_err);
+	// wake structure holds current time so we don't keep calling clock_gettime()
+	wake->now= gettime_mon_frac();
 	
 	log_init();
 	svc_init();
@@ -120,16 +117,13 @@ int main(int argc, char** argv) {
 	// terminate is disabled when running as init, so this is an infinite loop
 	// (except when debugging)
 	wake->now= gettime_mon_frac();
-	FD_ZERO(&wake->fd_read);
-	FD_ZERO(&wake->fd_write);
-	FD_ZERO(&wake->fd_err);
 	while (!main_terminate) {
 		// set our wait parameters so other methods can inject new wake reasons
 		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
 		wake->max_fd= -1;
 		
 		// collect new signals since last iteration and set read-wake on signal fd
-		sig_run(wake);
+		sig_run();
 		
 		// reap all zombies, possibly waking services
 		while ((pid= waitpid(-1, &wstat, WNOHANG)) > 0) {
@@ -143,13 +137,13 @@ int main(int argc, char** argv) {
 			log_trace("waitpid: %s", strerror(errno));
 		
 		// run state machine of each service that is active.
-		svc_run_active(wake);
+		svc_run_active();
 		
 		// possibly accept new controller connections
 		control_socket_run();
 		
 		// run controller state machines
-		ctl_run(wake);
+		ctl_run();
 		
 		log_run();
 		
@@ -170,11 +164,21 @@ int main(int argc, char** argv) {
 			// looping too fast
 			if (errno != EINTR) {
 				log_error("select: %s", strerror(errno));
-				tv.tv_usec= 500000;
-				tv.tv_sec= 0;
-				select(0, NULL, NULL, NULL, &tv); // use it as a sleep, this time
+				usleep(500000);
 			}
 		}
+
+		// We want to keep track of the ready-sets separate from the wait-for sets,
+		// so that the state machines can check whether they've decided to wake on
+		// a file descriptor, and so we don't accidentally forget to clear a bit
+		// in the case we don't want to wake on it again.
+		memcpy(&wake->fd_ready_read, &wake->fd_read, sizeof(fd_set));
+		memcpy(&wake->fd_ready_read, &wake->fd_read, sizeof(fd_set));
+		memcpy(&wake->fd_ready_read, &wake->fd_read, sizeof(fd_set));
+		FD_ZERO(&wake->fd_read);
+		FD_ZERO(&wake->fd_write);
+		FD_ZERO(&wake->fd_err);
+
 		wake->now= gettime_mon_frac();
 	}
 	

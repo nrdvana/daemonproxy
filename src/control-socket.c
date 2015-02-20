@@ -19,14 +19,13 @@ void control_socket_run() {
 	controller_t *ctl;
 	
 	if (control_socket >= 0) {
-		if (FD_ISSET(control_socket, &wake->fd_read)) {
+		if (woke_on_readable(control_socket)) {
 			log_debug("control_socket is ready for accept()");
 			ctl= ctl_alloc();
 			if (!ctl) {
 				log_warn("No free controllers to accpet socket connection");
 				if (wake->now + (5LL << 32) < wake->next)
 					wake->next= wake->now + (5LL << 32);
-				FD_CLR(control_socket, &wake->fd_read);
 				return;
 			}
 			client= accept(control_socket, NULL, NULL);
@@ -40,9 +39,7 @@ void control_socket_run() {
 				close(client);
 			}
 		}
-		FD_SET(control_socket, &wake->fd_read);
-		if (control_socket > wake->max_fd)
-			wake->max_fd= control_socket;
+		wake_on_readable(control_socket);
 	}
 }
 
@@ -70,6 +67,10 @@ bool control_socket_start(strseg_t path) {
 		errno= ENAMETOOLONG;
 		return false;
 	}
+	if (path.len <= 0 || !path.data[0]) {
+		errno= EINVAL;
+		return false;
+	}
 
 	// If currently listening, clean that up first
 	if (control_socket >= 0)
@@ -77,13 +78,11 @@ bool control_socket_start(strseg_t path) {
 	
 	// copy new name into address
 	memcpy(control_socket_addr.sun_path, path.data, path.len);
-	control_socket_addr.sun_path[path.len]= '\0';
-	if (!control_socket_addr.sun_path[0]) {
-		errno= EINVAL;
-		return false;
-	}
+	memset(control_socket_addr.sun_path+path.len, 0, sizeof(control_socket_addr.sun_path)-path.len);
 	
 	// If this is a new name, possibly remove any leftover socket in our way
+	// Note that we nul-terminated this path be ensuring path.len was less than
+	//  sizeof(sockaddr_un.sun_path)
 	if (!remove_any_socket(control_socket_addr.sun_path))
 		return false;
 	
@@ -101,9 +100,7 @@ bool control_socket_start(strseg_t path) {
 	else if (!fd_set_nonblock(control_socket))
 		log_error("fcntl(control_socket, O_NONBLOCK): %s", strerror(errno));
 	else {
-		FD_SET(control_socket, &wake->fd_read);
-		if (control_socket > wake->max_fd)
-			wake->max_fd= control_socket;
+		wake_on_readable(control_socket);
 		return true;
 	}
 	
@@ -113,7 +110,7 @@ bool control_socket_start(strseg_t path) {
 
 void control_socket_stop() {
 	if (control_socket >= 0) {
-		FD_CLR(control_socket, &wake->fd_read);
+		wake_cancel_fd(control_socket);
 		close(control_socket);
 		control_socket= -1;
 		remove_any_socket(control_socket_addr.sun_path);
