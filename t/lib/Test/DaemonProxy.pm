@@ -57,9 +57,16 @@ sub run {
 	my @child_fds;
 	my $pipe_count= $self->pipe_count;
 	for (my $i= 0; $i < $pipe_count; $i++) {
-		pipe(my ($r,  $w)) or die "pipe: $!";
-		push @parent_fds, { handle => $i? $r : $w, input => $i == 0, output => $i != 0, buffer => '' };
-		push @child_fds,  $i? $w : $r;
+		if ($opts{"fd_$i"}) {
+			my ($f1, $f2)= (ref $opts{"fd_$i"} eq 'ARRAY')? @{ $opts{"fd_$i"} } : ( $opts{"fd_$i"}, undef );
+			push @child_fds, $f1;
+			push @parent_fds, { handle => $f2, input => 0, output => 0, buffer => '' };
+		}
+		else {
+			pipe(my ($r,  $w)) or die "pipe: $!";
+			push @parent_fds, { handle => $i? $r : $w, input => $i == 0, output => $i != 0, buffer => '' };
+			push @child_fds,  $i? $w : $r;
+		}
 	}
 	
 	# Launch DaemonProxy instance
