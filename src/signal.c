@@ -12,8 +12,6 @@ int sig_wake_rd= -1;
 int sig_wake_wr= -1;
 sigset_t sig_mask_orig;
 
-#define sigwake_io WAKE_SIGNAL_SLOT
-
 typedef struct sig_status_s {
 	int signum;
 	int64_t last_received_ts;
@@ -127,7 +125,6 @@ void sig_init() {
 	
 	// in a last-ditch attempt to recover from fatal errors, we might re-run
 	// the initialization.  otherwise, this condition is never true.
-	sigwake_io->fd= -1;
 	if (sig_wake_rd >= 0) close(sig_wake_rd);
 	if (sig_wake_wr >= 0) close(sig_wake_wr);
 
@@ -147,7 +144,7 @@ void sig_init() {
 		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: %s", strerror(errno));
 	}
 	log_trace("pipe => (%d, %d)", pipe_fd[0], pipe_fd[1]);
-	sigwake_io->fd= sig_wake_rd= pipe_fd[0];
+	sig_wake_rd= pipe_fd[0];
 	sig_wake_wr= pipe_fd[1];
 	
 	// set signal handlers
@@ -196,11 +193,13 @@ void sig_run() {
 	}
 	
 	// Empty the signal pipe
-	if (sigwake_io->revents & POLLIN)
-		while (read(sigwake_io->fd, tmp, sizeof(tmp)) > 0);
+	if (FD_ISSET(sig_wake_rd, &wake->fd_read))
+		while (read(sig_wake_rd, tmp, sizeof(tmp)) > 0);
 	
 	// Wake on the signal pipe
-	sigwake_io->events= POLLIN;
+	FD_SET(sig_wake_rd, &wake->fd_read);
+	if (sig_wake_rd > wake->max_fd)
+		wake->max_fd= sig_wake_rd;
 	
 	// Capture all new signals
 	merge_new_signals();
