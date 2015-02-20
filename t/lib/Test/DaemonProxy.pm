@@ -51,6 +51,8 @@ sub run {
 	my ($self, @argv)= @_;
 	die "Run was already called on this object"
 		if defined $self->{dp_pid};
+	my %opts= %{ pop @argv }
+		if @argv && (ref $argv[-1]||'') eq 'HASH';
 	my @parent_fds;
 	my @child_fds;
 	my $pipe_count= $self->pipe_count;
@@ -68,7 +70,10 @@ sub run {
 				or die "dup pipe to $i: $!";
 		}
 		POSIX::close($_) for ($pipe_count .. 1023);
-		exec($self->binary_path, @argv)
+		my @strace= !$opts{strace}? ()
+			: $opts{strace} eq '1'? ('strace')
+			: ('strace', '-e', 'trace='.$opts{strace});
+		exec(@strace, $self->binary_path, @argv)
 			or warn "exec(daemonproxy): $!";
 		# make a sharp exit, without running cleanup code that could interfere with the parent process
 		exec('/bin/false') || POSIX::_exit(2);
