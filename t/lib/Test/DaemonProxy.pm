@@ -139,7 +139,7 @@ sub _read_more {
 	for (@$inputs) {
 		next unless defined $_->{handle} and $ready{$_->{handle}};
 		$result= 1;
-		my $got= sysread($_->{handle}, $_->{buffer}, 1024, length($_->{buffer}));
+		my $got= sysread($_->{handle}, $_->{buffer}, 4*4096, length($_->{buffer}));
 		if (!$got) {
 			close($_->{handle});
 			$_->{handle}= undef;
@@ -201,13 +201,14 @@ sub _recv_pattern {
 				}
 			}
 		}
-		$self->_read_more([ grep { $_->{output} } @{$self->{dp_fds}} ])
+		$self->_read_more($inputs)
 			or return 0;
 	}
 }
 
 sub discard_response {
 	my $self= shift;
+	local $self->{timeout}= 0.000001;
 	while ($self->_read_more([ @{$self->{dp_fds}}[1,2] ])) {}
 	$self->{dp_fds}[1]{buffer}= '';
 	$self->{dp_fds}[2]{buffer}= '';
@@ -215,12 +216,14 @@ sub discard_response {
 
 sub discard_stdout {
 	my $self= shift;
+	local $self->{timeout}= 0.000001;
 	while ($self->_read_more([ @{$self->{dp_fds}}[1] ])) {}
 	$self->{dp_fds}[1]{buffer}= '';
 }
 
 sub discard_stderr {
 	my $self= shift;
+	local $self->{timeout}= 0.000001;
 	while ($self->_read_more([ @{$self->{dp_fds}}[2] ])) {}
 	$self->{dp_fds}[2]{buffer}= '';
 }
