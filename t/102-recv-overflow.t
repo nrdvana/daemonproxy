@@ -8,7 +8,7 @@ use lib "$FindBin::Bin/lib";
 use Test::DaemonProxy;
 
 my $dp= Test::DaemonProxy->new;
-$dp->timeout(0.1);
+$dp->timeout(0.5);
 $dp->run('-i');
 
 # Set short timeouts so that this test doesn't take too long to run
@@ -23,16 +23,15 @@ $dp->recv( qr/^set$/m );
 # When we finally read our pipe, it should end with "overflow" after about 6K of data.
 for (my $i= 0; $i < 1000; $i++) {
 	$dp->send('service.args', 'foo', "/nonexistent/path/$i".(' yada' x 60));
+	$dp->discard_stderr; # don't let stderr overflow
 }
 
-$dp->response_like(qr/^overflow$/m, 'overflow flag received');
-
-$dp->discard_response;
+sleep 2;
+$dp->recv_stdout_ok( qr/^overflow$/m, 'overflow flag received');
 
 $dp->send('echo', '-marker-');
-$dp->response_like( qr/^-marker-/, 'can still send/receive' );
+$dp->recv_stdout_ok( qr/^-marker-/, 'can still send/receive' );
 
-$dp->send('terminate', 0);
-$dp->exit_is(0);
+$dp->terminate_ok;
 
 done_testing;
