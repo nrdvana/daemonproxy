@@ -46,6 +46,8 @@ $dp->recv_ok( qr/^service.state	check_pipe	down.*exit	0/m, 'check_pipe sees debu
 
 # Now direct logging to a FD that doesn't exist yet
 $dp->send('log.dest', 'fd', 'log2.w');
+
+# Have the service read from this non-existent pipe
 $dp->send('service.fds', 'check_pipe', 'log2.r', 'stderr', 'stderr');
 
 # Now create the pipe
@@ -56,24 +58,6 @@ $dp->send('service.start', 'check_pipe');
 $dp->recv_ok( qr/^service.state	check_pipe	up.*/m, 'check_pipe started' );
 $dp->recv_ok( qr/^service.state	check_pipe	down.*exit	0/m, 'check_pipe sees debug data' );
 
-# now overflow the pipe
-for (1..4000) {
-	$dp->send('echo', "x"x 100);
-	$dp->recv_stdout( qr/^x{100}/m ) or die;
-}
-
-# then redirect back to file.  The file should contain a "warning: lost %d log messages"
-$dp->send('log.dest', 'fd', 'logfile');
-$dp->send('echo', 'done');
-$dp->recv( qr/(.*)^done$/m );
-$dp->send('fd.delete', 'logfile');
-$dp->recv_ok( qr/^fd.state	logfile	deleted/m, 'logfile closed by daemonproxy' );
-
-$file_data= do { my $f; open($f, '<', $fname) or die; local $/= undef; <$f> };
-
-like( $file_data, qr/^warning: lost \d+ log messages/m, 'logfile contains log-lost warning' );
-
-$dp->send('terminate', 0);
-$dp->exit_is( 0 );
+$dp->terminate_ok;
 
 done_testing;
