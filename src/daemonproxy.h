@@ -87,6 +87,12 @@ static inline void wake_on_writeable(int fd) {
 		wake->max_fd= fd;
 }
 
+static inline void wake_on_writeable_only(int fd) {
+	FD_SET(fd, &wake->fd_write);
+	if (fd > wake->max_fd)
+		wake->max_fd= fd;
+}
+
 static inline void wake_on_fd(int fd) {
 	FD_SET(fd, &wake->fd_read);
 	FD_SET(fd, &wake->fd_write);
@@ -107,6 +113,10 @@ static inline bool woke_on_readable(int fd) {
 
 static inline bool woke_on_writeable(int fd) {
 	return FD_ISSET(fd, &wake->fd_ready_write) || FD_ISSET(fd, &wake->fd_ready_err);
+}
+
+static inline bool woke_on_writeable_only(int fd) {
+	return FD_ISSET(fd, &wake->fd_ready_write);
 }
 
 static inline bool woke_on_fd(int fd) {

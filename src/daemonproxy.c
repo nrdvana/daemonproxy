@@ -122,6 +122,8 @@ int main(int argc, char** argv) {
 		wake->next= wake->now + (200LL<<32); // wake at least every 200 seconds
 		wake->max_fd= -1;
 		
+		log_run();
+
 		// collect new signals since last iteration and set read-wake on signal fd
 		sig_run();
 		

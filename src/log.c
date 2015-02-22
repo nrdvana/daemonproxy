@@ -141,14 +141,15 @@ void log_run() {
 	if (log_fd < 0 && !log_fd_attach())
 		return;
 
-	if (woke_on_writeable(log_fd))
+	if (woke_on_writeable_only(log_fd)) {
 		log_blocked= false;
-
-	if (!log_blocked)
 		log_flush();
+	}
 
 	if (log_blocked)
-		wake_on_writeable(log_fd);
+		// Don't also wake on fd_err, because we don't care.  Error is the same as
+		// not-writable (blocked) for logging purposes.
+		wake_on_writeable_only(log_fd);
 }
 
 static bool log_flush() {
@@ -173,8 +174,10 @@ static bool log_flush() {
 		setitimer(ITIMER_REAL, &t, NULL);
 		
 		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-				log_blocked= true;
+			// If we fail for any reason, it means logging is either temporarily or permanently
+			// blocked.  We handle both the same, by stopping logging until select() gives us a
+			// writeable bit.
+			log_blocked= true;
 			return false;
 		}
 		if (n > 0 && n < log_buf_pos)
