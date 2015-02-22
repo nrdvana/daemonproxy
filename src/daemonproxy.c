@@ -172,9 +172,9 @@ int main(int argc, char** argv) {
 		// so that the state machines can check whether they've decided to wake on
 		// a file descriptor, and so we don't accidentally forget to clear a bit
 		// in the case we don't want to wake on it again.
-		memcpy(&wake->fd_ready_read, &wake->fd_read, sizeof(fd_set));
-		memcpy(&wake->fd_ready_read, &wake->fd_read, sizeof(fd_set));
-		memcpy(&wake->fd_ready_read, &wake->fd_read, sizeof(fd_set));
+		memcpy(&wake->fd_ready_read,  &wake->fd_read,  sizeof(fd_set));
+		memcpy(&wake->fd_ready_write, &wake->fd_write, sizeof(fd_set));
+		memcpy(&wake->fd_ready_err,   &wake->fd_err,   sizeof(fd_set));
 		FD_ZERO(&wake->fd_read);
 		FD_ZERO(&wake->fd_write);
 		FD_ZERO(&wake->fd_err);
