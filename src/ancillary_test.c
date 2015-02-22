@@ -1,18 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/wait.h>
 #include <errno.h>
 #include <string.h>
+#include <unistd.h>
 
 void sender(int fd);
 void receiver(int fd);
 
 int main() {
 	int fd[2], wstat;
+	pid_t child;
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd)) { perror("socketpair"); abort(); }
-	pid_t child= fork();
+	child= fork();
 	if (child < 0) { perror("fork"); abort(); }
 	if (child) {
 		close(fd[1]);
