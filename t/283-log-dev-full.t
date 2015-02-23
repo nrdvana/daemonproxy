@@ -8,6 +8,8 @@ use lib "$FindBin::Bin/lib";
 use Test::DaemonProxy;
 
 my $unique_string= "qwerty-".time.rand;
+my ($test_id)= ($FindBin::Script =~ /^(\d+)/)
+	or die "Can't determine test_id";
 
 sub log_to_dev_full {
 	my $blocked_write_count= shift;
@@ -16,8 +18,8 @@ sub log_to_dev_full {
 	$dp->timeout(.5);
 
 	my $full= IO::File->new("/dev/full", 'w');
-	my $tracefile= $dp->temp_path . '/283-strace.txt';
-	my $log_redir_file= $dp->temp_path . '/283-log.txt';
+	my $tracefile= $dp->temp_path . "/$test_id-strace.txt";
+	my $log_redir_file= $dp->temp_path . "/$test_id-log.txt";
 	unlink $tracefile;
 	unlink $log_redir_file;
 	$dp->run('-i', { fd_2 => $full, strace => [ '-D', '-o', $tracefile ]});
@@ -47,7 +49,7 @@ subtest blocked_no_overflow => sub {
 	my $out= log_to_dev_full(5); # shouldn't overflow log buffer
 
 	# ensure that daemonproxy only tried calling write() on file descriptor 2 ONCE
-	my $count= ($out->{trace_out} =~ /write\(2/g);
+	my $count= @{[ $out->{trace_out} =~ /write\(2/g ]};
 	is( $count, 1, 'only one attempt to write to fd 2' );
 
 	# ensure that we got all 5 commands which were queued in the log output buffer
@@ -65,7 +67,7 @@ subtest blocked_and_overflow => sub {
 	my $out= log_to_dev_full(500); # should overflow log buffer
 
 	# ensure that daemonproxy only tried calling write() on file descriptor 2 ONCE
-	my $count= ($out->{trace_out} =~ /write\(2/g);
+	my $count= @{[ $out->{trace_out} =~ /write\(2/g ]};
 	is( $count, 1, 'only one attempt to write to fd 2' );
 
 	# ensure that we got an overflow messages once logging was resumed
