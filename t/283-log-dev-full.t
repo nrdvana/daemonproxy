@@ -29,6 +29,8 @@ sub log_to_dev_full {
 		$dp->send('invalid');
 		$dp->recv(qr/invalid/);
 	}
+	
+	sleep 1; # Wait longer than daemonproxy's LOG_WRITE_TIMEOUT
 
 	# Change logging to a different file
 	$dp->send('fd.open', 'log.w', 'write,create', $log_redir_file);
@@ -48,9 +50,10 @@ sub log_to_dev_full {
 subtest blocked_no_overflow => sub {
 	my $out= log_to_dev_full(5); # shouldn't overflow log buffer
 
-	# ensure that daemonproxy only tried calling write() on file descriptor 2 ONCE
+	# ensure that daemonproxy didn't busy-loop while calling write on file descriptor 2
 	my $count= @{[ $out->{trace_out} =~ /write\(2/g ]};
-	is( $count, 1, 'only one attempt to write to fd 2' );
+	cmp_ok( $count, '<', 10, 'small number of attempts to write to fd 2' );
+	cmp_ok( $count, '>', 3,  'daemonproxy did retry the write' );
 
 	# ensure that we got all 5 commands which were queued in the log output buffer
 	$count= @{[ $out->{log_out} =~ /unknown command/ig ]};
@@ -66,9 +69,10 @@ subtest blocked_no_overflow => sub {
 subtest blocked_and_overflow => sub {
 	my $out= log_to_dev_full(500); # should overflow log buffer
 
-	# ensure that daemonproxy only tried calling write() on file descriptor 2 ONCE
+	# ensure that daemonproxy didn't busy-loop while calling write on file descriptor 2
 	my $count= @{[ $out->{trace_out} =~ /write\(2/g ]};
-	is( $count, 1, 'only one attempt to write to fd 2' );
+	cmp_ok( $count, '<', 10, 'small number of attempts to write to fd 2' );
+	cmp_ok( $count, '>', 3,  'daemonproxy did retry the write' );
 
 	# ensure that we got an overflow messages once logging was resumed
 	like( $out->{log_out}, qr/lost \d+ log messages/, 'got lost-messages message' );

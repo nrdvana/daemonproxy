@@ -42,6 +42,8 @@
 #define SERVICE_RESTART_INTERVAL  (   5LL << 32)
 #define FORK_RETRY_DELAY          (   3LL << 32)
 #define CONTROLLER_WRITE_TIMEOUT  (  30LL << 32)
+#define LOG_RETRY_DELAY           (   1LL << 31)
+#define LOG_WRITE_TIMEOUT         (   1LL << 28)
 
 // RECV buf should be as large as the longest sensible command
 #define CONTROLLER_RECV_BUF_SIZE   1024

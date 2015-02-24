@@ -14,6 +14,7 @@ int  log_buf_pos= 0;
 int  log_fd= 2;
 int  log_msg_lost= 0;
 bool log_blocked= false;
+int64_t log_blocked_next_attempt= 0;
 
 const char * log_level_names[]= { "none", "trace", "debug", "info", "warning", "error", "fatal" };
 
@@ -38,6 +39,7 @@ int log_get_fd() {
 void log_fd_reset() {
 	log_fd= -1;
 	log_blocked= true;
+	log_blocked_next_attempt= 0;
 }
 
 void log_fd_set_name(strseg_t name) {
@@ -67,6 +69,7 @@ static bool log_fd_attach() {
 	}
 	else {
 		log_blocked= false;
+		log_blocked_next_attempt= 0;
 		if (log_buf_pos > 0)
 			log_flush();
 		return true;
@@ -141,15 +144,35 @@ void log_run() {
 	if (log_fd < 0 && !log_fd_attach())
 		return;
 
-	if (woke_on_writeable_only(log_fd)) {
-		log_blocked= false;
-		log_flush();
+	// If logging failed last iteration, see if we're ready yet
+	if (log_blocked) {
+		// If we decided to try again on the writeable event, the bit will be set.
+		if (woke_on_writeable_only(log_fd)
+			|| (log_blocked_next_attempt &&
+				(wake->now - log_blocked_next_attempt > 0)
+			)
+		) {
+			log_blocked= false;
+			log_blocked_next_attempt= 0;
+			log_flush();
+			// If that also failed, then we no longer trust our writeable-bit, and
+			// set a clock-based timeout
+			if (log_blocked) {
+				log_blocked_next_attempt= wake->now + LOG_RETRY_DELAY;
+				if (!log_blocked_next_attempt) log_blocked_next_attempt++;
+			}
+		}
+		
+		// If still blocked, set an appropriate wake event
+		if (log_blocked) {
+			if (log_blocked_next_attempt)
+				wake_at_time(log_blocked_next_attempt);
+			else
+				// Don't also wake on fd_err, because we don't care.  Error is the same as
+				// not-writable (blocked) for logging purposes.
+				wake_on_writeable_only(log_fd);
+		}
 	}
-
-	if (log_blocked)
-		// Don't also wake on fd_err, because we don't care.  Error is the same as
-		// not-writable (blocked) for logging purposes.
-		wake_on_writeable_only(log_fd);
 }
 
 static bool log_flush() {
@@ -165,7 +188,8 @@ static bool log_flush() {
 		//  mode because it might be the terminal, and can't do nonblocking if it's
 		//  an actual file, anyway.
 		memset(&t, 0, sizeof(t));
-		t.it_value.tv_usec= 100000;
+		t.it_value.tv_sec=  (long)(LOG_WRITE_TIMEOUT >> 32);
+		t.it_value.tv_usec= (long)(((LOG_WRITE_TIMEOUT >> 12) * 1000000LL) >> 20);
 		setitimer(ITIMER_REAL, &t, NULL);
 		
 		n= write(log_fd, log_buffer, log_buf_pos);
@@ -175,8 +199,7 @@ static bool log_flush() {
 		
 		if (n < 0) {
 			// If we fail for any reason, it means logging is either temporarily or permanently
-			// blocked.  We handle both the same, by stopping logging until select() gives us a
-			// writeable bit.
+			// blocked.  We just record this fact and let log_run() decide how to handle it.
 			log_blocked= true;
 			return false;
 		}
