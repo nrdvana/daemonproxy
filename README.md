@@ -19,8 +19,8 @@ The other semi-common philosophy is that the process manager
 should be able to restart a daemon connected to the same output
 pipe (for logging) that it was originally connected to, and
 also give it an identical environment each time it is started.
-(this is a thing that is hard to do when you run init scripts
- from cron jobs or other sloppy methods like that)
+(this is a thing that is hard to guarantee with init scripts,
+ which could be executed from any context)
 
 The point at which daemonproxy diverges from the rest is that
 it generates a stream of events which can be piped to an
@@ -52,8 +52,11 @@ These commands might configure new services and they might
 start some of them.
 
 But, the best feature of all is that commands can configure a
-"controller", which connects back to daemonproxy to dynamically
-issue more commands in response to events.
+"controller" service which can then issue further commands to
+daemonproxy over a socket.  The controller script can be written
+in whatever language you like with whatever fancy libraries you
+like, without needing to add all those details to daemonproxy
+itself.
 
 daemon management
 =================
