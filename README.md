@@ -58,17 +58,6 @@ in whatever language you like with whatever fancy libraries you
 like, without needing to add all those details to daemonproxy
 itself.
 
-daemon management
-=================
-
-daemonproxy is named daemonproxy because it is acting as a proxy
-for the actual service manager.  The service manager **you** want
-to handle your special cases and needs is probably best written
-as a script.  But, writing a process manager can be complicated,
-and a fatal bug could orphan all your daemons and make a difficult
-task of cleaning up the mess, or get stuck and stop performing its
-duties.
-
 daemonproxy takes over the important role of the parent process,
 and can act as a watchdog for your script, while maintaining the
 state of all the services and file handles that connect them to
@@ -78,33 +67,63 @@ to deal with the complications of signal handling, nonblocking I/O,
 or waiting for children.  All you have to do is read stdin and
 write stdout!
 
+advantages over other supervisors
+=================================
+
+Daemonproxy is really just a platform for your supervisor, requiring some
+additional scripting effort to build a complete program.  What makes the
+effort worthwhile?
+
+Here's a quick list:
+
+  * The more RAM a supervisor uses, the more likely it is to get OOM-killed by
+    the kernel, and the slower it forks. (because of all the page table entries
+    that need to change)  Daemonproxy uses about 8M address space and 400K
+    resident (on a system where 'sleep' uses 4M address space and 300K resident)
+  
+  * If a supervisor makes use of lots of fun/powerful libraries, it adds lots
+    of potential failure points.  If the supervisor dies, all the child
+    processes become orphaned, and it can be a mess to clean up.  By splitting
+    the supervisor into a reliable parent and a controller script, you can take
+    more risks on library usage without worrying about catastrophic failures.
+    If anything goes wrong with the controller, daemonproxy can restart it and
+    resynchronize, so the controller picks up where it left off.
+  
+  * If you want to start a service with a few extra pipes connected to things,
+    other supervision programs' narrow designs won't let you.  Daemonproxy will
+    let you create any number of file/pipe/socket handles and connect them
+    between services however you like.  Want to set up 8 services which all
+    pipe to the same logger who receives the pipes on FD 3 through 10?  no
+    problem!  Want to create a service which has a port-80 bound socket on fd
+    3, a read-only secret key file on fd 4, and a pipe to an authentication
+    server on fd 5?  easy!  By setting up pipes and socketpairs within
+    daemonproxy, you avoid the security hassle of creating user accounts and
+    managing directory permissions of sockets in the filesystem.
+
+  * daemonproxy is more suitable for small embedded systems than larger
+    supervisors like systemd or upstart.  And while daemonproxy is well-suited
+    for replacing init, it can be used for any number of supervision roles, and
+    doesn't need to be system-wide or run as root.
+    
+  * daemonproxy is more flexible than simpler supervisors like daemontools,
+    runit, etc. since it gives you the ability to script your own supervision
+    logic, which could load service definitions from a YAML file or from a
+    database.
+
 init replacement
 ================
 
-daemonproxy is designed to be a suitable replacement for process 1.
-It uses a minimal amount of RAM, it can allocate all its dynamic
-memory on startup (the table sizes can be controlled with command
-line switches) and it has options to attempt recovery on lesser
-errors, or to exec() to a cleanup script in case of fatal error.
+Daemonproxy is intended for lots of purposes, but I added a few special
+features for acting as process 1 on embedded systems:
 
-It is a single-thread process written in non-blocking style as a
-collection of state machines, and it has no external library
-dependencies, so it is a natural fit for static compilation.
-It also has relatively few lines of code!  Memory footprint numbers
-are not yet available.
+  * command-line options to allocate a fixed number of objects of a fixed size
+    at startup, so it never needs to call malloc again.
+  * a "terminate-guard" feature that prevents it from accidentally exiting
+  * an "exec-on-exit" feature that can exec into an emergency cleanup program
+    on fatal errors (or just when you want to shut down the system).
 
-other uses
-==========
+And design-wise, it is a single-thread process written in non-blocking style as
+a collection of state machines, and it has no external library dependencies, so
+it is a natural fit for static compilation.  It also has relatively few lines
+of code.
 
-However, daemonproxy is certainly not limited to running as init!
-One of my main design goals is to use it for background jobs that
-web services want to run.  A web service sometimes needs to kick
-off a background job, and then needs a way to check back on it
-to see if it is still running, whether it completed successfully,
-and maybe find the name of the output file (or screen session) it
-is using.
-
-daemonproxy is a perfect fit for this, and accepts commands for
-creating new services, attaching arbitrary metadata to them,
-querying their PID and exit status, and the timestamps when
-they started or exited.
