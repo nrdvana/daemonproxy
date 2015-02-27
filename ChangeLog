@@ -5,6 +5,7 @@
   * New command chdir allows controller to re-home daemonproxy.
   * fd.pipe now has optional FLAGS, which can be used to make socketpairs.
   * New command fd.socket allows creating and binding a socket.
+  * New command fd.take allows controller to give a file handle to daemonproxy
   * New magic filehandle 'control.socket' gives equivlent of control.command
      and control.event on a single handle.
   * control.command and control.event are now aliases for control.socket,

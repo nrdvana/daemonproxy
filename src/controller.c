@@ -82,7 +82,7 @@ COMMAND(ctl_cmd_fd_pipe,             "fd.pipe");
 COMMAND(ctl_cmd_fd_open,             "fd.open");
 COMMAND(ctl_cmd_fd_socket,           "fd.socket");
 COMMAND(ctl_cmd_fd_delete,           "fd.delete");
-COMMAND(ctl_cmd_fd_xfer,             "fd.xfer");
+COMMAND(ctl_cmd_fd_take,             "fd.take");
 COMMAND(ctl_cmd_chdir,               "chdir");
 COMMAND(ctl_cmd_exit,                "exit");
 COMMAND(ctl_cmd_log_filter,          "log.filter");
@@ -1112,7 +1112,18 @@ bool ctl_cmd_fd_socket(controller_t *ctl) {
 	return true;
 }
 
-bool ctl_cmd_fd_xfer(controller_t *ctl) {
+/*
+=item fd.take NAME  <plus one file descriptor in ancillary data>
+
+This is a special message in which the controller uses sendmsg() to deliver
+a file descriptor to daemonproxy.  NAME is the symbolic name to assign to the
+file descriptor once it is received.  If the name already exists it will be
+closed and then reassigned.  Only one file descriptor may be transferred
+per message.
+
+=cut
+*/
+bool ctl_cmd_fd_take(controller_t *ctl) {
 	fd_t *fd;
 	int new_fd, i, fl;
 	strseg_t fdname;
@@ -1123,24 +1134,14 @@ bool ctl_cmd_fd_xfer(controller_t *ctl) {
 	}
 
 	// TODO: should redesign controller ancillary mechanism to auto-discard
-	//  leftover FDs after the message they came with is gone.
+	//  leftover FDs after the message they came with is gone, but this is
+	//  very hard to determine in a cross-platform manner.
 	new_fd= ctl->recv_ancillary_fd[0];
 	--ctl->recv_ancillary_fd_count;
 	for (i= 0; i < ctl->recv_ancillary_fd_count; i++)
 		ctl->recv_ancillary_fd[i]= ctl->recv_ancillary_fd[i+1];
 
 	if (!ctl_get_arg_fd(ctl, false, true, &fdname, NULL)) {
-		close(new_fd);
-		return false;
-	}
-
-	// turn off CLOEXEC flag
-	if ((fl= fcntl(new_fd, F_GETFD)) < 0                // get CLOEXEC + unknown others
-		|| fcntl(new_fd, F_SETFD, fl & ~FD_CLOEXEC) < 0 // clear CLOEXEC
-	) {
-		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
-			"fcntl failed: %s", strerror(errno));
-		ctl->command_error= ctl->command_error_buf;
 		close(new_fd);
 		return false;
 	}
