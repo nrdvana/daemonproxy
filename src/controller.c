@@ -1802,7 +1802,7 @@ bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fie
 }
 
 /*
-=item service.triggers NAME [TRIGGER_1], [TRIGER_2] ...
+=item service.auto_up NAME [TRIGGER_1], [TRIGER_2] ...
 
 Triggers for auto-starting the service have changed.
 
