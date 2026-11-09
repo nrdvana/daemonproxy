@@ -24,6 +24,7 @@
     * Reject descriptors outside FD_SETSIZE and close rejected allocations
     * Initialize closed standard handles before internal opens can reuse them
   * Declare inline functions 'static' for linking with modern GCC
+  * Removed unused malloc(0) check that broke make dist with modern Autoconf
   * Added regression tests for memory corruption, error cleanup, and recovery
   * Known issue: the config-sync.pl example is incomplete
 

@@ -35,7 +35,6 @@ AC_TYPE_UINT64_T
 # Checks for library functions.
 AC_FUNC_ALLOCA
 AC_FUNC_FORK
-AC_FUNC_MALLOC
 AC_CHECK_FUNCS([clock_gettime dup2 memchr memmove memset mkdir select setenv strchr strdup strstr])
 
 AC_CONFIG_FILES([Makefile])
