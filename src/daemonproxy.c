@@ -17,6 +17,7 @@ wake_t *wake= &main_wake;
 // Parse options and apply to global vars; calls fatal() on failure.
 bool set_exec_on_exit(strseg_t arguments_tsv);
 static bool register_open_fds();
+static bool setup_standard_fds();
 static bool setup_interactive_mode();
 static bool setup_config_file(const char *path);
 static void fd_to_dev_null(fd_t *fd);
@@ -36,6 +37,11 @@ int main(int argc, char** argv) {
 	if (getpid() == 1) {
 		opt_config_file= CONFIG_FILE_DEFAULT_PATH;
 		opt_terminate_guard= 1;
+	}
+	// Reserve standard descriptors before internal opens can reuse their numbers.
+	while (!setup_standard_fds()) {
+		fatal(EXIT_INVALID_ENVIRONMENT, "Can't initialize standard handles: %s", strerror(errno));
+		sleep(1); // fatal() can return when running as init
 	}
 	
 	umask(077);
@@ -61,7 +67,8 @@ int main(int argc, char** argv) {
 		fatal(EXIT_BAD_OPTIONS, "Not enough FD objects to register all open FDs");
 
 	// Set up signal handlers and signal mask and signal self-pipe
-	sig_init();
+	if (!sig_init())
+		fatal(EXIT_IMPOSSIBLE_SCENARIO, "Unable to initialize signal handling: %s", strerror(errno));
 	
 	// Initialize service object pool and indexes
 	svc_init();
@@ -217,13 +224,25 @@ static void daemonize() {
 	}
 }
 
+static bool setup_standard_fds() {
+	int i;
+	for (i= 0; i < 3; i++) {
+		if (fcntl(i, F_GETFD) >= 0) continue;
+		if (errno != EBADF) return false;
+		// open() takes the lowest unused number; all numbers below i are open.
+		if (fd_check_new(open("/dev/null", O_RDWR|O_NOCTTY)) < 0)
+			return false;
+	}
+	return true;
+}
+
 // Add all open file descriptors as named FD objects
 static bool register_open_fds() {
 	int i, fdnum;
 	bool result= true, is_open;
 	char buffer[16];
 
-	for (i= 0; i < 1024; i++) {
+	for (i= 0; i < FD_SETSIZE; i++) {
 		is_open= i != fd_dev_null && fcntl(i, F_GETFL) != -1;
 		// for stdin,stdout,stderr, we create it as a dup of dev_null if it isn't open.
 		// for all others, we only create it if it is open.
@@ -233,7 +252,7 @@ static bool register_open_fds() {
 			else
 				snprintf(buffer, sizeof(buffer), "fd_%d", i);
 
-			fdnum= is_open? i : dup(fd_dev_null);
+			fdnum= is_open? i : fd_check_new(dup(fd_dev_null));
 			log_trace("registering %s as %d", buffer, fdnum);
 			result= fd_new_file(STRSEG(buffer), fdnum,
 					(fd_flags_t){ .special= true, .read= true, .write= true, .is_const= false },
@@ -272,7 +291,7 @@ static bool setup_interactive_mode() {
 }
 
 static void fd_to_dev_null(fd_t *fd) {
-	int fdnum= dup(fd_dev_null);
+	int fdnum= fd_check_new(dup(fd_dev_null));
 	log_trace("reassigning %s to %d", fd_get_name(fd), fdnum);
 	fd_set_fdnum(fd, fdnum);
 }
@@ -291,7 +310,7 @@ static bool setup_config_file(const char *path) {
 		f= 0;
 	}
 	else {
-		f= open(path, O_RDONLY|O_NONBLOCK|O_NOCTTY);
+		f= fd_check_new(open(path, O_RDONLY|O_NONBLOCK|O_NOCTTY));
 		if (f == -1) {
 			log_error("Failed to open config file \"%s\": %s",
 				path, strerror(errno));

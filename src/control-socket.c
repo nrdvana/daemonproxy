@@ -29,13 +29,12 @@ void control_socket_run() {
 				FD_CLR(control_socket, &wake->fd_read);
 				return;
 			}
-			client= accept(control_socket, NULL, NULL);
+			client= fd_check_new(accept(control_socket, NULL, NULL));
 			if (client < 0) {
 				log_debug("accept: %s", strerror(errno));
 				ctl_free(ctl);
 			}
-			if (!ctl_ctor(ctl, client, client)) {
-				ctl_dtor(ctl);
+			else if (!ctl_ctor(ctl, client, client)) {
 				ctl_free(ctl);
 				close(client);
 			}
@@ -49,10 +48,10 @@ void control_socket_run() {
 static bool remove_any_socket(const char *path) {
 	struct stat st;
 	// unlink existing socket, but only if a socket owned by our UID.
-	if (stat(path, &st) < 0)
-		return true;
+	if (lstat(path, &st) < 0)
+		return errno == ENOENT;
 	
-	if (!(st.st_mode & S_IFSOCK) || !(st.st_uid == geteuid() || st.st_uid == geteuid()))
+	if (!S_ISSOCK(st.st_mode) || st.st_uid != geteuid())
 		return false;
 	
 	if (unlink(path) == 0) {
@@ -66,6 +65,10 @@ static bool remove_any_socket(const char *path) {
 }
 
 bool control_socket_start(strseg_t path) {
+	if (path.len <= 0 || !path.data[0]) {
+		errno= EINVAL;
+		return false;
+	}
 	if (path.len >= sizeof(control_socket_addr.sun_path)) {
 		errno= ENAMETOOLONG;
 		return false;
@@ -88,7 +91,7 @@ bool control_socket_start(strseg_t path) {
 		return false;
 	
 	// create the unix socket
-	control_socket= socket(PF_UNIX, SOCK_STREAM, 0);
+	control_socket= fd_check_new(socket(PF_UNIX, SOCK_STREAM, 0));
 	if (control_socket < 0) {
 		log_error("socket: %s", strerror(errno));
 		return false;

@@ -300,6 +300,30 @@ void svc_check(service_t *svc);
 //----------------------------------------------------------------------------
 // fd.c interface
 
+// Check descriptor-producing syscalls before storing their results.  Unsupported
+// descriptors are closed and reported like descriptor exhaustion.  A failed
+// pair allocation releases both ends, even if only one exceeded the limit.
+static inline int fd_check_new(int fd) {
+	if (fd >= FD_SETSIZE) {
+		close(fd);
+		errno= EMFILE;
+		return -1;
+	}
+	return fd;
+}
+
+static inline int fd_check_new_pair(int result, int pair[2]) {
+	if (result < 0) return result;
+	if (pair[0] >= FD_SETSIZE || pair[1] >= FD_SETSIZE) {
+		close(pair[0]);
+		close(pair[1]);
+		pair[0]= pair[1]= -1;
+		errno= EMFILE;
+		return -1;
+	}
+	return result;
+}
+
 typedef struct fd_flags_s {
 	bool read: 1,
 		write: 1,
@@ -356,8 +380,9 @@ fd_t * fd_iter_next(fd_t *current, const char *from_name);
 //----------------------------------------------------------------------------
 // signal.c interface
 
-// Initialize signal-related things
-void sig_init();
+// Install signal handlers and create a wake pipe.  On failure, return false
+// and preserve any existing pipe; guarded startup retries from sig_run().
+bool sig_init();
 
 // Enable or disable receipt of signals
 void sig_enable(bool enable);

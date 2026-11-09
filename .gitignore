@@ -3,3 +3,4 @@
 /scripts/configure
 /scripts/autom4te.cache
 /src/*.autogen.*
+/t/tmp

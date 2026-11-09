@@ -1,3 +1,32 @@
+2026-11-09	Version 1.1.1
+
+  * Fixed numerous serious bugs identified by GPT-6.1-Sol:
+    * Fixed controller cleanup after accept() and pipe() failures
+    * Fixed double-close of controller sockets and flushing replies at EOF
+    * Stop reading controllers after permanent read errors
+    * Fixed command processing after an input buffer overflow
+    * Reject unknown signal names and invalid signal.clear counts
+    * Reject identical names for both ends of a pipe (could double-free)
+    * Fixed service pool variables overwriting the service structure
+    * Fixed stack allocations for service argument and file descriptor lists
+    * Fixed invalid pointer arithmetic when resizing service variables
+    * Fixed integer overflow in numeric parsing and service pool allocation
+    * Fixed T/TB/TiB size suffixes and validation of terminate guard codes
+    * Fixed service.start timestamp bounds and allowance for past timestamps
+    * Remove reaped services from the PID index and allow deleting them
+    * Guard against sending signals to services that have already exited
+    * Only unlink sockets owned by our effective UID, not files or symlinks
+    * Reject empty socket paths before removing the existing listener
+    * Fixed logging becoming permanently disabled by an oversized message
+    * Fixed signal pipe setup failures with terminate-guard enabled
+    * Preserve pending signals and the original signal mask during recovery
+    * Guard signal handlers against nesting and preserve errno
+    * Reject descriptors outside FD_SETSIZE and close rejected allocations
+    * Initialize closed standard handles before internal opens can reuse them
+  * Declare inline functions 'static' for linking with modern GCC
+  * Added regression tests for memory corruption, error cleanup, and recovery
+  * Known issue: the config-sync.pl example is incomplete
+
 2014-07-11	Version 1.1.0
 
   * Services now inherit environment from daemonproxy (see 5eb4b3ec)

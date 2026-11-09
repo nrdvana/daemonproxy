@@ -164,11 +164,12 @@ in order to disable the feature or ask daemonproxy to exit.
 =cut
 */
 void set_opt_failsafe(char **argv) {
-	char *end= NULL;
-	long n= strtol(argv[0], &end, 10);
-	
-	if (*end)
-		fatal(EXIT_BAD_OPTIONS, "Terminate guard must be an integer");
+	strseg_t arg= STRSEG(argv[0]);
+	int64_t n;
+	if (!strseg_atoi(&arg, &n) || arg.len || !n) {
+		fatal(EXIT_BAD_OPTIONS, "Terminate guard must be a nonzero 64-bit integer");
+		return;
+	}
 
 	opt_terminate_guard= n;
 }
@@ -217,7 +218,7 @@ bool set_exec_on_exit(strseg_t args) {
 	return true;
 }
 
-static void parse_NxM(strseg_t arg, int64_t *count, int64_t *size) {
+static bool parse_NxM(strseg_t arg, int64_t *count, int64_t *size) {
 	strseg_t count_str;
 
 	if (!strseg_tok_next(&arg, 'x', &count_str)
@@ -226,8 +227,11 @@ static void parse_NxM(strseg_t arg, int64_t *count, int64_t *size) {
 		|| !(
 			arg.len <= 0
 			|| (strseg_parse_size(&arg, size) && arg.len == 0)
-		))
+		)) {
 		fatal(EXIT_BAD_OPTIONS, "Expected 'N' or 'NxM' where N and M are integers and M has an optional size suffix");
+		return false;
+	}
+	return true;
 }
 
 /*
@@ -243,7 +247,8 @@ size that might not be large enough for long filenames.
 void set_opt_fd_prealloc(char **argv) {
 	int64_t val_n, val_m= FD_DATA_SIZE_DEFAULT;
 
-	parse_NxM(STRSEG(argv[0]), &val_n, &val_m);
+	if (!parse_NxM(STRSEG(argv[0]), &val_n, &val_m))
+		return;
 
 	if (val_n < FD_POOL_SIZE_MIN) {
 		log_warn("At least %d fd objects required; using minimum", FD_POOL_SIZE_MIN);
@@ -278,7 +283,12 @@ size that might not be large enough for long argument lists.
 void set_opt_svc_prealloc(char **argv) {
 	int64_t val_n, val_m= SERVICE_DATA_SIZE_DEFAULT;
 
-	parse_NxM(STRSEG(argv[0]), &val_n, &val_m);
+	if (!parse_NxM(STRSEG(argv[0]), &val_n, &val_m))
+		return;
+	if (val_m > INT_MAX) {
+		fatal(EXIT_BAD_OPTIONS, "Service object size exceeds integer range");
+		return;
+	}
 
 	if (val_n < SERVICE_POOL_SIZE_MIN) {
 		log_warn("At least %d service objects required; using minimum", SERVICE_POOL_SIZE_MIN);

@@ -55,7 +55,7 @@ void fd_init() {
 }
 
 bool fd_init_special_handles() {
-	fd_dev_null= open("/dev/null", O_RDWR|O_NOCTTY);
+	fd_dev_null= fd_check_new(open("/dev/null", O_RDWR|O_NOCTTY));
 	log_trace("open(/dev/null) => %d", fd_dev_null);
 
 	if (fd_dev_null < 0) {
@@ -189,7 +189,7 @@ int fd_get_fdnum(fd_t *fd) {
 }
 
 void fd_set_fdnum(fd_t *fd, int fdnum) {
-	fd->fd= fdnum;
+	fd->fd= fd_check_new(fdnum);
 }
 
 fd_flags_t fd_get_flags(fd_t *fd) {
@@ -207,12 +207,17 @@ fd_t * fd_get_pipe_peer(fd_t *fd) {
 // Open a pipe from one named FD to another
 // returns a ref to the read end, which holds a ref to the write end.
 fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
+	if (num1 >= FD_SETSIZE || num2 >= FD_SETSIZE) {
+		errno= EMFILE;
+		return NULL;
+	}
 	// Find any existing FD object by these names
 	fd_t *f1, *old1= fd_by_name(name1);
 	fd_t *f2, *old2= fd_by_name(name2);
 	
-	// Fail if either name exists as a constant
-	if ((old1 && old1->flags.is_const) || (old2 && old2->flags.is_const))
+	// Names must differ, and neither may replace a constant.
+	if (strseg_cmp(name1, name2) == 0
+		|| (old1 && old1->flags.is_const) || (old2 && old2->flags.is_const))
 		return NULL;
 	
 	// Allocate new FD objects
@@ -244,6 +249,10 @@ fd_t * fd_new_pipe(strseg_t name1, int num1, strseg_t name2, int num2) {
 
 // Allocate a new fd object which represents an open file
 fd_t * fd_new_file(strseg_t name, int fdnum, fd_flags_t flags, strseg_t path) {
+	if (fdnum >= FD_SETSIZE) {
+		errno= EMFILE;
+		return NULL;
+	}
 	int buf_free;
 	fd_t *f, *old= fd_by_name(name);
 	

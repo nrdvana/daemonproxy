@@ -45,13 +45,19 @@ bool strseg_atoi(strseg_t *string, int64_t *val) {
 		sign= -1;
 		i++;
 	}
-	while (i < string->len && string->data[i] >= '0' && string->data[i] <= '9')
-		accum= accum * 10 + (string->data[i++] - '0');
+	// Accumulate negatively so INT64_MIN is representable too.
+	int64_t limit= sign < 0? INT64_MIN : -INT64_MAX;
+	while (i < string->len && string->data[i] >= '0' && string->data[i] <= '9') {
+		int digit= string->data[i++] - '0';
+		if (accum < (limit + digit) / 10)
+			return false;
+		accum= accum * 10 - digit;
+	}
 	if (i < (sign < 0? 2 : 1)) // did we get at least one digit?
 		return false;
 	string->data += i;
 	string->len -= i;
-	if (val) *val= accum * sign;
+	if (val) *val= sign < 0? accum : -accum;
 	return true;
 }
 
@@ -59,9 +65,11 @@ bool strseg_atoi(strseg_t *string, int64_t *val) {
  *
  */
 bool strseg_parse_size(strseg_t *string, int64_t *val) {
-	long mul= 1, factor= 1024;
+	int64_t mul= 1, factor= 1024;
 	int suffix_len;
 	if (!strseg_atoi(string, val))
+		return false;
+	if (*val < 0)
 		return false;
 	if (string->len < 1)
 		return true; // return plain constant
@@ -76,7 +84,7 @@ bool strseg_parse_size(strseg_t *string, int64_t *val) {
 	}
 	
 	switch (string->data[0]) {
-	case 't': case 'T': mul= LONG_MAX; break;
+	case 't': case 'T': mul*= factor;
 	case 'g': case 'G': mul*= factor;
 	case 'm': case 'M': mul*= factor;
 	case 'k': case 'K': mul*= factor;
@@ -89,8 +97,7 @@ bool strseg_parse_size(strseg_t *string, int64_t *val) {
 	string->len -= suffix_len;
 	
 	// make sure multiplied value fits in int64
-	if (*val < 0 || *val * mul / mul != *val) {
-		*val= (*val < 0)? -1 : 1;
+	if (*val > INT64_MAX / mul) {
 		return false;
 	}
 	*val *= mul;

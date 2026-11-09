@@ -81,6 +81,8 @@ COMMAND(ctl_cmd_terminate,           "terminate");
 static bool ctl_read_more(controller_t *ctl);
 static bool ctl_flush_outbuf(controller_t *ctl);
 static bool ctl_out_buf_ready(controller_t *ctl);
+static void ctl_close_recv(controller_t *ctl);
+static void ctl_close_send(controller_t *ctl);
 
 static inline bool ctl_peek_arg(controller_t *ctl, strseg_t *arg_out) {
 	strseg_t str= ctl->command;
@@ -141,6 +143,7 @@ controller_t *ctl_alloc() {
 		if (!client[i].state_fn) {
 			// non-null state marks it as allocated
 			memset(&client[i], 0, sizeof(controller_t));
+			client[i].recv_fd= client[i].send_fd= -1;
 			client[i].state_fn= &ctl_state_free;
 			client[i].id= i;
 			return &client[i];
@@ -149,6 +152,10 @@ controller_t *ctl_alloc() {
 }
 
 bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
+	if (recv_fd >= FD_SETSIZE || send_fd >= FD_SETSIZE) {
+		errno= EMFILE;
+		return false;
+	}
 	log_debug("creating client %d with handles %d,%d", ctl - client, recv_fd, send_fd);
 	// file descriptors must be nonblocking
 	if (recv_fd != -1)
@@ -172,9 +179,36 @@ bool ctl_ctor(controller_t *ctl, int recv_fd, int send_fd) {
 
 void ctl_dtor(controller_t *ctl) {
 	log_debug("destroying client %d", ctl->id);
-	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
-	if (ctl->send_fd >= 0) close(ctl->send_fd);
+	ctl_close_recv(ctl);
+	ctl_close_send(ctl);
 	ctl->state_fn= ctl_state_free;
+}
+
+// Each direction releases its descriptor only after the other direction is done.
+static void ctl_close_recv(controller_t *ctl) {
+	int fd= ctl->recv_fd;
+	if (fd < 0) return;
+	FD_CLR(fd, &wake->fd_read);
+	if (fd != ctl->send_fd) {
+		FD_CLR(fd, &wake->fd_write);
+		FD_CLR(fd, &wake->fd_err);
+		close(fd);
+	}
+	ctl->recv_fd= -1;
+}
+
+static void ctl_close_send(controller_t *ctl) {
+	int fd= ctl->send_fd;
+	if (fd < 0) return;
+	FD_CLR(fd, &wake->fd_write);
+	if (fd != ctl->recv_fd) {
+		FD_CLR(fd, &wake->fd_read);
+		FD_CLR(fd, &wake->fd_err);
+		close(fd);
+	}
+	ctl->send_fd= -1;
+	ctl->send_buf_pos= 0;
+	ctl->send_overflow= false;
 }
 
 void ctl_free(controller_t *ctl) {
@@ -398,8 +432,10 @@ bool ctl_state_run_command(controller_t *ctl) {
 		ctl->recv_overflow= false;
 	}
 	// check for command overflow
-	else if (ctl->recv_overflow)
+	else if (ctl->recv_overflow) {
 		ctl_notify_error(ctl, "line too long");
+		ctl->recv_overflow= false;
+	}
 	// else try to parse and dispatch it
 	else {
 		// ctl->command is the un-parsed portion of our command.
@@ -525,8 +561,7 @@ but people expect to be able to type 'exit' to end a command stream.
 */
 bool ctl_cmd_exit(controller_t *ctl) {
 	// they asked for it...
-	if (ctl->recv_fd >= 0) close(ctl->recv_fd);
-	ctl->recv_fd= -1;
+	ctl_close_recv(ctl);
 	ctl->state_fn= ctl_state_close;
 	return true;
 }
@@ -640,11 +675,12 @@ bool ctl_cmd_fd_pipe(controller_t *ctl) {
 		|| !ctl_get_arg_fd(ctl, false, true, &write_side, NULL))
 		return false;
 	
-	if (0 != pipe(pair)) {
+	if (0 != fd_check_new_pair(pipe(pair), pair)) {
 		ctl_notify_error(ctl, );
 		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
 			"pipe() failed: %s", strerror(errno));
 		ctl->command_error= ctl->command_error_buf;
+		return false;
 	}
 	
 	fd= fd_new_pipe(read_side, pair[0], write_side, pair[1]);
@@ -737,7 +773,7 @@ bool ctl_cmd_fd_open(controller_t *ctl) {
 		| (flags.trunc?  O_TRUNC  : 0) | (flags.nonblock? O_NONBLOCK : 0)
 		| O_NOCTTY;
 
-	f= open(path.data, open_flags, 0600);
+	f= fd_check_new(open(path.data, open_flags, 0600));
 	if (f < 0) {
 		snprintf(ctl->command_error_buf, sizeof(ctl->command_error_buf),
 			"open failed: %s", strerror(errno));
@@ -839,12 +875,17 @@ file descriptor.
 bool ctl_cmd_svc_fds(controller_t *ctl) {
 	service_t *svc;
 	strseg_t fd_spec, name;
+	int fd_count= 0;
 	
 	if (!ctl_get_arg_service(ctl, false, NULL, &svc))
 		return false;
 	
 	fd_spec= ctl->command;
 	while (strseg_tok_next(&ctl->command, '\t', &name)) {
+		if (++fd_count > FD_SETSIZE) {
+			ctl->command_error= "too many file descriptors";
+			return false;
+		}
 		if (!fd_check_name(name)) {
 			ctl->command_error= "invalid fd name";
 			return false;
@@ -958,7 +999,7 @@ bool ctl_cmd_svc_start(controller_t *ctl) {
 			ctl->command_error= "no service.start pending";
 			return false;
 		}
-		if (!ctl_get_arg_ts(ctl, &starttime_ts) || starttime_ts - wake->now < -100000) {
+		if (!ctl_get_arg_ts(ctl, &starttime_ts) || starttime_ts - wake->now < -(100000LL << 32)) {
 			ctl->command_error= "invalid timestamp";
 			return false;
 		}
@@ -1038,7 +1079,7 @@ bool ctl_cmd_svc_delete(controller_t *ctl) {
 
 	if (!ctl_get_arg_service(ctl, true, NULL, &svc))
 		return false;
-	if (svc_get_pid(svc) > 0) {
+	if (svc_get_pid(svc) > 0 && !svc_get_reap_ts(svc)) {
 		ctl->command_error= "service is running";
 		return false;
 	}
@@ -1140,6 +1181,10 @@ bool ctl_cmd_signal_clear(controller_t *ctl) {
 		return false;
 	if (!ctl_get_arg_int(ctl, &count))
 		return false;
+	if (count < 0 || count > INT_MAX) {
+		ctl->command_error= "signal count must be 0..INT_MAX";
+		return false;
+	}
 
 	sig_mark_seen(sig, count);
 	return true;
@@ -1469,13 +1514,11 @@ bool ctl_read_more(controller_t *ctl) {
 	if (n <= 0) {
 		e= errno;
 		log_trace("controller[%d] input read failed: %d %s", ctl->id, n, strerror(e));
-		if (n == 0) {
-			// EOF.  Close file descriptor
-			close(ctl->recv_fd);
-			ctl->recv_fd= -1;
+		if (n == 0 || (e != EINTR && e != EAGAIN && e != EWOULDBLOCK)) {
+			if (n < 0)
+				log_error("read(client[%d])): %s", ctl->id, strerror(e));
+			ctl_close_recv(ctl);
 		}
-		else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-			log_error("read(client[%d])): %s", ctl->id, strerror(e));
 		errno= e;
 		return false;
 	}
@@ -1611,8 +1654,7 @@ static bool ctl_flush_outbuf(controller_t *ctl) {
 			} else {
 				// fatal error
 				log_debug("controller[%d] outbuf write failed: %s", ctl->id, strerror(errno));
-				close(ctl->send_fd);
-				ctl->send_fd= -1;
+				ctl_close_send(ctl);
 				return true;  // the buffer is now "flushed" for all practical purposes
 			}
 		}
@@ -1655,6 +1697,7 @@ bool ctl_get_arg_ts(controller_t *ctl, int64_t *ts) {
 	if (!strseg_tok_next(&ctl->command, '\t', &str)
 		|| !strseg_atoi(&str, ts)
 		|| str.len > 0   // should consume all of str
+		|| *ts < 0 || *ts > INT32_MAX
 	) {
 		ctl->command_error= "Expected integer";
 		return false;
@@ -1746,7 +1789,7 @@ bool ctl_get_arg_signal(controller_t *ctl, int *sig_out) {
 		signum= (int) i;
 	}
 	else {
-		if (0 > (signum= sig_num_by_name(signame))) {
+		if (0 >= (signum= sig_num_by_name(signame))) {
 			ctl->command_error= "Invalid signal argument";
 			return false;
 		}

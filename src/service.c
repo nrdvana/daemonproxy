@@ -93,6 +93,8 @@ bool svc_preallocate(int count, int data_size_each) {
 	assert(svc_list == NULL);
 	assert(svc_pool == NULL);
 	assert(data_size_each > 0);
+	if (count <= 0 || data_size_each > INT_MAX - sizeof(service_t) - 15)
+		return false;
 
 	size_each= sizeof(service_t) + data_size_each;
 	size_each= ((size_each - 1) | 0xF) + 1; // round to 16
@@ -100,11 +102,12 @@ bool svc_preallocate(int count, int data_size_each) {
 	if (!svc_list_resize(count))
 		return false;
 	
-	if (!(svc_pool= malloc(count * size_each)))
+	if ((size_t)count > SIZE_MAX / size_each
+		|| !(svc_pool= malloc((size_t)count * size_each)))
 		return false;
 	svc_pool_size_each= size_each;
 	for (i= 0; i < count; i++)
-		svc_list[i]= (service_t*) (((char*) svc_pool) + size_each * i);
+		svc_list[i]= (service_t*) (((char*) svc_pool) + (size_t)size_each * i);
 	return true;
 }
 
@@ -175,8 +178,8 @@ void svc_ctor(service_t *svc, strseg_t name) {
 	svc->name= (strseg_t){ svc->name_buf, name.len };
 	
 	if (svc_pool) {
-		// When part of a pool, the vars are allocated immediately after the name
-		svc->vars.data= svc->name.data + svc->name.len + 1;
+		// Pool variables live after the complete service structure.
+		svc->vars.data= (char*)(svc + 1);
 	}
 	
 	RBTreeNode_Init( &svc->name_index_node );
@@ -283,12 +286,14 @@ static bool svc_set_var(service_t *svc, strseg_t name, strseg_t *value) {
 		}
 		// else just realloc
 		else {
+			// Save offsets while the old allocation is still valid.
+			int tail_offset= svc->vars.len - tail.len;
+			int value_offset= found? oldval.data - svc->vars.data : 0;
 			buf= (char*) realloc(buf, svc->vars.len + sizediff);
 			if (!buf)
 				return false;
-			// Translate our pointers into the new buffer
-			tail.data += (buf - svc->vars.data);
-			oldval.data += (buf - svc->vars.data);
+			tail.data= buf + tail_offset;
+			if (found) oldval.data= buf + value_offset;
 			svc->vars.data= buf;
 		}
 	}
@@ -509,6 +514,7 @@ void svc_handle_reaped(service_t *svc, int wstat) {
 		svc->wait_status= wstat;
 		svc->state= SVC_STATE_REAPED;
 		svc->reap_time= wake->now;
+		RBTreeNode_Prune(&svc->pid_index_node);
 		svc_set_active(svc, true);
 		wake->next= wake->now;
 	}
@@ -518,7 +524,7 @@ void svc_handle_reaped(service_t *svc, int wstat) {
 /** Send a signal to a service iff it is running.
  */
 bool svc_send_signal(service_t *svc, int signum, bool group) {
-	if (!svc || svc->pid <= 0) return false;
+	if (!svc || svc->state != SVC_STATE_UP || svc->pid <= 0) return false;
 	
 	log_debug("Sending signal %d to service \"%s\" pid %d", signum, svc_get_name(svc), (int)svc->pid);
 	return 0 == (group? killpg(svc->pid, signum) : kill(svc->pid, signum));
@@ -606,8 +612,8 @@ void svc_run(service_t *svc) {
 			// We need a controller object, of which there are a fixed number
 			// Do we have one?  And can we create pipes?
 			if (!(ctl= ctl_alloc())
-				|| (svc->uses_control_cmd && 0 != pipe(pipes))
-				|| (svc->uses_control_event && 0 != pipe(pipes+2))
+				|| (svc->uses_control_cmd && 0 != fd_check_new_pair(pipe(pipes), pipes))
+				|| (svc->uses_control_event && 0 != fd_check_new_pair(pipe(pipes+2), pipes+2))
 				|| !ctl_ctor(ctl, pipes[0], pipes[3])
 			) {
 				if (!ctl)
@@ -704,7 +710,11 @@ void svc_do_exec(service_t *svc) {
 		tmp= fd_spec;
 		while (strseg_tok_next(&tmp, '\t', &fd_name))
 			fd_count++;
-		fd_list= alloca(fd_count);
+		if (fd_count > FD_SETSIZE) {
+			log_error("Too many service file descriptors");
+			_exit(EXIT_INVALID_ENVIRONMENT);
+		}
+		fd_list= alloca(fd_count * sizeof(*fd_list));
 		// now iterate again to resolve them from name to number
 		fd_count= 0;
 		tmp= fd_spec;
@@ -730,7 +740,7 @@ void svc_do_exec(service_t *svc) {
 		// We have no way to know which higher numbers are safe, so repeat until we get one.
 		log_trace("fd_list[%d]= %d", i, fd_list[i]);
 		while (fd_list[i] >= 0 && fd_list[i] < fd_count) {
-			fd_list[i]= dup(fd_list[i]);
+			fd_list[i]= fd_check_new(dup(fd_list[i]));
 			if (fd_list[i] < 0) {
 				log_error("Failed to dup file descriptor %d", fd_list[i]);
 				abort();
@@ -758,7 +768,7 @@ void svc_do_exec(service_t *svc) {
 	for (arg_count= 1, p= arg_spec; *p; p++)
 		if (*p == '\t')
 			arg_count++;
-	argv= alloca(arg_count+1);
+	argv= alloca((arg_count+1) * sizeof(*argv));
 	// then populate
 	i= 0;
 	for (argv[0]= p= arg_spec; *p; p++)
@@ -845,12 +855,12 @@ void svc_check(service_t *svc) {
 		assert(svc->vars.data[svc->vars.len-1] == 0);
 	}
 	if (svc_pool) {
-		assert(svc->name.data + svc->name.len + 1 == svc->vars.data);
+		assert((char*)(svc + 1) == svc->vars.data);
 		assert( ((char*)svc) + svc_pool_size_each >= svc->vars.data + svc->vars.len );
 	}
 
 	assert(svc->name_index_node.Color == RBTreeNode_Black || svc->name_index_node.Color == RBTreeNode_Red);
-	if (svc->pid)
+	if (svc->pid && !svc->reap_time)
 		assert(svc->pid_index_node.Color == RBTreeNode_Black || svc->pid_index_node.Color == RBTreeNode_Red);
 	else
 		assert(svc->pid_index_node.Color == RBTreeNode_Unassigned);

@@ -131,7 +131,7 @@ void log_run() {
 	if (log_fd < 0 && !log_fd_attach())
 		return;
 
-	if (FD_ISSET(log_fd, &wake->fd_write)) {
+	if ((!log_buf_pos && log_msg_lost) || FD_ISSET(log_fd, &wake->fd_write)) {
 		FD_CLR(log_fd, &wake->fd_write);
 		log_flush();
 	}
@@ -140,7 +140,15 @@ void log_run() {
 static bool log_flush() {
 	int n;
 	
-	while (log_buf_pos > 0) {
+	while (log_buf_pos > 0 || log_msg_lost) {
+		// Queue the loss warning even if the oversized message left no buffered data.
+		if (log_msg_lost) {
+			n= snprintf(log_buffer + log_buf_pos, sizeof(log_buffer) - log_buf_pos, "warning: lost %d log messages\n", log_msg_lost);
+			if (n < sizeof(log_buffer) - log_buf_pos) {
+				log_buf_pos+= n;
+				log_msg_lost= 0;
+			}
+		}
 		n= write(log_fd, log_buffer, log_buf_pos);
 		if (n < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
@@ -153,16 +161,6 @@ static bool log_flush() {
 		if (n > 0 && n < log_buf_pos)
 			memmove(log_buffer, log_buffer + n, log_buf_pos - n);
 		log_buf_pos -= n;
-		
-		// If messages were lost, and we've freed up some buffer space,
-		// see if we can append the message saying that we lost messages
-		if (log_msg_lost) {
-			n= snprintf(log_buffer + log_buf_pos, sizeof(log_buffer) - log_buf_pos, "warning: lost %d log messages\n", log_msg_lost);
-			if (n < sizeof(log_buffer) - log_buf_pos) {
-				log_buf_pos+= n;
-				log_msg_lost= 0;
-			}
-		}
 	}
 	return true;
 }

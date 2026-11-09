@@ -22,9 +22,11 @@ typedef struct sig_status_s {
 volatile sig_status_t signals[SIGNAL_STATUS_SLOTS];
 volatile int signals_count= 0;
 static sigset_t sig_mask;
+static int64_t sig_pipe_retry= 0;
 
 void sig_handler(int sig) {
 	int i;
+	int saved_errno= errno;
 	static int64_t prev= 0;
 	int64_t now= gettime_mon_frac();
 	
@@ -59,8 +61,9 @@ void sig_handler(int sig) {
 	}
 	
 	// put character in pipe to wake main loop
-	if (write(sig_wake_wr, "", 1) != 1)
+	if (sig_wake_wr >= 0 && write(sig_wake_wr, "", 1) != 1)
 		signal_error= errno;
+	errno= saved_errno;
 }
 
 void fatal_sig_handler(int sig) {
@@ -100,46 +103,66 @@ struct signal_spec_s {
 	{ 0, NULL }
 };
 
-void sig_init() {
-	int pipe_fd[2];
+bool sig_init() {
+	int pipe_fd[2]= { -1, -1 }, saved_errno;
 	struct sigaction act;
 	struct signal_spec_s *ss;
-	
-	// in a last-ditch attempt to recover from fatal errors, we might re-run
-	// the initialization.  otherwise, this condition is never true.
-	if (sig_wake_rd >= 0) close(sig_wake_rd);
-	if (sig_wake_wr >= 0) close(sig_wake_wr);
+	sigset_t previous_mask;
+	const char *failed= "signal handler setup";
 
-	if (!sig_main_pid)
+	// Block handlers while installing them and replacing their wake pipe.
+	memset(&act, 0, sizeof(act));
+	sigfillset(&act.sa_mask);
+	if (sigprocmask(SIG_BLOCK, &act.sa_mask, &previous_mask) != 0) {
+		log_error("blocking signals for setup: %s", strerror(errno));
+		return false;
+	}
+	if (!sig_main_pid) {
+		sig_mask= previous_mask;
 		sig_main_pid= getpid();
-	
-	// initialize with 0
-	memset((void*)signals, 0, sizeof(signals));
+	}
+
+	// Install handlers even if pipe creation fails, so guarded startup can retry.
+	for (ss= signal_spec; ss->signum != 0; ss++) {
+		act.sa_handler= ss->handler;
+		if (sigaction(ss->signum, &act, NULL) != 0)
+			goto fail;
+	}
 
 	// Create pipe and set non-blocking
-	if (pipe(pipe_fd)
+	failed= "signal pipe setup";
+	if (fd_check_new_pair(pipe(pipe_fd), pipe_fd)
 		|| fcntl(pipe_fd[0], F_SETFD, FD_CLOEXEC)
 		|| fcntl(pipe_fd[1], F_SETFD, FD_CLOEXEC)
 		|| fcntl(pipe_fd[0], F_SETFL, O_NONBLOCK)
 		|| fcntl(pipe_fd[1], F_SETFL, O_NONBLOCK)
 	) {
-		fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal pipe setup: %s", strerror(errno));
+		goto fail;
 	}
+	// Keep an existing pipe and pending events until replacement succeeds.
+	if (sig_wake_rd >= 0) {
+		FD_CLR(sig_wake_rd, &wake->fd_read);
+		close(sig_wake_rd);
+	}
+	if (sig_wake_wr >= 0) close(sig_wake_wr);
 	log_trace("pipe => (%d, %d)", pipe_fd[0], pipe_fd[1]);
 	sig_wake_rd= pipe_fd[0];
 	sig_wake_wr= pipe_fd[1];
-	
-	// set signal handlers
-	memset(&act, 0, sizeof(act));
-	for (ss= signal_spec; ss->signum != 0; ss++) {
-		act.sa_handler= ss->handler;
-		if (sigaction(ss->signum, &act, NULL))
-			fatal(EXIT_IMPOSSIBLE_SCENARIO, "signal handler setup: %s", strerror(errno));
-	}
-	
-	// capture our signal mask
-	if (!sigprocmask(SIG_SETMASK, NULL, &sig_mask) == 0)
-		perror("sigprocmask(all)");
+	// Replacing the pipe must not lose a wakeup already queued on the old one.
+	if (write(sig_wake_wr, "", 1) != 1)
+		signal_error= errno;
+	if (sigprocmask(SIG_SETMASK, &previous_mask, NULL) != 0)
+		log_error("restoring signal mask: %s", strerror(errno));
+	return true;
+
+fail:
+	saved_errno= errno;
+	if (pipe_fd[0] >= 0) close(pipe_fd[0]);
+	if (pipe_fd[1] >= 0) close(pipe_fd[1]);
+	sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+	log_error("%s: %s", failed, strerror(saved_errno));
+	errno= saved_errno;
+	return false;
 }
 
 void sig_enable(bool enable) {
@@ -179,6 +202,17 @@ void sig_reset_for_exec() {
 
 void sig_run() {
 	char tmp[16];
+	// With terminate-guard, startup can continue without a wake pipe.  Poll
+	// at least once a second until resources are available to create one.
+	if (sig_wake_rd < 0) {
+		if ((!sig_pipe_retry || wake->now - sig_pipe_retry >= 0) && !sig_init())
+			sig_pipe_retry= wake->now + (1LL << 32);
+		if (sig_wake_rd < 0) {
+			if (wake->next - sig_pipe_retry > 0) wake->next= sig_pipe_retry;
+			return;
+		}
+		sig_pipe_retry= 0;
+	}
 	
 	// Report problems from sig handler
 	if (signal_error) {
