@@ -172,14 +172,14 @@ RBTreeNode* RBTreeNode_GetNext( RBTreeNode* Node ) {
 	}
 }
 
-inline void RBTreeNode_RightRotate( RBTreeNode* Node ) {
+static inline void RBTreeNode_RightRotate( RBTreeNode* Node ) {
 	if (Node->Parent->Left == Node)
 		RBTreeNode_LeftSide_RightRotate( Node );
 	else
 		RBTreeNode_RightSide_RightRotate( Node );
 }
 
-inline void RBTreeNode_LeftRotate( RBTreeNode* Node ) {
+static inline void RBTreeNode_LeftRotate( RBTreeNode* Node ) {
 	if (Node->Parent->Left == Node)
 		RBTreeNode_LeftSide_LeftRotate( Node );
 	else
