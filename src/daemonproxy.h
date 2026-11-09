@@ -41,7 +41,7 @@ bool strseg_parse_size(strseg_t *string, int64_t *val);
 
 // Get CLOCK_MONOTONIC time as 32.32 fixed-point number.
 // All timestamps and durations in daemonproxy use this format.
-int64_t gettime_mon_frac();
+int64_t gettime_mon_frac(void);
 
 #define EXIT_NO_OP                1
 #define EXIT_BAD_OPTIONS          2
@@ -118,19 +118,19 @@ bool set_exec_on_exit(strseg_t args_tsv);
 #define LOG_FILTER_NONE -3
 
 // Initialize module
-void log_init();
+void log_init(void);
 
 // Write message to log, printf() style, at a given log level
 bool log_write(int level, const char * msg, ...);
 
 // Perform anything needed per main loop iteration related to logging
-void log_run();
+void log_run(void);
 
 // Find out what fd number the log is writing
-int  log_get_fd();
+int  log_get_fd(void);
 
 // Tell logger the named destination FD might have changed
-void log_fd_reset();
+void log_fd_reset(void);
 
 // Redirect logging to new named FD
 void log_fd_set_name(strseg_t name);
@@ -160,28 +160,28 @@ bool log_level_by_name(strseg_t name, int *lev);
 // control-socket.c interface
 
 // Initialize module
-void control_socket_init();
+void control_socket_init(void);
 
 // Run one iteration of control-socket module (accept new connections)
-void control_socket_run();
+void control_socket_run(void);
 
 // Create the controller socket
 bool control_socket_start(strseg_t path);
 
 // Remove a previously created controller socket
-void control_socket_stop();
+void control_socket_stop(void);
 
 //----------------------------------------------------------------------------
 // controller.c interface
 
 // Initialize controller module
-void ctl_init();
+void ctl_init(void);
 
 // Create new controller on specified file handles
 controller_t * ctl_new(int recv_fd, int send_fd);
 
 // Allocate a controller
-controller_t * ctl_alloc();
+controller_t * ctl_alloc(void);
 
 // Free an allocated controller which was not constructed
 void ctl_free(controller_t *ctl);
@@ -201,7 +201,7 @@ bool ctl_write(controller_t *ctl, const char *msg, ... );
 
 // Notify functions are simply a way to keep all the event "printf" statements in one place.
 bool ctl_notify_signal(controller_t *ctl, int sig_num, int64_t sig_ts, int count);
-bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, pid_t pid, int wstat);
+bool ctl_notify_svc_state(controller_t *ctl, const char *name, int64_t up_ts, int64_t reap_ts, int wstat, pid_t pid);
 bool ctl_notify_svc_tags(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_argv(controller_t *ctl, const char *name, const char *tsv_fields);
 bool ctl_notify_svc_fds(controller_t *ctl, const char *name, const char *tsv_fields);
@@ -210,12 +210,12 @@ bool ctl_notify_fd_state(controller_t *ctl, fd_t *fd);
 #define ctl_notify_error(ctl, msg, ...) (ctl_write(ctl, "error\t" msg "\n", ##__VA_ARGS__))
 
 // Run all active controller state machines
-void ctl_run();
+void ctl_run(void);
 
 //----------------------------------------------------------------------------
 // service.c interface
 
-void svc_init();
+void svc_init(void);
 
 // Initialize the service pool
 bool svc_preallocate(int service_count, int data_size_each);
@@ -273,7 +273,7 @@ void svc_handle_reaped(service_t *svc, int wstat);
 void svc_run(service_t *svc);
 
 // Run all services which need running
-void svc_run_active();
+void svc_run_active(void);
 
 // Lookup services by attributes
 service_t * svc_by_name(strseg_t name, bool create);
@@ -337,13 +337,13 @@ typedef struct fd_flags_s {
 		is_const: 1;
 } fd_flags_t;
 
-void fd_init();
+void fd_init(void);
 
 // Initialize the fd pool from a static chunk of memory
 bool fd_preallocate(int count, int data_size_each);
 
 // Initialize the special named constants like "control.event"
-bool fd_init_special_handles();
+bool fd_init_special_handles(void);
 
 // initialized by fd_init_special_handles()
 extern int fd_dev_null;
@@ -382,13 +382,13 @@ fd_t * fd_iter_next(fd_t *current, const char *from_name);
 
 // Install signal handlers and create a wake pipe.  On failure, return false
 // and preserve any existing pipe; guarded startup retries from sig_run().
-bool sig_init();
+bool sig_init(void);
 
 // Enable or disable receipt of signals
 void sig_enable(bool enable);
 
 // Reset signal handling after fork() before exec()
-void sig_reset_for_exec();
+void sig_reset_for_exec(void);
 
 // Get next event based on previous timestamp
 bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *count_out);
@@ -397,7 +397,7 @@ bool sig_get_new_events(int64_t since_ts, int *sig_out, int64_t *ts_out, int *co
 void sig_mark_seen(int signal, int count);
 
 // Main loop processing for signals.
-void sig_run();
+void sig_run(void);
 
 // Return signal constant name (minus the "SIG" prefix)
 const char * sig_name_by_num(int sig_num);

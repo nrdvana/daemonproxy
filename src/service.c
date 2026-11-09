@@ -557,7 +557,7 @@ void svc_set_active(service_t *svc, bool activate) {
 /** Run the state machine for each active service.
  * Services might set themselves back to inactive during this loop.
  */
-void svc_run_active() {
+void svc_run_active(void) {
 	service_t *svc, *next;
 	int signum, sig_count;
 	int64_t sig_ts;

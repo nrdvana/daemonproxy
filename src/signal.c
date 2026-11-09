@@ -200,7 +200,7 @@ void sig_reset_for_exec() {
 		perror("sigprocmask(none)");
 }
 
-void sig_run() {
+void sig_run(void) {
 	char tmp[16];
 	// With terminate-guard, startup can continue without a wake pipe.  Poll
 	// at least once a second until resources are available to create one.

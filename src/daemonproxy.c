@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
 		sig_enable(false);
 		
 		// report signals and set read-wake on signal fd
-		sig_run(wake);
+		sig_run();
 		
 		// reap all zombies, possibly waking services
 		while ((pid= waitpid(-1, &wstat, WNOHANG)) > 0) {
@@ -133,13 +133,13 @@ int main(int argc, char** argv) {
 			log_trace("waitpid: %s", strerror(errno));
 		
 		// run state machine of each service that is active.
-		svc_run_active(wake);
+		svc_run_active();
 		
 		// possibly accept new controller connections
 		control_socket_run();
 		
 		// run controller state machines
-		ctl_run(wake);
+		ctl_run();
 		
 		log_run();
 		
